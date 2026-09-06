@@ -67,4 +67,69 @@ struct VideoFrameExtractorTests {
     static var fixtureURL: URL? {
         Bundle.module.url(forResource: "sample-2s", withExtension: "mp4", subdirectory: "VideoFixtures")
     }
+
+    // MARK: - 実画像に対する統計（復号は不要・合成した CGImage で確かめる）
+
+    private static func solidImage(gray: UInt8) -> CGImage {
+        makeImage { ctx, side in
+            ctx.setFillColor(CGColor(gray: Double(gray) / 255.0, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        }
+    }
+
+    private static func checkerImage() -> CGImage {
+        makeImage { ctx, side in
+            ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+            for y in stride(from: 0, to: side, by: 16) {
+                for x in stride(from: 0, to: side, by: 16) where ((x / 16) + (y / 16)) % 2 == 0 {
+                    ctx.fill(CGRect(x: x, y: y, width: 16, height: 16))
+                }
+            }
+        }
+    }
+
+    private static func makeImage(_ draw: (CGContext, Int) -> Void) -> CGImage {
+        let side = 128
+        let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2)!
+        let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                            bytesPerRow: side, space: space,
+                            bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        draw(ctx, side)
+        return ctx.makeImage()!
+    }
+
+    @Test("真っ黒な画像は表紙にしない")
+    func solidBlackIsRejected() {
+        let stats = VideoFrameExtractor.statistics(of: Self.solidImage(gray: 0))
+        #expect(stats.standardDeviation < 1)
+        #expect(!stats.isUsable)
+    }
+
+    @Test("真っ白・単色の画像も表紙にしない")
+    func solidBrightIsRejected() {
+        #expect(!VideoFrameExtractor.statistics(of: Self.solidImage(gray: 255)).isUsable)
+        #expect(!VideoFrameExtractor.statistics(of: Self.solidImage(gray: 128)).isUsable)
+    }
+
+    @Test("模様のある画像は表紙にできる")
+    func patternedImageIsUsable() {
+        let stats = VideoFrameExtractor.statistics(of: Self.checkerImage())
+        #expect(stats.standardDeviation > 6)
+        #expect(stats.isUsable)
+    }
+
+    /// 暗いが真っ黒ではない場面を弾かないこと（線形の輝度で測ると弾いてしまう）。
+    @Test("暗いが模様のある画像は弾かない")
+    func dimPatternedImageIsUsable() {
+        let dim = Self.makeImage { ctx, side in
+            ctx.setFillColor(CGColor(gray: 20.0 / 255.0, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: side, height: side))
+            ctx.setFillColor(CGColor(gray: 70.0 / 255.0, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: side, height: side / 2))
+        }
+        let stats = VideoFrameExtractor.statistics(of: dim)
+        #expect(stats.isUsable)
+    }
 }

@@ -1733,15 +1733,15 @@ final class AppState {
             guard let book = displayedBooks.first(where: { $0.id == id }),
                   let path = book.path else { continue }
             let sourceURL = URL(fileURLWithPath: path)
-            guard let extractor = ArchiveAdapter.coverExtractor(for: sourceURL) else { continue }
+            // G50: アーカイブ以外（動画・PDF・EPUB・単独画像）でも書き直す。
+            // 以前は extractor を持つ形式だけ書き直していたため、動画で場面を選んだあとに
+            // 取り消すと **DB は自動なのに thumbnail は選んだ場面のまま**というずれが残った
+            // （purge も同じ continue で飛ばされていた）。
             do {
-                try await CoverRefresher.regenerate(
-                    bookID: id,
-                    sourceURL: sourceURL,
-                    preferredName: preferredName,
-                    thumbnailsDirURL: thumbDir,
-                    extractor: extractor
-                )
+                let data = try await CoverRefresher.extractCoverData(
+                    sourceURL: sourceURL, preferredName: preferredName)
+                try CoverRefresher.regenerateFromImageData(
+                    bookID: id, imageData: data, thumbnailsDirURL: thumbDir)
                 Self.coverLogger.info("prepareCoverFiles: \(direction, privacy: .public) file written, bookID=\(id, privacy: .public)")
             } catch {
                 Self.coverLogger.error("prepareCoverFiles: \(direction, privacy: .public) file write failed bookID=\(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -1772,21 +1772,17 @@ final class AppState {
 
         // === Step 1: file write を await (DB 更新 / view 再 render の前) ===
         let sourceURL = URL(fileURLWithPath: path)
-        if let extractor = ArchiveAdapter.coverExtractor(for: sourceURL) {
-            let thumbDir = bundleURL.appending(path: "Thumbnails")
-            do {
-                try await CoverRefresher.regenerate(
-                    bookID: bookID,
-                    sourceURL: sourceURL,
-                    preferredName: name,
-                    thumbnailsDirURL: thumbDir,
-                    extractor: extractor
-                )
-                Self.coverLogger.info("setCoverImageName: file written (pre-DB), bookID=\(bookID, privacy: .public)")
-            } catch {
-                Self.coverLogger.error("setCoverImageName: file write failed: \(error.localizedDescription)")
-                // file write 失敗しても DB 更新は続行 (UI が古い image のままで残る、許容)
-            }
+        // G50: 「自動に戻す」は形式に依らず thumbnail を作り直す。アーカイブ限定にしていたため、
+        // 動画で場面を選んだあとに自動へ戻しても、ディスク上は選んだ場面のまま残っていた。
+        let thumbDir = bundleURL.appending(path: "Thumbnails")
+        do {
+            let data = try await CoverRefresher.extractCoverData(sourceURL: sourceURL, preferredName: name)
+            try CoverRefresher.regenerateFromImageData(
+                bookID: bookID, imageData: data, thumbnailsDirURL: thumbDir)
+            Self.coverLogger.info("setCoverImageName: file written (pre-DB), bookID=\(bookID, privacy: .public)")
+        } catch {
+            Self.coverLogger.error("setCoverImageName: file write failed: \(error.localizedDescription)")
+            // file write 失敗しても DB 更新は続行 (UI が古い image のままで残る、許容)
         }
 
         // === Step 2: cache purge (DB 更新の前) ===

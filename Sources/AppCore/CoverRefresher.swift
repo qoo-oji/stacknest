@@ -65,6 +65,10 @@ public enum CoverRefresher {
                             url: sourceURL, seconds: seconds, maxPixelSize: 1200)
                     }
                     return try await VideoFrameExtractor.autoCoverData(url: sourceURL, maxPixelSize: 1200)
+                } catch VideoFrameError.noUsableFrame {
+                    // 形式は読めるが、その動画からフレームを 1 枚も作れなかった
+                    // （EPUB に表紙が無いときと同じ扱い。「この形式は非対応」とは別）。
+                    throw CoverRefreshError.noCoverImage
                 } catch {
                     throw CoverRefreshError.unsupportedFormat
                 }

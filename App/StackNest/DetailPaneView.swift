@@ -7,16 +7,16 @@ import AppCore
 import ImageCache
 
 /// G4a: 外部表紙のクロップシートを `.sheet(item:)` で駆動するための下書き（画像＋バイト）。
-/// G50: 動画のシーン選択シートを `.sheet(item:)` で出すためのラッパ。
-private struct VideoSceneDraft: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
 private struct ExternalCoverDraft: Identifiable {
     let id = UUID()
     let image: NSImage
     let data: Data
+}
+
+/// G50: 動画のシーン選択シートを `.sheet(item:)` で出すためのラッパ。
+private struct VideoSceneDraft: Identifiable {
+    let id = UUID()
+    let url: URL
 }
 
 struct DetailPaneView: View {
@@ -529,7 +529,9 @@ struct DetailPaneView: View {
                             showCoverPicker = true
                         }
                         // G50: 動画にはアーカイブのようなページ一覧が無い（代わりにシーン選択を出す）。
-                        .disabled(!isSingleSelection || !canEdit || Self.videoSceneSourceURL(for: book) != nil)
+                        // AVFoundation で開けない mkv/webm/avi も同じくページ一覧は無いので、
+                        // 動画カテゴリ全体で無効にする。
+                        .disabled(!isSingleSelection || !canEdit || Self.isVideoBook(book))
                         if onSetExternalCover != nil {
                             Button("外部画像を表紙に設定…") {
                                 presentExternalImagePanel()
@@ -646,6 +648,13 @@ struct DetailPaneView: View {
         guard let path = book.path else { return nil }
         let url = URL(fileURLWithPath: path)
         return VideoFrameExtractor.isSupported(url: url) ? url : nil
+    }
+
+    /// G50: 動画の本か（AVFoundation が開けるかどうかは問わない）。
+    /// ページ一覧を前提にした導線を出さない判定に使う。
+    static func isVideoBook(_ book: BookRow) -> Bool {
+        guard let path = book.path else { return false }
+        return BookCategory.classify(path: path) == .video
     }
 
     private func presentExternalImagePanel() {
