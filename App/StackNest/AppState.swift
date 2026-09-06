@@ -1841,6 +1841,27 @@ final class AppState {
         Self.coverLogger.info("setExternalCover: applyPatch+crop done, bookID=\(bookID, privacy: .public)")
     }
 
+    /// G50: 動画で選んだ場面を表紙にする。`setExternalCover` と同じ順序（ファイル書き込み →
+    /// キャッシュ purge → DB 更新）だが、書き込む `cover_image_name` は時刻センチネル `@t=<秒>` で、
+    /// `@external` と違って「表紙を再生成」で同じ場面を作り直せる。
+    func setVideoSceneCover(bookID: Int, seconds: Double, undoManager: UndoManager?) async throws {
+        guard let book = displayedBooks.first(where: { $0.id == bookID }), let path = book.path else { return }
+        let sourceURL = URL(fileURLWithPath: path)
+        Self.coverLogger.info("setVideoSceneCover: bookID=\(bookID, privacy: .public), t=\(seconds, privacy: .public)")
+        let thumbDir = bundleURL.appending(path: "Thumbnails")
+        let imageData = try await VideoFrameExtractor.frameData(
+            url: sourceURL, seconds: seconds, maxPixelSize: 1200)
+        try CoverRefresher.regenerateFromImageData(
+            bookID: bookID, imageData: imageData, thumbnailsDirURL: thumbDir)
+        await thumbnailLoader?.purge(bookID: bookID)
+        let patch = BookPatch(coverImageName: CoverSource.videoTimeSentinel(forSeconds: seconds))
+        _ = try applyPatch(bookIDs: [bookID], patch: patch, undoManager: undoManager)
+        // 選び直しでは cover_image_name が変わるので識別子は動くが、同じ場面を選び直したときのために
+        // per-book token も上げておく（G22 #2 と同じ理由）。
+        coverVersionByBook[bookID, default: 0] &+= 1
+        try? refreshDisplayedBooks()
+    }
+
     // MARK: - Phase 2.5c spec b Task 6: Thumbnail 再生成 helper
 
     /// 指定 book の thumbnail を cover_image_name に基づいて再生成。

@@ -662,6 +662,10 @@ struct LibraryWindowContainer: View {
                     onRegenerateCover: { id in
                         guard let book = appState.displayedBooks.first(where: { $0.id == id }) else { return }
                         Task { await appState.regenerateThumbnail(for: book) }
+                    },
+                    // G50: 動画の場面を表紙にする。ローカルの本だけに出す導線（リモート/オフラインは未対応）。
+                    onSetVideoSceneCover: { seconds, id in
+                        try? await appState.setVideoSceneCover(bookID: id, seconds: seconds, undoManager: appState.undoManager)
                     }
                 )
                     .navigationSplitViewColumnWidth(min: 240, ideal: 240, max: 240)

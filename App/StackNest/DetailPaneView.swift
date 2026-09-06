@@ -7,6 +7,12 @@ import AppCore
 import ImageCache
 
 /// G4a: 外部表紙のクロップシートを `.sheet(item:)` で駆動するための下書き（画像＋バイト）。
+/// G50: 動画のシーン選択シートを `.sheet(item:)` で出すためのラッパ。
+private struct VideoSceneDraft: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 private struct ExternalCoverDraft: Identifiable {
     let id = UUID()
     let image: NSImage
@@ -66,6 +72,9 @@ struct DetailPaneView: View {
     /// nil ならメニュー項目自体が無効（オフライン等・編集不可の閲覧専用ビュー）。
     /// 外部表紙（@external）の本は呼び出し側で disabled にする（サーバ/ローカルいずれも no-op 規約）。
     var onRegenerateCover: ((Int) -> Void)? = nil
+    /// G50: 動画の場面を表紙にする（秒, bookID）。ローカルのみ注入・リモート/オフラインは nil
+    /// （シーン選択はローカルの本にだけ出す）。
+    var onSetVideoSceneCover: ((Double, Int) async -> Void)? = nil
 
     /// Bumped when title rejection happens, so EditableTextField gets a fresh
     /// @State and resets to the original (non-empty) title.
@@ -87,6 +96,8 @@ struct DetailPaneView: View {
     @State private var requestedFieldNonce: Int = 0
     /// 表紙選択 sheet の表示フラグ (Task 8)
     @State private var showCoverPicker = false
+    /// G50: 動画のシーン選択シート（`.sheet(item:)` 駆動＝提示時に必ず URL を持つ）。
+    @State private var videoSceneDraft: VideoSceneDraft?
     /// G4a: 外部画像を表紙に設定する導線の state（D&D / NSOpenPanel → crop シート）。
     /// `.sheet(item:)` で駆動＝提示時に必ず画像を持つ（isPresented 方式の「初回だけ画像が出ない」レースを回避）。
     @State private var externalCoverDraft: ExternalCoverDraft?
@@ -517,10 +528,18 @@ struct DetailPaneView: View {
                         Button("表紙を編集") {
                             showCoverPicker = true
                         }
-                        .disabled(!isSingleSelection || !canEdit)
+                        // G50: 動画にはアーカイブのようなページ一覧が無い（代わりにシーン選択を出す）。
+                        .disabled(!isSingleSelection || !canEdit || Self.videoSceneSourceURL(for: book) != nil)
                         if onSetExternalCover != nil {
                             Button("外部画像を表紙に設定…") {
                                 presentExternalImagePanel()
+                            }
+                            .disabled(!isSingleSelection || !canEdit)
+                        }
+                        // G50: 動画はページの概念が無いので「表紙を編集」の代わりにこちらを出す。
+                        if onSetVideoSceneCover != nil, let videoURL = Self.videoSceneSourceURL(for: book) {
+                            Button("動画からシーンを選ぶ…") {
+                                videoSceneDraft = VideoSceneDraft(url: videoURL)
                             }
                             .disabled(!isSingleSelection || !canEdit)
                         }
@@ -580,6 +599,18 @@ struct DetailPaneView: View {
                     .sheet(item: $externalCoverDraft) { draft in
                         externalCropSheet(draft: draft, bookID: book.id)
                     }
+                    .sheet(item: $videoSceneDraft) { draft in
+                        VideoCoverPickerSheet(
+                            url: draft.url,
+                            onPicked: { seconds in
+                                videoSceneDraft = nil
+                                let handler = onSetVideoSceneCover
+                                let id = book.id
+                                Task { await handler?(seconds, id) }
+                            },
+                            onCancel: { videoSceneDraft = nil }
+                        )
+                    }
             }
             HStack(spacing: 6) {
                 UnseenIndicator(state: unseenState, onCommit: onUnseenCommit)
@@ -609,6 +640,14 @@ struct DetailPaneView: View {
     }
 
     /// NSOpenPanel で画像ファイルを選び、クロップシートを開く。
+    /// G50: この本が AVFoundation で開ける動画なら、その URL。そうでなければ nil。
+    /// mkv・webm・avi は開けないので、シーン選択の導線自体を出さない。
+    static func videoSceneSourceURL(for book: BookRow) -> URL? {
+        guard let path = book.path else { return nil }
+        let url = URL(fileURLWithPath: path)
+        return VideoFrameExtractor.isSupported(url: url) ? url : nil
+    }
+
     private func presentExternalImagePanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
