@@ -7,6 +7,33 @@ Releases are self-signed Universal builds (anonymous CN `StackNest Self-Signed`,
 
 > **About versioning:** Tagged releases start at `0.8.0`. Earlier work was developed by phase (2.1–2.6) without explicit version numbers. The history before tagging is summarized under "Before 0.8.0 (phase-based, untagged)" at the end of this file.
 
+## [0.14.1] - 2026-09-07 — Stackroom library import fixes (Phase G49)
+
+> [@gsugawara](https://github.com/gsugawara) reported two bugs and proposed a fix in
+> [PR #2](https://github.com/shelfsmith/stacknest/pull/2). **Both were real**, and neither reproduced on our own
+> library, so they had gone unnoticed. Thank you for the report and the patch. The contributed commit was taken
+> in with its authorship intact, and the fix was then reworked to sit in the import layer and to report what it
+> could not recover.
+
+### Fixed
+
+- **★ Importing a Stackroom library could leave a book with no path** (G49): Stackroom omits `Path` for books
+  registered in its early years, and those books were imported with no location at all. A book without `Path`
+  now **recovers its location from the cover image path**, and the import reports how many books were recovered.
+  - A cover pointing at the archive itself (zip / rar / 7z / PDF / EPUB) is used as-is; a cover pointing at an
+    image inside a folder yields that folder. Books known to be archives, Stackroom's own thumbnail cache and
+    relative paths are excluded: leaving the path empty (and relinkable) beats pointing at the wrong place.
+- **★ Importing a Stackroom library could produce no shelves at all** (G49): the playlists were decoded as one
+  array, so **a single malformed playlist wiped every shelf**. Playlists are now decoded one at a time, and only
+  the unreadable one is skipped.
+  - `ItemView` / `ToolTab` are read whether written as booleans or integers, and a missing `Items` or `Type` no
+    longer fails the entry.
+  - Book references that are not integers no longer discard the whole shelf membership; what parses is kept.
+  - Unreadable smart-shelf conditions, and a `Playlists` key that is not an array, are reported instead of
+    silently dropped.
+- Import warnings were **never shown to anyone**. The CLI now prints them on stderr, and importing from the app
+  logs them.
+
 ## [0.14.0] - 2026-09-06 — EPUB support (beta), metadata-based renaming from the CLI / MCP, display polish (Phases G44–G48)
 
 > Eight phases and 105 commits since `0.13.0`. **The headline is EPUB support, shipped as a beta**

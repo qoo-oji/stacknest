@@ -135,19 +135,31 @@ jobs:
             build/Build/Products/Release/StackNest.app \
             "StackNest-${TAG}.zip"
 
-      - name: Create GitHub Release
+      - name: Compose release notes
         env:
           TAG: ${{ steps.tag.outputs.tag }}
-          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
-          GH_TOKEN: ${{ github.token }}
         run: |
-          flag=""
-          [ "$PRERELEASE" = "true" ] && flag="--prerelease"
-          gh release create "$TAG" \
-            "StackNest-${TAG}.zip" \
-            --title "StackNest $TAG" \
-            $flag \
-            --notes "$(cat <<'EOF'
+          # このバージョンの変更は CHANGELOG.md を正とし、そこから節を切り出して載せる
+          # （リリースノートと CHANGELOG が食い違わないように、書く場所を 1 つに保つ）。
+          version="${TAG#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { sub(/^## /, "### "); print; inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/section.md"
+          if [ ! -s "$RUNNER_TEMP/section.md" ]; then
+            echo "CHANGELOG.md に $version の節が見つかりません" >&2
+            exit 1
+          fi
+          {
+            echo "## このバージョンの変更"
+            cat "$RUNNER_TEMP/section.md"
+            echo
+            echo "全文は [CHANGELOG.md](https://github.com/shelfsmith/stacknest/blob/main/CHANGELOG.md)（[English](https://github.com/shelfsmith/stacknest/blob/main/CHANGELOG.en.md)）にあります。"
+            echo
+            echo "---"
+            echo
+            cat <<'FOOTER'
           自己署名（固定 identity・匿名 CN `StackNest Self-Signed`・Apple 公証なし）の Universal ビルド（arm64 + x86_64・macOS 15+）。
           固定 identity のため、アップデートしても TCC（フルディスクアクセス等）の許可がリセットされず持続します。
 
@@ -160,8 +172,22 @@ jobs:
           - **ターミナル**: `xattr -dr com.apple.quarantine /Applications/StackNest.app` を実行してからダブルクリック。
 
           ⚠ 未公証のため Gatekeeper の警告が出ます。信頼できる入手元からのみ導入してください。
-          EOF
-          )"
+          FOOTER
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Create GitHub Release
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flag=""
+          [ "$PRERELEASE" = "true" ] && flag="--prerelease"
+          gh release create "$TAG" \
+            "StackNest-${TAG}.zip" \
+            --title "StackNest $TAG" \
+            $flag \
+            --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Cleanup keychain
         if: always()
