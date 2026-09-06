@@ -148,6 +148,11 @@ public struct BookImporter: Sendable {
                     if let reader = EPUBAdapter.reader {
                         coverDataOverride = try? await reader.coverImageData(url: url, maxPixelSize: 1200)
                     }
+                } else if VideoFrameExtractor.isSupported(url: url) {
+                    // G50: 動画は自動でフレームを 1 枚拾って表紙にする。ページの概念は無いので
+                    // pageCount は 0 のまま。取れない形式（mkv/webm/avi）・破損は nil のまま
+                    // 既存の coverFailures 経路に落ちる（取り込みは続く）。
+                    coverDataOverride = try? await VideoFrameExtractor.autoCoverData(url: url, maxPixelSize: 1200)
                 } else if BookCategory.classify(path: url.path) == .image {
                     // Phase 2.5g+h+i fixup v1: 単独 image を追加した場合、その image を
                     // そのまま thumbnail として使う (resize は CoverImageResizer で 1200 px 化)。

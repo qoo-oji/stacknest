@@ -55,6 +55,20 @@ public enum CoverRefresher {
                 }
                 return data
             }
+            // G50: 動画は AVFoundation でフレームを 1 枚取る。`preferredName` が `@t=` なら
+            // ユーザーが選んだ場面、それ以外（nil・アーカイブ用のエントリ名）は自動選択。
+            // AVFoundation が開けない mkv/webm/avi は従来どおり `.unsupportedFormat`。
+            if VideoFrameExtractor.isSupported(url: sourceURL) {
+                do {
+                    if let seconds = CoverSource.videoTime(from: preferredName) {
+                        return try await VideoFrameExtractor.frameData(
+                            url: sourceURL, seconds: seconds, maxPixelSize: 1200)
+                    }
+                    return try await VideoFrameExtractor.autoCoverData(url: sourceURL, maxPixelSize: 1200)
+                } catch {
+                    throw CoverRefreshError.unsupportedFormat
+                }
+            }
             if let extractor = ArchiveAdapter.coverExtractor(for: sourceURL) {
                 return try await extractor.extractCoverImage(from: sourceURL, preferredName: preferredName)
             }
