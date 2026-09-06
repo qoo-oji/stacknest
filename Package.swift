@@ -130,7 +130,7 @@ let package = Package(
             name: "AppCoreTests",
             dependencies: ["AppCore", "LibraryStore", "StackroomFormat", "LibraryServerAPI", "ArchiveAdapter", "EPUBAdapter"],
             path: "Tests/AppCoreTests",
-            resources: [.copy("PDFFixtures")]
+            resources: [.copy("PDFFixtures"), .copy("VideoFixtures")]
         ),
         .testTarget(
             name: "LibraryServerTests",
