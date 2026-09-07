@@ -144,7 +144,11 @@ jobs:
           version="${TAG#v}"
           awk -v v="$version" '
             $0 ~ "^## \\[" v "\\]" { sub(/^## /, "### "); print; inside = 1; next }
-            inside && /^## \[/ { exit }
+            # 次の見出しで止める。`## [x.y.z]` だけを見ていると、最後の版のときに
+            # その下の「0.8.0 以前」の節まで巻き込む（過去分の転記で実際に踏んだ）。
+            inside && /^## / { exit }
+            # 行末のリンク定義（`[0.8.0]: https://…`）はノートには要らない
+            inside && /^\[[^]]+\]: / { next }
             inside { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/section.md"
           if [ ! -s "$RUNNER_TEMP/section.md" ]; then
