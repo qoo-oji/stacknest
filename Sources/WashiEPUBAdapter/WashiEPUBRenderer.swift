@@ -112,14 +112,17 @@ final class WashiReaderHost: NSObject, EPUBReaderViewing, EPUBReaderViewDelegate
         // で矢印・スペース・PageUp/Down をページ送りに直結する。契約 `EPUBReaderViewing` は
         // goForward/goBackward しか持たないため、このキー処理は Washi 実装（本ファイル）の中だけで閉じる。
         reader.settings.forwardsKeyEventsNatively = true
-        // G48-4 smoke（2026-09-06）クラッシュ対策: Washi 1.16.0 の `EPUBReaderView.keyDown`（cooViewer-oxr.80）は
-        // `handlesKeyboardNavigation == true` のとき受け取ったキーを自分の WebView へ転送する。WebView が
-        // 扱わないキー（⌘なしの `+`・`-`・Esc 等）は `super` → nextResponder（= コンテナ自身）へ戻るため
-        // 往復して無限再帰し、スタックオーバーフローで落ちる（クラッシュログ: `EPUBReaderView.keyDown` ↔
-        // `_web_superKeyDown` の反復）。ナビゲーションは上の native monitor（`didReceiveNativeKey`）で
-        // 完結させているので、Washi 側の既定キー処理と転送を切る（false にするとコンテナは delegate の
-        // `didReceiveKey` へ流すだけで WebView へ戻さない）。JS が担っていた ↑↓/Home/End も native 側に持つ。
-        reader.settings.handlesKeyboardNavigation = false
+        // G49b（2026-09-08）: `handlesKeyboardNavigation` は既定（true）のままにする。
+        // G48-4 では上流 1.16.0 の再帰クラッシュ（上流 Issue #3）を避けるため false にしていたが、
+        // 上流 1.16.1 が `keyDown` に再入ガードを入れて修正した（転送中に戻ってきたキーは
+        // WebView へ再転送せず `super.keyDown` で上位 responder へ流す）。
+        //
+        // false のままにしない理由: false のときコンテナは delegate の `didReceiveKey` へ流して
+        // **そこで握り潰す**（`super.keyDown` を呼ばない）ため、こちらが扱わないキー（`-`・Esc・`+` 等）が
+        // responder チェーンへ上がらなくなる。ナビゲーションの優先権は上の native monitor が
+        // WebView より先に横取りすることで既に確保できており、false にする必要はない。
+        // JS の既定キー集合（矢印・Space・PageUp/Down・Home/End）は native monitor が
+        // すべて先に消費するので、true に戻しても二重にページ送りされることはない。
     }
 
     /// `WashiEPUBRenderer.makeReaderView` から呼ぶ。実行はまだしない。
