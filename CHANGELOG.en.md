@@ -7,6 +7,39 @@ Releases are self-signed Universal builds (anonymous CN `StackNest Self-Signed`,
 
 > **About versioning:** Tagged releases start at `0.8.0`. Earlier work was developed by phase (2.1–2.6) without explicit version numbers. The history before tagging is summarized under "Before 0.8.0 (phase-based, untagged)" at the end of this file.
 
+## [0.14.3] - 2026-09-08 — Video thumbnails (automatic frame plus manual scene picking, Phase G50)
+
+> Built from a request on a 5ch thread for video thumbnails. A frame is picked automatically at import,
+> and if you do not like it you can choose another one with a seek bar.
+
+### Added
+
+- **★ Videos now get a cover** (G50, **MP4 / MOV / M4V**): at import a frame is generated at **10%, then 25%,
+  then 50%** of the duration, and the **first one that is neither black nor a flat colour** becomes the cover,
+  so a video that opens on black or a logo still shows its content.
+  - **The scene can be re-chosen**: the cover's context menu gains "**Choose a scene from the video…**",
+    which opens a player with a seek bar.
+  - **The chosen moment is remembered**, so "Regenerate cover" rebuilds **the same scene** — unlike setting an
+    external image as the cover.
+  - Video covers also appear in **remote libraries and the web reader**; scene picking is local-only.
+  - **MKV / WebM / AVI are out of scope**: AVFoundation cannot open them, so they import without a cover.
+  - "Edit cover" (picking a page inside an archive) is disabled for videos, which have no pages.
+
+### Fixed
+
+- After picking a scene, **Revert to automatic** and **Undo** restored the database but left the **thumbnail on
+  disk showing the chosen scene**. Thumbnails are now rewritten regardless of format, which fixes PDF, EPUB and
+  single images at the same time.
+- Frame generation had **no time limit**. It now gives up after 20 seconds so one video cannot stall an import.
+  - The three candidates share one image generator, so **a timer armed for an earlier candidate could cancel a
+    later one that was still decoding**, making a valid but slow video report no usable frame. Fixed.
+- The brightness test misjudged **dark scenes as black** because it used the wrong colour space.
+
+### Known limitation
+
+- **Video thumbnails cannot be cropped.** The crop UI lives inside "Edit cover", which is disabled for videos.
+  This will be addressed separately.
+
 ## [0.14.2] - 2026-09-08 — Washi 1.16.1 (upstream fixed the key-input crash)
 
 > The bug found while building the EPUB support in `0.14.0` and
