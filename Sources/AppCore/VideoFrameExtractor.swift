@@ -144,15 +144,23 @@ public enum VideoFrameExtractor {
         let box = Box(generator: generator)
         return await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
             let once = Once(continuation)
+            // Codex レビュー（2026-09-08・P2）: **generator は候補 3 点で使い回している**ので、
+            // 期限タスクを取り消さずに残すと、先に成功した候補の 20 秒タイマーが後から発火して
+            // `cancelAllCGImageGeneration()` を呼び、**まだ復号中の次の候補を巻き添えで取り消す**。
+            // 復号に 19 秒以上かかる動画で、正常なのに `noUsableFrame` になりうる。
+            // 生成が終わった時点で期限タスクを取り消す。
+            let timeoutTask = Task {
+                // 取り消されたときは**何もせずに抜ける**。`try?` で握り潰すと、
+                // 取り消し直後に `cancelAllCGImageGeneration()` へ落ちて同じ事故になる。
+                do { try await Task.sleep(for: timeout) } catch { return }
+                box.generator.cancelAllCGImageGeneration()
+                once.resume(nil)
+            }
             // 期限切れのとき、復号側のタスクは残るが呼び出し側は先へ進める。
             Task {
                 let result = try? await box.generator.image(at: time)
+                timeoutTask.cancel()
                 once.resume(result?.image)
-            }
-            Task {
-                try? await Task.sleep(for: timeout)
-                box.generator.cancelAllCGImageGeneration()
-                once.resume(nil)
             }
         }
     }
