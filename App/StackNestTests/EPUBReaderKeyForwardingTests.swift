@@ -13,11 +13,16 @@ import WashiEPUBAdapter
 /// `handlesKeyboardNavigation == true` のとき受け取ったキーを自分の WebView へ転送するが、
 /// WebView が扱わないキーは `super` から nextResponder（コンテナ自身）へ戻るため往復する。
 ///
+/// **G49b（2026-09-08）**: 上流 1.16.1 が `keyDown` に再入ガードを入れて修正した（上流 Issue #3）。
+/// 転送中に戻ってきたキーは WebView へ再転送せず `super.keyDown` で上位 responder へ流す。
+/// これに伴い StackNest 側の回避策（`handlesKeyboardNavigation = false`）は撤去した。
+///
 /// このテストは実際の `EPUBReaderView` を窓に載せ、WebView を first responder にして
 /// 「WebView が扱わないキー」を送る。再帰があればテストプロセスごと落ちる（＝失敗）。
 ///
 /// **注意（2026-09-06）**: 修正前のビルドでもこのテストは落ちなかった（テストホストでは WebKit の
 /// 「未処理キーの `_web_superKeyDown` 折り返し」が実機と同じ経路を通らない模様。原因は未特定）。
+/// 上流も同じ理由で XCTest ではなく専用の AppKit 検証アプリで確認している。
 /// したがって本テストは再現テストではなく、キー経路が例外なく通ることの煙テストとして残す。
 /// 実機での再確認（`-`・Esc・`+`）が修正の検証になる。
 @MainActor

@@ -2,7 +2,9 @@
 import Testing
 @testable import WashiEPUBAdapter
 
-/// G48-4: `handlesKeyboardNavigation = false` にしたので、Washi の JS が担っていた既定キーを native 側が全部持つ。
+/// G48-4: ページ送りは native のキー監視（`didReceiveNativeKey`）が WebView より先に横取りして持つ。
+/// G49b（2026-09-08）で上流 1.16.1 の修正に伴い `handlesKeyboardNavigation` を既定（true）へ戻したが、
+/// この写像は変わらない（Washi の JS が扱う集合は監視側がすべて先に消費するため二重には効かない）。
 @Suite("G48-4: ナビゲーションキーの写像")
 struct WashiNavigationKeyTests {
     @Test func arrowsAreVisual() {
