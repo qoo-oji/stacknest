@@ -118,6 +118,13 @@ targets:
         product: LibraryServerAPI
       - package: StackNest
         product: RemoteClient
+      # G50 smoke（2026-09-08・M4 と母艦の両方で再現）: 「動画からシーンを選ぶ…」で abort した。
+      # `VideoCoverPickerSheet` は SwiftUI の `VideoPlayer`（`_AVKit_SwiftUI`）を使うが、
+      # その内部 generic クラスは **AVKit の ObjC クラスを継承**しているため、AVKit が
+      # プロセスに無いと `getSuperclassMetadata` が Swift ランタイムの fatalError で落ちる。
+      # `VideoPlayer` は struct で AVKit のシンボルを直接参照しないため **autolink が効かない**
+      # （修正前の `otool -L` は AVFoundation と _AVKit_SwiftUI だけを載せていた）。明示的にリンクする。
+      - sdk: AVKit.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.shelfsmith.stacknest
