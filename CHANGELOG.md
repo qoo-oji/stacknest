@@ -7,6 +7,23 @@
 
 > **バージョン付けについて:** タグ付きリリースは `0.8.0` から始まります。それ以前はフェーズ単位（2.1〜2.6）で開発しており、明確なバージョン番号は振っていません。本ファイル末尾の「0.8.0 以前（フェーズ管理期、タグなし）」にフェーズごとの履歴をまとめています。
 
+## [0.14.2] - 2026-09-08 — Washi 1.16.1（上流がキー入力のクラッシュを修正）
+
+> `0.14.0` の EPUB 対応で見つけて[上流へ報告](https://github.com/shunnag/Washi/issues/3)していた不具合を、
+> 作者の [shunnag](https://github.com/shunnag) さんが [Washi 1.16.1](https://github.com/shunnag/Washi/releases/tag/1.16.1) で
+> 直してくださいました。StackNest 側に置いていた回避策を外し、上流の修正で通す形に戻します。報告への対応に感謝します。
+
+### Changed
+
+- **Washi を 1.16.1 に更新し、キー入力の回避策を外しました**: Washi の窓で `-`・Esc・`+`（⌘なし）を押すと
+  落ちる不具合（`EPUBReaderView.keyDown` と WebView の無限再帰）を上流が修正したので、StackNest 側で
+  キー処理を切っていた回避策（`handlesKeyboardNavigation = false`）を撤去しました。
+  - 回避策の間は、**StackNest が扱わないキーが responder チェーンへ上がらず握り潰されて**いました
+    （コンテナがキーを delegate へ渡した時点で止まり、上位へ流していなかったため）。既定へ戻したことで
+    こうしたキーは通常どおり上位へ流れます。
+  - ページ送りの優先権は従来どおりネイティブのキー監視が持ちます（Washi の JS が扱う矢印・Space・
+    PageUp/Down・Home/End は、すべて監視側が先に消費するため二重には効きません）。
+
 ## [0.14.1] - 2026-09-07 — Stackroom 書庫の取り込みを直す（Phase G49）
 
 > 外部の利用者 [@gsugawara](https://github.com/gsugawara) さんから、[PR #2](https://github.com/shelfsmith/stacknest/pull/2) で

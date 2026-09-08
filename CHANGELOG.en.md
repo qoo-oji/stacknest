@@ -7,6 +7,25 @@ Releases are self-signed Universal builds (anonymous CN `StackNest Self-Signed`,
 
 > **About versioning:** Tagged releases start at `0.8.0`. Earlier work was developed by phase (2.1–2.6) without explicit version numbers. The history before tagging is summarized under "Before 0.8.0 (phase-based, untagged)" at the end of this file.
 
+## [0.14.2] - 2026-09-08 — Washi 1.16.1 (upstream fixed the key-input crash)
+
+> The bug found while building the EPUB support in `0.14.0` and
+> [reported upstream](https://github.com/shunnag/Washi/issues/3) has been fixed by its author,
+> [shunnag](https://github.com/shunnag), in [Washi 1.16.1](https://github.com/shunnag/Washi/releases/tag/1.16.1).
+> The StackNest-side workaround is removed and the upstream fix takes over. Thank you for acting on the report.
+
+### Changed
+
+- **Washi updated to 1.16.1, and the keyboard workaround removed**: pressing `-`, Esc or `+` (without ⌘) in the
+  Washi window crashed the app through an infinite recursion between `EPUBReaderView.keyDown` and the web view.
+  Upstream fixed it, so the StackNest-side workaround that turned off the reader's key handling
+  (`handlesKeyboardNavigation = false`) is gone.
+  - While the workaround was in place, **keys StackNest does not handle were swallowed** instead of travelling up
+    the responder chain (the container passed the key to its delegate and stopped there). With the default
+    restored, those keys propagate normally again.
+  - Page turning is still owned by the native key monitor: the keys Washi's JavaScript handles (arrows, Space,
+    PageUp/Down, Home, End) are all consumed by the monitor first, so nothing is handled twice.
+
 ## [0.14.1] - 2026-09-07 — Stackroom library import fixes (Phase G49)
 
 > [@gsugawara](https://github.com/gsugawara) reported two bugs and proposed a fix in
