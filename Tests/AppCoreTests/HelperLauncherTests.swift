@@ -304,4 +304,79 @@ struct HelperLauncherTests {
         #expect(reason.contains("フォルダ"))
         #expect(calls.entries.isEmpty)  // viewer 未設定で弾かれているので launch には到達しない
     }
+
+    // MARK: - G60: 参照ファイルを開く
+
+    private func makeFakeViewer(_ name: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString).app", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test @MainActor
+    func openReferenceUsesTheBooksViewer() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let viewer = try makeFakeViewer("ArchiveViewer")
+        defer { try? FileManager.default.removeItem(at: viewer) }
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = viewer.path
+        let ref = URL(fileURLWithPath: "/tmp/本の題名.stacknestbook")
+
+        #expect(HelperLauncher.openReference(ref, bookPath: "/lib/a.zip", settings: settings) == nil)
+        #expect(calls.entries.count == 1)
+        #expect(calls.entries.first?.fileURL == ref)
+        #expect(calls.entries.first?.viewerURL.path == viewer.path)
+    }
+
+    /// リモートの画像の EPUB は「画像の本」の外部ビューア（アーカイブの指定）で開く。EPUB 用の指定は使わない。
+    @Test @MainActor
+    func openReferenceForImageEPUBUsesTheArchiveViewer() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let archiveViewer = try makeFakeViewer("ArchiveViewer")
+        let epubViewer = try makeFakeViewer("EPUBViewer")
+        defer {
+            try? FileManager.default.removeItem(at: archiveViewer)
+            try? FileManager.default.removeItem(at: epubViewer)
+        }
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = archiveViewer.path
+        settings.epubViewerAppPath = epubViewer.path
+
+        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
+                                             bookPath: "comic.epub", settings: settings) == nil)
+        #expect(calls.entries.first?.viewerURL.path == archiveViewer.path)
+    }
+
+    @Test @MainActor
+    func openReferenceWithoutAViewerFails() {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let settings = ViewerSettings(defaults: suite)
+
+        let err = HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
+                                               bookPath: "/lib/a.zip", settings: settings)
+        guard case let .launchFailed(_, reason)? = err else {
+            Issue.record("Expected .launchFailed, got \(String(describing: err))"); return
+        }
+        #expect(reason.contains("アーカイブ"))
+        #expect(calls.entries.isEmpty)
+    }
 }

@@ -57,4 +57,33 @@ public enum HelperLauncher {
         launch(fileURL, viewerURL)
         return nil
     }
+
+    /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く。
+    /// ビューアの決め方は `open(book:settings:)` と同じ（種類ごとの指定 → 既定）。ただし EPUB
+    /// （リモートの画像の EPUB）は**アーカイブの指定**で引く。参照ファイルはページで読むので、
+    /// 文字の EPUB 用に選んだアプリではなく画像の本のアプリに渡す。
+    /// 文言は `open(book:settings:)` と同じキーを使う（新しい訳は要らない）。
+    @MainActor
+    public static func openReference(_ referenceURL: URL, bookPath: String, settings: ViewerSettings) -> AppError? {
+        let isEPUB = (bookPath as NSString).pathExtension.lowercased() == "epub"
+        let category: BookCategory = isEPUB ? .archive : BookCategory.classify(path: bookPath)
+        let resolved = isEPUB
+            ? settings.resolvedViewerPath(for: .archive)
+            : settings.resolvedViewerPath(forPath: bookPath, category: category)
+        let shownName = referenceURL.lastPathComponent
+        guard let viewerPath = resolved else {
+            return .launchFailed(
+                path: shownName,
+                reason: L10n.format("%@ 用の外部ビューアが未設定です。設定 (⌘,) で選択してください。", category.displayName)
+            )
+        }
+        guard FileManager.default.fileExists(atPath: viewerPath) else {
+            return .launchFailed(
+                path: shownName,
+                reason: L10n.format("外部ビューアが見つかりません: %@\n設定 (⌘,) で再選択してください。", viewerPath)
+            )
+        }
+        launch(referenceURL, URL(fileURLWithPath: viewerPath))
+        return nil
+    }
 }
