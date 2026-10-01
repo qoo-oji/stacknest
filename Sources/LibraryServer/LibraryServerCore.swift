@@ -90,6 +90,15 @@ public struct LibraryServerConfig: Sendable {
     /// G47: メタデータでのファイル名変更（ローカル制御専用）。
     /// **`apply` が true でない限りファイルを動かさないこと。**
     public var renameFiles: (@Sendable (String, RenameFilesRequest) async -> RenameFilesReply?)?
+    /// G60: 本専用の読み取りトークンの保存先（ハッシュだけを持つ）。nil ならこの口では
+    /// 受け付けず、`POST …/viewer-token` も 501 を返す。本番は `ViewerTokenStore.shared`。
+    public var viewerTokens: ViewerTokenStore?
+    /// G60: この口の発行先。共有サーバは `.sharedServer`、127.0.0.1 の口は `.localEndpoint`。
+    /// 別の口で発行したトークンは「知らないトークン」（401）として扱う。
+    public var viewerTokenIssuer: ViewerTokenIssuer
+    /// G60: false のとき grant・R/RW トークンを一切受け付けない（本専用トークンだけの口）。
+    /// 「ローカルコントロールを許可」が OFF で「読書位置を同期する」が ON の 127.0.0.1 の口で使う。
+    public var acceptsPrincipalTokens: Bool
     // dual-stack 化は呼び出し側が host: "::" を明示注入する
     // （Linux は v6only sysctl 依存のため既定は互換性優先の 0.0.0.0）。
     public init(host: String = "0.0.0.0", port: Int, token: String,
@@ -112,7 +121,10 @@ public struct LibraryServerConfig: Sendable {
                 finderTagSyncStatus: (@Sendable (String) async -> FinderTagSyncStatusReply?)? = nil,
                 resyncFinderTags: (@Sendable (String) async -> FinderTagResyncReply?)? = nil,
                 setFinderTagSyncField: (@Sendable (String, String?) async -> FinderTagSyncStatusReply?)? = nil,
-                renameFiles: (@Sendable (String, RenameFilesRequest) async -> RenameFilesReply?)? = nil) {
+                renameFiles: (@Sendable (String, RenameFilesRequest) async -> RenameFilesReply?)? = nil,
+                viewerTokens: ViewerTokenStore? = nil,
+                viewerTokenIssuer: ViewerTokenIssuer = .sharedServer,
+                acceptsPrincipalTokens: Bool = true) {
         self.host = host
         self.port = port
         self.token = token
@@ -136,6 +148,9 @@ public struct LibraryServerConfig: Sendable {
         self.resyncFinderTags = resyncFinderTags
         self.setFinderTagSyncField = setFinderTagSyncField
         self.renameFiles = renameFiles
+        self.viewerTokens = viewerTokens
+        self.viewerTokenIssuer = viewerTokenIssuer
+        self.acceptsPrincipalTokens = acceptsPrincipalTokens
     }
 }
 
@@ -167,6 +182,8 @@ public struct LibraryRequestContext: RequestContext {
     /// G23 (M3): 認証された主体の識別子（grant の id）。unlock のレート制限を principal 単位に
     /// するために使う。**トークンの生値は入れない**。固定トークン経路では `"legacy"` のまま。
     public var grantID: String = "legacy"
+    /// G60: 本専用トークンで認証されたとき、読める 1 冊。BearerAuthMiddleware が刻む（既定 nil）。
+    public var viewerBook: ViewerBookAccess? = nil
 
     public init(source: Source) {
         self.coreContext = .init(source: source)
@@ -193,6 +210,8 @@ public protocol RoleHoldingContext {
     var scope: GrantScope { get set }
     /// G23 (M3): 認証された主体の識別子（grant の id・固定トークン経路は "legacy"）。
     var grantID: String { get set }
+    /// G60: 本専用トークンで認証されたときの 1 冊（それ以外は nil）。
+    var viewerBook: ViewerBookAccess? { get set }
 }
 extension LibraryRequestContext: RoleHoldingContext {}
 
@@ -446,7 +465,12 @@ public struct LibraryServerCore: Sendable {
         // それ以外の API は Bearer トークン認証配下。
         let sessionTokenStore = self.sessionTokenStore
         let api = router.group("api/v1")
-            .add(middleware: BearerAuthMiddleware(token: config.token, editToken: config.editToken, adminTier: config.adminTier, grantsProvider: effectiveGrantsProvider, sessionTokenStore: sessionTokenStore))
+            .add(middleware: BearerAuthMiddleware(
+                token: config.token, editToken: config.editToken, adminTier: config.adminTier,
+                grantsProvider: effectiveGrantsProvider, sessionTokenStore: sessionTokenStore,
+                // G60: 本専用トークンは /api/v1 の側でだけ受け付ける（/local には渡さない）。
+                viewerTokens: config.viewerTokens, viewerTokenIssuer: config.viewerTokenIssuer,
+                acceptsPrincipalTokens: config.acceptsPrincipalTokens))
 
         // G23 (#9/#10): 永続 grant token を URL に載せないため、短命セッショントークンへ交換する。
         // 発行は Authorization ヘッダでの認証を要求する（クエリ経由の発行は受け付けない）。
@@ -2135,7 +2159,11 @@ public struct LibraryServerCore: Sendable {
         // そのまま admin として扱われる・grants CRUD と同じ扱い）。
         if config.enableLocalLibraryControl {
             let local = router.group("local")
-                .add(middleware: BearerAuthMiddleware(token: config.token, editToken: config.editToken, adminTier: config.adminTier, grantsProvider: effectiveGrantsProvider, sessionTokenStore: sessionTokenStore))
+                .add(middleware: BearerAuthMiddleware(
+                    token: config.token, editToken: config.editToken, adminTier: config.adminTier,
+                    grantsProvider: effectiveGrantsProvider, sessionTokenStore: sessionTokenStore,
+                    // G60: 本専用トークンだけの口では、仮にこのルートがあっても CLI のトークンを通さない。
+                    acceptsPrincipalTokens: config.acceptsPrincipalTokens))
             local.post("libraries/open") { [openLibrary = config.openLibrary] request, context in
                 try context.requireAdmin()
                 guard let openLibrary else { throw HTTPError(.notImplemented) }

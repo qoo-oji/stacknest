@@ -15,6 +15,10 @@ import LibraryServerAPI
 /// fallback として受理する。`<img>`/`<video>` はカスタムヘッダを送れないための妥協で、
 /// トークンが URL/サーバログに残る。トークンは LAN 用・再生成可能・既に QR/localStorage に
 /// 存在するため許容する（ヘッダ優先・クエリは fallback）。R/RW いずれも同じコードパスで受理する。
+/// G60: 本専用の読み取りトークン（`ViewerTokenStore`）も受け付ける。その本の manifest・pages・cover（GET）と
+/// progress（POST）だけを通し（`ViewerTokenRoutes`）、ほかはすべて 403。期限切れは 401。
+/// 本専用トークンは Authorization ヘッダでだけ受け付ける（クエリの fallback は `<img>` 用の妥協で、ビューアには
+/// 要らない。URL に残る面を増やさない）。発行元のグラントが消えた（scope から外れた）ものは 401。
 struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: RouterMiddleware {
     let token: String
     let editToken: String?
@@ -24,50 +28,145 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
     let grantsProvider: (@Sendable () -> [Grant])?
     /// G23 (#9/#10): クエリに載る短命セッショントークンの解決先。
     let sessionTokenStore: SessionTokenStore
+    /// G60: 本専用トークンの保存先。nil ならこの口では受け付けない。
+    var viewerTokens: ViewerTokenStore? = nil
+    /// G60: この口の発行先。
+    var viewerTokenIssuer: ViewerTokenIssuer = .sharedServer
+    /// G60: false なら grant・R/RW トークンを受け付けない（本専用トークンだけの口）。
+    var acceptsPrincipalTokens: Bool = true
 
     func handle(
         _ request: Request, context: Context,
         next: (Request, Context) async throws -> Response
     ) async throws -> Response {
         let presented: String?
+        // G60: 本専用トークンはヘッダで出されたときだけ照合する。
+        let presentedInHeader: Bool
         if let header = request.headers[.authorization], header.hasPrefix("Bearer ") {
             presented = String(header.dropFirst("Bearer ".count))   // ヘッダ優先
+            presentedInHeader = true
         } else if let rawQueryToken = request.uri.queryParameters.get("token") {
             let queryToken = String(rawQueryToken)
             // G23 (#9/#10): クエリに載るのは短命セッショントークン。
             // 解決できなければ、従来どおり grant token 直挿しとして扱う（既存クライアント互換）。
             presented = await sessionTokenStore.resolve(queryToken) ?? queryToken
+            presentedInHeader = false
         } else {
             presented = nil
+            presentedInHeader = false
         }
         guard let presented else { throw HTTPError(.unauthorized) }
         var ctx = context
+        if acceptsPrincipalTokens, let p = principal(for: presented) {
+            ctx.role = p.role
+            ctx.tier = p.tier
+            ctx.scope = p.scope
+            // G23 (M3): unlock のレート制限を principal 単位にするための識別子。
+            // トークンの生値ではなく grant の id を使う（ログや状態に秘密を残さない）。
+            if let grantID = p.grantID { ctx.grantID = grantID }
+            return try await next(request, ctx)
+        }
+        if presentedInHeader, let viewerTokens {
+            switch viewerTokens.lookup(token: presented, issuer: viewerTokenIssuer) {
+            case .valid(let record):
+                // 共有サーバで発行したトークンは、発行元のグラントが今もあり、その書庫を scope に含むときだけ
+                // 有効（グラントの削除・scope の縮小で即時に失効させる。/events の再検証と同じ考え方）。
+                // 失効したトークンは「無効なトークン」なので、道の検査より先に 401 にする。
+                if let grantID = record.issuedByGrantID {
+                    guard let grantsProvider,
+                          let grant = grantsProvider().first(where: { $0.id == grantID }),
+                          grant.scope.allows(record.libraryUUID) else {
+                        throw HTTPError(.unauthorized)
+                    }
+                }
+                // 道の検査はルートの解決結果ではなく実際のパスで行う（その本の 4 つの道だけ）。
+                guard ViewerTokenRoutes.allows(method: request.method, path: request.uri.path,
+                                               libraryUUID: record.libraryUUID, bookID: record.bookID) else {
+                    throw HTTPError(.forbidden)
+                }
+                ctx.role = .read
+                ctx.tier = .read
+                ctx.scope = .libraries([record.libraryUUID])
+                ctx.grantID = "viewer-token:\(record.id)"
+                ctx.viewerBook = ViewerBookAccess(libraryUUID: record.libraryUUID, bookID: record.bookID,
+                                                  lockFingerprint: record.lockFingerprint)
+                return try await next(request, ctx)
+            case .expired:
+                throw HTTPError(.unauthorized)
+            case .unknown:
+                break
+            }
+        }
+        throw HTTPError(.unauthorized)
+    }
+
+    private struct Principal {
+        let role: TokenRole
+        let tier: AccessTier
+        let scope: GrantScope
+        /// grant の id。固定トークン経路は nil（コンテキストの既定 "legacy" のまま）。
+        let grantID: String?
+    }
+
+    /// grant／R・RW トークンとして照合する（従来の判定そのまま）。一致しなければ nil。
+    private func principal(for presented: String) -> Principal? {
         if let grantsProvider {
             // グラントモード（ライブ）: 毎リクエスト現在のグラントを取得し照合、tier/scope を刻む。
             // 削除済みグラント＝マッチなし＝401＝即時失効。
-            let grants = grantsProvider()
-            guard let g = grants.first(where: { constantTimeEquals(presented, $0.token) }) else {
-                throw HTTPError(.unauthorized)
+            guard let g = grantsProvider().first(where: { constantTimeEquals(presented, $0.token) }) else {
+                return nil
             }
-            ctx.tier = g.tier
-            ctx.scope = g.scope
-            ctx.role = (g.tier == .read) ? .read : .write
-            // G23 (M3): unlock のレート制限を principal 単位にするための識別子。
-            // トークンの生値ではなく grant の id を使う（ログや状態に秘密を残さない）。
-            ctx.grantID = g.id
-        } else if adminTier {
+            return Principal(role: (g.tier == .read) ? .read : .write, tier: g.tier, scope: g.scope, grantID: g.id)
+        }
+        if adminTier {
             // adminTier モード: R/W いずれかのトークンが一致すれば admin 昇格。
             if constantTimeEquals(presented, token) || (editToken.map { constantTimeEquals(presented, $0) } ?? false) {
-                ctx.role = .write; ctx.tier = .admin; ctx.scope = .all
-            } else { throw HTTPError(.unauthorized) }
-        } else if constantTimeEquals(presented, token) {
-            ctx.role = .read; ctx.tier = .read; ctx.scope = .all
-        } else if let editToken, constantTimeEquals(presented, editToken) {
-            ctx.role = .write; ctx.tier = .edit; ctx.scope = .all
-        } else {
-            throw HTTPError(.unauthorized)
+                return Principal(role: .write, tier: .admin, scope: .all, grantID: nil)
+            }
+            return nil
         }
-        return try await next(request, ctx)
+        if constantTimeEquals(presented, token) {
+            return Principal(role: .read, tier: .read, scope: .all, grantID: nil)
+        }
+        if let editToken, constantTimeEquals(presented, editToken) {
+            return Principal(role: .write, tier: .edit, scope: .all, grantID: nil)
+        }
+        return nil
+    }
+}
+
+/// G60: 本専用トークンで認証された主体が読める 1 冊。
+public struct ViewerBookAccess: Sendable, Equatable {
+    public let libraryUUID: String
+    public let bookID: Int
+    /// 発行時に解錠していたロックの世代（`ViewerTokenStore.lockFingerprint(for:)`）。未施錠で発行したら nil。
+    public let lockFingerprint: String?
+
+    public init(libraryUUID: String, bookID: Int, lockFingerprint: String?) {
+        self.libraryUUID = libraryUUID
+        self.bookID = bookID
+        self.lockFingerprint = lockFingerprint
+    }
+}
+
+/// G60: 本専用トークンが通れる道。その本の manifest・pages/{n}・cover（GET）と progress（POST）だけ。
+/// 末尾のスラッシュ・大文字違い・余計な階層は通さない（安全側に倒す）。
+enum ViewerTokenRoutes {
+    static func allows(method: HTTPRequest.Method, path: String, libraryUUID: String, bookID: Int) -> Bool {
+        let prefix = "/api/v1/libraries/\(libraryUUID)/books/\(bookID)/"
+        guard path.hasPrefix(prefix) else { return false }
+        let rest = path.dropFirst(prefix.count)
+        switch method {
+        case .get:
+            if rest == "manifest" || rest == "cover" { return true }
+            guard rest.hasPrefix("pages/") else { return false }
+            let n = rest.dropFirst("pages/".count)
+            return !n.isEmpty && n.allSatisfy { $0.isASCII && $0.isNumber }
+        case .post:
+            return rest == "progress"
+        default:
+            return false
+        }
     }
 }
 

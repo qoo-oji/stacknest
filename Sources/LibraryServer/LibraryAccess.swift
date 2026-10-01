@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import AppCore
 import HTTPTypes
 import Hummingbird
 import LibraryServerAPI
@@ -53,16 +54,28 @@ struct LibraryResolver: Sendable {
 
     /// uuid からライブラリを引き、ロック庫なら X-Library-Token を検証する。
     /// 見つからない / スコープ外 → nil（404 相当）、ロック未解錠 → LibraryAccessError.locked（403）。
-    func resolve(uuid: String, libraryToken: String?, scope: GrantScope = .all) async throws -> ServedLibrary? {
+    func resolve(uuid: String, libraryToken: String?, scope: GrantScope = .all,
+                 viewerAccess: ViewerBookAccess? = nil) async throws -> ServedLibrary? {
         guard scope.allows(uuid) else { return nil }
         guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else {
             return nil
         }
         if lib.isLocked {
-            // G25d: 発行時に認証した世代が今も現行であることを要求する。
-            guard let t = libraryToken,
-                  await tokenStore.isValid(t, for: uuid, currentCredential: lib.currentLockCredential()) else {
-                throw LibraryAccessError.locked
+            if let viewerAccess {
+                // G60: 本専用トークンは、その本に限って書庫のトークンなしで読める（ビューアに書庫の
+                // トークンまで渡さないため）。ただし発行時に解錠していたロックの世代が今も現行であること。
+                // パスワードを変えた・施錠前に発行した、のどちらでも通さない。
+                guard viewerAccess.libraryUUID == uuid,
+                      let issued = viewerAccess.lockFingerprint,
+                      issued == ViewerTokenStore.lockFingerprint(for: lib.currentLockCredential()) else {
+                    throw LibraryAccessError.locked
+                }
+            } else {
+                // G25d: 発行時に認証した世代が今も現行であることを要求する。
+                guard let t = libraryToken,
+                      await tokenStore.isValid(t, for: uuid, currentCredential: lib.currentLockCredential()) else {
+                    throw LibraryAccessError.locked
+                }
             }
         }
         return lib

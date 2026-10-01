@@ -164,8 +164,14 @@ extension LibraryResolver {
         _ request: Request, _ context: some RequestContext & RoleHoldingContext
     ) async throws -> (ServedLibrary, BookRow) {
         let uuid = try context.parameters.require("lib")
+        // G60: 本専用トークンの本なら、施錠庫をその本に限って通す（`resolve` 参照）。
+        let viewerAccess = context.viewerBook.flatMap { access in
+            access.libraryUUID == uuid && context.parameters.get("id", as: Int.self) == access.bookID
+                ? access : nil
+        }
         guard let lib = try await resolve(
-            uuid: uuid, libraryToken: libraryToken(from: request), scope: context.scope
+            uuid: uuid, libraryToken: libraryToken(from: request), scope: context.scope,
+            viewerAccess: viewerAccess
         ) else { throw HTTPError(.notFound) }
         let id = try context.parameters.require("id", as: Int.self)
         guard let row = try lib.db.fetchBook(id: id) else { throw HTTPError(.notFound) }
