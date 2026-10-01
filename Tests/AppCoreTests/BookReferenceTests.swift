@@ -140,6 +140,31 @@ struct BookReferenceTests {
         #expect(fm.fileExists(atPath: store.root.path))
     }
 
+    @Test func pruneRemovesOnlyStaleRegularTempFiles() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let fm = FileManager.default
+        let now = Date()
+        let room = store.root.appendingPathComponent("local/LIB-1/7")
+        try fm.createDirectory(at: room, withIntermediateDirectories: true)
+        let old = room.appendingPathComponent(".tmp-x")
+        let fresh = room.appendingPathComponent(".tmp-y")
+        try Data("t".utf8).write(to: old)
+        try Data("t".utf8).write(to: fresh)
+        try fm.setAttributes([.modificationDate: now.addingTimeInterval(-120)], ofItemAtPath: old.path)
+        try fm.setAttributes([.modificationDate: now], ofItemAtPath: fresh.path)
+        let target = base.appendingPathComponent("target.txt")
+        try Data("keep".utf8).write(to: target)
+        try fm.setAttributes([.modificationDate: now.addingTimeInterval(-120)], ofItemAtPath: target.path)
+        let link = room.appendingPathComponent(".tmp-z")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+
+        #expect(store.pruneExpired(now: now) == 1)
+        #expect(!fm.fileExists(atPath: old.path), "古い一時ファイルは消す")
+        #expect(fm.fileExists(atPath: fresh.path), "新しい一時ファイルは書き込み中かもしれないので残す")
+        #expect(fm.fileExists(atPath: target.path), "リンクは辿らず、リンク先は残す")
+    }
+
     private func mode(_ url: URL) throws -> Int {
         (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
     }

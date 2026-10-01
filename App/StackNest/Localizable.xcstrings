@@ -650,12 +650,32 @@
         }
       }
     },
+    "StackNest と読書位置を同期する（対応アプリのみ）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync Reading Position with StackNest (Supported Apps Only)"
+          }
+        }
+      }
+    },
     "トークンを発行できませんでした" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "couldn't get a token"
+          }
+        }
+      }
+    },
+    "リモート閲覧は内蔵ビューアで表示されます。ただし「StackNest と読書位置を同期する」が ON で、画像を外部ビューアで開く設定なら、ページで読む本は外部ビューアで開きます。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote viewing uses the built-in viewer. When \"Sync Reading Position with StackNest\" is on and images are set to open in an external viewer, books read by page open in the external viewer instead."
           }
         }
       }
@@ -676,6 +696,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "couldn't write the reference file"
+          }
+        }
+      }
+    },
+    "対応した外部ビューアが、本のページを StackNest から受け取って表示し、読み進めたページを StackNest に書き戻します。画像を外部ビューアで開く設定のときに効き、リモートの本も外部ビューアで開きます。ON のあいだは、ローカルコントロールが OFF でも、この Mac の中だけの受け口（127.0.0.1）が本専用のトークンだけを受け付けます。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A supported external viewer gets the book's pages from StackNest and writes the page you reach back to StackNest. This applies when images open in an external viewer, and remote books open there too. While this is on, StackNest listens on 127.0.0.1 (this Mac only) for per-book tokens, even if Local Control is off."
           }
         }
       }
@@ -4600,16 +4630,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pages and covers are cached to disk automatically to speed up remote viewing."
-          }
-        }
-      }
-    },
-    "リモート閲覧は、外部ビューア設定に関わらず常に内蔵ビューアで表示されます。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remote viewing always uses the built-in viewer, regardless of the external viewer setting."
           }
         }
       }

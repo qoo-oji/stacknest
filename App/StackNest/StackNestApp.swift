@@ -1404,6 +1404,9 @@ final class StackNestAppDelegate: NSObject, NSApplicationDelegate {
                 // G54-S2: 索引に無い本の題名リンクを落とす（オフラインから消えた本の残骸）。
                 OfflineExternalLink(baseDirectory: store.baseDirectory)
                     .prune(keeping: Set(store.all().map { OfflineExternalLink.roomKey(for: $0) }))
+                // G60: 期限の切れた本専用トークンと参照ファイルを掃除する。
+                ViewerTokenStore.shared.pruneExpired()
+                BookReferenceStore().pruneExpired()
             }
         }
     }

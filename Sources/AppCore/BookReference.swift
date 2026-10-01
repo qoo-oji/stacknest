@@ -185,6 +185,17 @@ public struct BookReferenceStore: Sendable {
                 doomed.append(url)
             }
         }
+        // 書き込み中の異常終了で残った一時ファイル（平文のトークンが入る）。通常ファイルだけ・書き込み中と
+        // 競合しないよう 60 秒より古いものだけを消す。リンクは辿らない（attributesOfItem はリンク自体を見る）。
+        if let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil) {
+            for case let url as URL in walker where url.lastPathComponent.hasPrefix(".tmp-") {
+                guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+                      attrs[.type] as? FileAttributeType == .typeRegular,
+                      let modified = attrs[.modificationDate] as? Date,
+                      now.timeIntervalSince(modified) > 60 else { continue }
+                doomed.append(url)
+            }
+        }
         for url in doomed { try? fm.removeItem(at: url) }
         removeEmptyDirectories(under: root)
         return doomed.count

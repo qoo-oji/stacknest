@@ -216,7 +216,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Text("リモート閲覧は、外部ビューア設定に関わらず常に内蔵ビューアで表示されます。")
+                    Text("リモート閲覧は内蔵ビューアで表示されます。ただし「StackNest と読書位置を同期する」が ON で、画像を外部ビューアで開く設定なら、ページで読む本は外部ビューアで開きます。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -259,6 +259,17 @@ struct SettingsView: View {
                             ? { settings.epubViewerAppPath = nil }
                             : nil
                     )
+                    // G60: 対応した外部ビューアと読書位置を同期する。切り替えたら 127.0.0.1 の口を組み直す
+                    // （ローカルコントロールが OFF でも、ON のあいだは本専用トークンだけの形で動かす）。
+                    Toggle("StackNest と読書位置を同期する（対応アプリのみ）", isOn: Binding(
+                        get: { settings.syncsReadingPositionWithExternalViewer },
+                        set: { on in
+                            settings.syncsReadingPositionWithExternalViewer = on
+                            localControl.reload()
+                        }))
+                    Text("対応した外部ビューアが、本のページを StackNest から受け取って表示し、読み進めたページを StackNest に書き戻します。画像を外部ビューアで開く設定のときに効き、リモートの本も外部ビューアで開きます。ON のあいだは、ローカルコントロールが OFF でも、この Mac の中だけの受け口（127.0.0.1）が本専用のトークンだけを受け付けます。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("リモートキャッシュ") {
