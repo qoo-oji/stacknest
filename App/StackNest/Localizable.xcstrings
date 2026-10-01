@@ -650,6 +650,56 @@
         }
       }
     },
+    "トークンを発行できませんでした" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "couldn't get a token"
+          }
+        }
+      }
+    },
+    "ローカルコントロールの受け口（127.0.0.1）が動いていません" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the Local Control endpoint (127.0.0.1) isn't running"
+          }
+        }
+      }
+    },
+    "参照ファイルを書き出せませんでした" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "couldn't write the reference file"
+          }
+        }
+      }
+    },
+    "本のページ数を読めませんでした" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "couldn't read the book's page count"
+          }
+        }
+      }
+    },
+    "読書位置を同期できなかったため、ファイルをそのまま外部ビューアで開きました（%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't sync the reading position, so the file opened in the external viewer as is (%@)."
+          }
+        }
+      }
+    },
     "電子書籍リーダーが使えません" : {
       "localizations" : {
         "en" : {

@@ -24,7 +24,10 @@ final class AppState {
     /// （progress/rating 等）で可視グリッド全体をフリッカさせるため per-book にする。
     var coverVersionByBook: [Int: Int] = [:]
     var error: AppError?
-    let viewerSettings: ViewerSettings = .shared
+    /// G60: テストが別の suite の設定を差し込めるよう `var` にした（本番は常に `.shared`）。
+    @ObservationIgnored var viewerSettings: ViewerSettings = .shared
+    /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
+    @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
     /// G10: 詳細ペインの表紙表示トグル（per-browser・このウィンドウ専用・既定 true）。
     /// ツールバーボタンで切り替え、DetailPaneView(showCover:) に注入する。
     var showDetailCover: Bool = true
@@ -1384,18 +1387,70 @@ final class AppState {
     }
 
     /// 選択 books を外部ビューアで起動（従来挙動）。
+    /// G60: 「StackNest と読書位置を同期する」が ON で画像を外部ビューアで開く設定なら、画像の本は
+    /// 参照ファイルで渡す（`openInExternalViewerSyncing`）。1 冊もそうならなければ従来どおり同期的に開く。
     private func openInExternalViewer(_ books: [BookRow]) {
         // Phase 4.2c-2: 「最後に開いた本」を記録する（外部ビューア経路は先頭の本を採用）。
         if let book = books.first {
-            LastReadTracker.shared.record(.local(bundlePath: bundleURL.path, bookID: book.id, title: book.title))
+            viewerHandoff.recordLastRead(.local(bundlePath: bundleURL.path, bookID: book.id, title: book.title))
         }
+        guard books.contains(where: { opensByReference($0) }) else {
+            for book in books {
+                if let err = HelperLauncher.open(book: book, settings: viewerSettings) {
+                    self.error = err
+                    break
+                }
+                markAsRead(book: book)
+            }
+            return
+        }
+        Task { @MainActor in await self.openInExternalViewerSyncing(books) }
+    }
+
+    /// G60: 参照ファイルで渡す本か（1 冊ずつ判定する。複数選択に動画などが混ざってもよい）。
+    private func opensByReference(_ book: BookRow) -> Bool {
+        ExternalViewerSyncRouting.localOpensByReference(
+            path: book.path ?? "",
+            useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
+            syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer)
+    }
+
+    /// G60: 画像の本は参照ファイルで、それ以外はファイルで、順に外部ビューアへ渡す。
+    /// 参照ファイルで渡せなかった本はファイルで開き、理由を書庫の窓のお知らせ（`watchNotice` を共用）に出す。
+    func openInExternalViewerSyncing(_ books: [BookRow]) async {
         for book in books {
-            if let err = HelperLauncher.open(book: book, settings: viewerSettings) {
+            if opensByReference(book) {
+                if let failure = await handOffToExternalViewer(book) {
+                    watchNotice.present(Notice(
+                        kind: .warning,
+                        text: String(localized: "読書位置を同期できなかったため、ファイルをそのまま外部ビューアで開きました（\(failure.reason)）")))
+                    if let err = HelperLauncher.open(book: book, settings: viewerSettings) {
+                        self.error = err
+                        break
+                    }
+                }
+            } else if let err = HelperLauncher.open(book: book, settings: viewerSettings) {
                 self.error = err
                 break
             }
             markAsRead(book: book)
         }
+    }
+
+    /// G60: 1 冊を参照ファイルで渡す。開く位置は保存済みの読書位置。
+    private func handOffToExternalViewer(_ book: BookRow) async -> ExternalViewerHandoff.Failure? {
+        guard let settings = librarySettings else { return .tokenUnavailable }
+        let startPage = (try? database?.loadViewerState(bookID: book.id))?.lastPage ?? 0
+        // ロックの世代は、127.0.0.1 の口が照合に使うのと同じ DB の値（`ServedLibrary.currentLockCredential()`）
+        // から読む。メモリ上の `LibrarySettings.lockPasswordHash` と食い違うと、施錠庫の本が毎回 403 になる。
+        let lockCredential: String? = try? database?.getLibrarySetting(key: "lock_password_hash")
+        return await viewerHandoff.openLocal(
+            book: book,
+            libraryUUID: settings.ensureLibraryUUID(),
+            lockCredential: lockCredential,
+            startPage: startPage,
+            direction: book.pageDirection ?? viewerSettings.pageDirection,
+            settings: viewerSettings)
     }
 
     func selectAllInCurrentView() {
