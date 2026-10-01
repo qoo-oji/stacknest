@@ -44,14 +44,19 @@ final class LocalControlController {
     var maintenanceEventFanout: MaintenanceEventFanout { SharedMaintenanceRegistry.fanout }
 
     func startIfEnabled() {
-        guard ServerPreferences.localAutomationEnabled() else { return }
+        // G60: 「ローカルコントロールを許可」が OFF でも「StackNest と読書位置を同期する」が ON なら、
+        // 本専用トークンだけを受け付ける形で起動する（CLI／MCP のトークンと /local のルートは持たない）。
+        guard let mode = LocalEndpointMode.decide(
+            localAutomationEnabled: ServerPreferences.localAutomationEnabled(),
+            viewerSyncEnabled: ViewerSettings.shared.syncsReadingPositionWithExternalViewer) else { return }
         guard !isRunning else { return }
         let usedPort = ServerPreferences.localControlPort()
         let config = LibraryServerConfig(
             host: "127.0.0.1",
             port: usedPort,
             token: UUID().uuidString,                          // 使い捨て read（誰も使わない）
-            editToken: ServerPreferences.localControlToken(),  // CLI が提示する RW
+            // CLI が提示する RW。本専用トークンだけの形では持たない（多層防御。受け付けもしない）。
+            editToken: mode.acceptsPrincipalTokens ? ServerPreferences.localControlToken() : nil,
             transcoder: ImageIOTranscoder(),
             defaultPageDirection: ViewerSettings.shared.pageDirection,
             onBookChanged: { uuid, bookID in
@@ -104,13 +109,18 @@ final class LocalControlController {
             // G27b Task7: /local/libraries/open,close はローカル制御(127.0.0.1)にのみ生やす。
             // ServerController（共有サーバ）はこのフラグを立てない ―― それが唯一のゲート
             // （詳細は LibraryServerConfig.enableLocalLibraryControl のコメント）。
-            enableLocalLibraryControl: true,
+            // G60: 本専用トークンだけの形では /local のルートを生やさない。
+            enableLocalLibraryControl: mode.enablesLocalLibraryControl,
             openLibrary: { url in try await Self.openLibrary(at: url) },
             closeLibrary: { uuid in try await Self.closeLibrary(uuid: uuid) },
             finderTagSyncStatus: { uuid in await Self.finderTagSyncStatus(uuid: uuid) },
             resyncFinderTags: { uuid in await Self.resyncFinderTags(uuid: uuid) },
             setFinderTagSyncField: { uuid, field in await Self.setFinderTagSyncField(uuid: uuid, field: field) },
-            renameFiles: { uuid, body in await Self.renameFiles(uuid: uuid, body: body) }
+            renameFiles: { uuid, body in await Self.renameFiles(uuid: uuid, body: body) },
+            // G60: ローカルの書庫の本の参照ファイルはこの口を指す（アプリが直接発行したトークン）。
+            viewerTokens: ViewerTokenStore.shared,
+            viewerTokenIssuer: .localEndpoint,
+            acceptsPrincipalTokens: mode.acceptsPrincipalTokens
         )
         // 外部レビュー Low 指摘の是正: `SharedMaintenanceRegistry` のコメントは以前から
         // 「`ServerController`／`LocalControlController` はどちらも `maintenanceRegistry:` と

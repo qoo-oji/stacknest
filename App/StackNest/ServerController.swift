@@ -129,7 +129,10 @@ final class ServerController {
                     }
                 }
             },
-            sweepRuntimeTempOnStartup: true  // G21 #6-2: 実サーバ起動経路のみ古い temp を掃除
+            sweepRuntimeTempOnStartup: true,  // G21 #6-2: 実サーバ起動経路のみ古い temp を掃除
+            // G60: リモートの本の参照ファイル用に本専用トークンを発行・照合する（`POST …/viewer-token`）。
+            viewerTokens: ViewerTokenStore.shared,
+            viewerTokenIssuer: .sharedServer
         )
         // Codex 事前レビュー Blocker2: `maintenanceRegistry` を明示的に注入しないと
         // `LibraryServerCore` が自前で別インスタンスを作ってしまい、`LocalControlController`

@@ -40,6 +40,8 @@ public final class ViewerSettings {
     private let openEPUBFullScreenByDefaultKey = "viewerOpenEPUBFullScreenByDefault"
     private let showBookIDInDetailKey = "showBookIDInDetail"
     private let allowMultipleViewerWindowsKey = "viewerAllowMultipleWindows"
+    /// G60: 「StackNest と読書位置を同期する（対応アプリのみ）」。
+    private let syncsReadingPositionWithExternalViewerKey = "externalViewerSyncsReadingPosition"
     private let loupeMagnificationKey = "viewerLoupeMagnification"
     private let loupeShapeKey = "viewerLoupeShape"
     private let loupeSizeKey = "viewerLoupeSize"
@@ -159,6 +161,14 @@ public final class ViewerSettings {
     /// false=別の本を開くと既存ビューアを閉じて1つに保つ／true=別の本は別ウィンドウ。同一本は常に1つに集約。
     public var allowMultipleViewerWindows: Bool {
         didSet { defaults.set(allowMultipleViewerWindows, forKey: allowMultipleViewerWindowsKey) }
+    }
+
+    /// G60: 対応した外部ビューアと読書位置を同期するか（app-global・既定 false）。
+    /// ON で、画像の本を外部ビューアで開く設定なら、本のファイルの代わりに参照ファイル（`.stacknestbook`）を渡す。
+    /// リモートの本も外部ビューアで開く。ON のあいだ 127.0.0.1 の口は（ローカルコントロールが OFF でも）
+    /// 本専用トークンだけを受け付ける形で動く（`LocalEndpointMode`）。
+    public var syncsReadingPositionWithExternalViewer: Bool {
+        didSet { defaults.set(syncsReadingPositionWithExternalViewer, forKey: syncsReadingPositionWithExternalViewerKey) }
     }
 
     /// G40: ルーペの倍率。範囲 1.5...8.0、既定 2.0。setter で clamp する
@@ -484,6 +494,8 @@ public final class ViewerSettings {
         // G15 V1: allowMultipleViewerWindows は key 不在で false (defaults.bool(forKey:) の既定と一致するため
         // first-run 特別扱い不要)。
         self.allowMultipleViewerWindows = defaults.bool(forKey: allowMultipleViewerWindowsKey)
+        // G60: キー不在で false（defaults.bool の既定と一致）。
+        self.syncsReadingPositionWithExternalViewer = defaults.bool(forKey: syncsReadingPositionWithExternalViewerKey)
         // G40: 保存値が範囲外／未知でも畳んで読む。キー不在なら既定。
         if defaults.object(forKey: loupeMagnificationKey) == nil {
             self.loupeMagnification = Double(LoupeMagnification.defaultValue)
