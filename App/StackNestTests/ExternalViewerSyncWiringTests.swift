@@ -104,6 +104,7 @@ struct ExternalViewerSyncWiringTests {
         try await waitUntil { !launches.entries.isEmpty }
 
         let launched = try #require(launches.entries.first)
+        #expect(launches.entries.count == 1, "参照ファイルで開いたら従来の開き方は走らない")
         #expect(launched.file.pathExtension == "stacknestbook")
         #expect(launched.viewer.path == env.viewerApp.path)
         let attrs = try FileManager.default.attributesOfItem(atPath: launched.file.path)
@@ -148,9 +149,86 @@ struct ExternalViewerSyncWiringTests {
         state.openBooks([row])
         try await waitUntil { !launches.entries.isEmpty }
 
+        #expect(launches.entries.count == 1)
         #expect(launches.entries.first?.file.path == dir.path)
         #expect(state.watchNotice.notice?.kind == .warning)
         #expect(state.watchNotice.notice?.text.contains("ファイルをそのまま") == true)
         #expect(state.watchNotice.notice?.text.contains("127.0.0.1") == true)
+    }
+
+    // MARK: - ロック・ビューア未設定（G60 fix round 1）
+
+    private func setLock(_ state: AppState, _ value: String) throws {
+        try state.database?.setLibrarySetting(key: "lock_password_hash", value: value)
+    }
+
+    private func referenceFiles(_ env: Env) -> [URL] {
+        let root = env.base.appendingPathComponent("AppSupport/ViewerHandoff")
+        let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+        return (e?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "stacknestbook" }
+    }
+
+    @Test func lockedLibraryBindsTheTokenToTheVerifiedHash() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (state, row, _) = try makeLocalState(env, handoff: handoff(env))
+        try setLock(state, "H1")
+        state.markUnlocked(hash: "H1")
+
+        state.openBooks([row])
+        try await waitUntil { !launches.entries.isEmpty }
+
+        #expect(launches.entries.count == 1)
+        let launched = try #require(launches.entries.first)
+        let ref = try BookReference.decode(Data(contentsOf: launched.file))
+        guard case .valid(let record) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
+            Issue.record("トークンが有効でない"); return
+        }
+        #expect(record.lockFingerprint == ViewerTokenStore.lockFingerprint(for: "H1"))
+    }
+
+    @Test func lockChangedBehindTheWindowOpensNothingAndIssuesNothing() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let h = handoff(env)
+        let (state, row, _) = try makeLocalState(env, handoff: h)
+        try setLock(state, "H2")          // 書庫側は H2
+        state.markUnlocked(hash: "H1")    // このウィンドウが検証したのは H1
+
+        let failure = await h.openLocal(
+            book: row, libraryUUID: try #require(state.librarySettings?.ensureLibraryUUID()),
+            lockCredential: { "H2" }, verifiedLockHash: { "H1" }, startPage: 0,
+            direction: .rightToLeft, settings: env.settings)
+        #expect(failure == .libraryLocked)
+
+        await state.openInExternalViewerSyncing([row])
+        #expect(launches.entries.isEmpty, "施錠庫は生のファイルにも逃がさない")
+        #expect(env.tokens.allRecords().isEmpty)
+        #expect(referenceFiles(env).isEmpty)
+        #expect(state.watchNotice.notice?.kind == .warning)
+    }
+
+    @Test func missingViewerSkipsTheHandoffWithoutIssuingAToken() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        env.settings.externalViewerAppPath = env.base.appendingPathComponent("Nope.app").path
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (state, row, _) = try makeLocalState(env, handoff: handoff(env))
+
+        await state.openInExternalViewerSyncing([row])
+
+        #expect(env.tokens.allRecords().isEmpty)
+        #expect(referenceFiles(env).isEmpty)
+        #expect(launches.entries.isEmpty)
+        #expect(state.watchNotice.notice == nil, "同期失敗のお知らせは出さない")
+        #expect(state.error != nil, "従来の開き方がビューア未設定を報告する")
     }
 }

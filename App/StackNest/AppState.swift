@@ -1413,6 +1413,8 @@ final class AppState {
             path: book.path ?? "",
             useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
             syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer)
+            // ビューアが未設定・実在しないなら、トークンを出さずに従来の開き方（その失敗を報告する）へ。
+            && HelperLauncher.hasUsableReferenceViewer(bookPath: book.path ?? "", settings: viewerSettings)
     }
 
     /// G60: 画像の本は参照ファイルで、それ以外はファイルで、順に外部ビューアへ渡す。
@@ -1421,6 +1423,13 @@ final class AppState {
         for book in books {
             if opensByReference(book) {
                 if let failure = await handOffToExternalViewer(book) {
+                    if failure == .libraryLocked {
+                        // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
+                        // 解錠シートの出る状態にして、解錠後にもう一度開いてもらう。
+                        librarySettings?.reloadLockSettings()
+                        watchNotice.present(Notice(kind: .warning, text: failure.reason))
+                        break
+                    }
                     watchNotice.present(Notice(
                         kind: .warning,
                         text: String(localized: "読書位置を同期できなかったため、ファイルをそのまま外部ビューアで開きました（\(failure.reason)）")))
@@ -1442,12 +1451,14 @@ final class AppState {
         guard let settings = librarySettings else { return .tokenUnavailable }
         let startPage = (try? database?.loadViewerState(bookID: book.id))?.lastPage ?? 0
         // ロックの世代は、127.0.0.1 の口が照合に使うのと同じ DB の値（`ServedLibrary.currentLockCredential()`）
-        // から読む。メモリ上の `LibrarySettings.lockPasswordHash` と食い違うと、施錠庫の本が毎回 403 になる。
-        let lockCredential: String? = try? database?.getLibrarySetting(key: "lock_password_hash")
+        // から、発行の直前に読む。メモリ上の `LibrarySettings.lockPasswordHash` と食い違うと、施錠庫の本が毎回 403 になる。
+        let database = self.database
+        let lockCredential: () -> String? = { (try? database?.getLibrarySetting(key: "lock_password_hash")) ?? nil }
         return await viewerHandoff.openLocal(
             book: book,
             libraryUUID: settings.ensureLibraryUUID(),
             lockCredential: lockCredential,
+            verifiedLockHash: { [weak self] in self?.verifiedHash },
             startPage: startPage,
             direction: book.pageDirection ?? viewerSettings.pageDirection,
             settings: viewerSettings)

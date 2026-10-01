@@ -37,6 +37,8 @@ struct ExternalViewerHandoff {
         case tokenUnavailable
         case referenceNotWritten
         case launchFailed(String)
+        /// このウィンドウが解錠していない（または解錠後に変えられた）ロックの書庫。何も開かない。
+        case libraryLocked
 
         /// 画面に出す理由（「…ため、…で開きました（理由）」の括弧の中）。
         var reason: String {
@@ -51,13 +53,16 @@ struct ExternalViewerHandoff {
                 return String(localized: "参照ファイルを書き出せませんでした")
             case .launchFailed(let message):
                 return message
+            case .libraryLocked:
+                return String(localized: "ライブラリのパスワードが変更されました。解錠し直してください。")
             }
         }
     }
 
     /// ローカルの書庫の本。127.0.0.1 の口で使えるトークンを手元で出す（HTTP を通さない・spec §5.2）。
     /// グラントに結び付けない（`issuedByGrantID` は nil）。本人の Mac の中だけの口なので。
-    func openLocal(book: BookRow, libraryUUID: String, lockCredential: String?, startPage: Int,
+    func openLocal(book: BookRow, libraryUUID: String, lockCredential: () -> String?, verifiedLockHash: () -> String?,
+                   startPage: Int,
                    direction: PageDirection, settings: ViewerSettings) async -> Failure? {
         guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
         guard let path = book.path, !path.isEmpty else { return .pageCountUnavailable }
@@ -68,8 +73,12 @@ struct ExternalViewerHandoff {
             return .pageCountUnavailable
         }
         guard pageCount > 0 else { return .pageCountUnavailable }
+        // G25d: ロックの値は発行の直前に読み、「このウィンドウが検証したハッシュ」と一致するときだけ結び付ける
+        // （ページ数の待ちの間に外部から施錠・変更されうる）。有って違うなら発行しない。
+        let lock = lockCredential()
+        if let lock, lock != verifiedLockHash() { return .libraryLocked }
         let issued = tokens.issue(libraryUUID: libraryUUID, bookID: book.id, issuer: .localEndpoint,
-                                  lockCredential: lockCredential, now: now())
+                                  lockCredential: lock, now: now())
         // ポートは参照ファイルを組む直前に読む（口がポート競合で取り直していても、その時点の値を使う。
         // `isLocalEndpointRunning` はバインド前から true なので、取り直しの最中に開くと古いポートを指しうる。
         // その場合は開き直せば直る＝許容）。
