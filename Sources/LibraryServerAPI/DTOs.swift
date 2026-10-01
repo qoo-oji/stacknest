@@ -332,6 +332,12 @@ public struct ViewerTokenReply: Codable, Sendable, Equatable {
     }
 }
 
+/// 平文のトークンを print・dump・失敗メッセージ・ログへ出さない（`IssuedViewerToken`・`BookReference` と同じ）。
+extension ViewerTokenReply: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String { "ViewerTokenReply(expiresAt: \(expiresAt), token: <redacted>)" }
+    public var debugDescription: String { description }
+}
+
 /// 棚（ユーザー定義棚 / スマート棚）の一覧 DTO（spec §3.3 /shelves）。
 public struct ShelfDTO: Codable, Sendable {
     public let id: Int64
