@@ -2017,6 +2017,8 @@ public struct LibraryServerCore: Sendable {
         // 本専用トークン自身はこのルートに来られない（BearerAuthMiddleware が 403 にする）。
         api.post("libraries/:lib/books/:id/viewer-token") { [viewerTokens = config.viewerTokens, issuer = config.viewerTokenIssuer] request, context in
             guard let viewerTokens else { throw HTTPError(.notImplemented) }
+            // 多層防御: 本専用トークンの接続は、許可リストに加えてここでも断る（別のトークンを増やせない）。
+            guard context.viewerBook == nil else { throw HTTPError(.forbidden) }
             let (lib, row) = try await resolver.resolveBook(request, context)
             // 施錠庫は resolveBook が**検証した**書庫トークンの世代（解錠に使ったパスワード）に結び付ける。
             // currentLockCredential() を読み直すと、検証とこの行の間のパスワード変更をすり抜ける（G25d と同じ誤り）。
@@ -2036,7 +2038,10 @@ public struct LibraryServerCore: Sendable {
             let issued = viewerTokens.issue(
                 libraryUUID: lib.uuid, bookID: row.id, issuer: issuer,
                 lockCredential: lockCredential, issuedByGrantID: issuedByGrantID)
-            return ViewerTokenReply(token: issued.token, expiresAt: issued.record.expiresAt)
+            // 発行したトークンは共有キャッシュ・ブラウザに残さない。
+            return EditedResponse(
+                headers: [.cacheControl: "no-store"],
+                response: ViewerTokenReply(token: issued.token, expiresAt: issued.record.expiresAt))
         }
         // G48-2: EPUB の読書位置。画像本の /progress と同じく後勝ちで保存し既読化する。
         api.post("libraries/:lib/books/:id/epub-progress") { [config] request, context in

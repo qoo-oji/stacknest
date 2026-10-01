@@ -45,6 +45,7 @@ struct ViewerTokenEndpointTests {
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/viewer-token", method: .post,
                                      headers: [.authorization: "Bearer READ"]) { r in
                 #expect(r.status == .ok)
+                #expect(r.headers[.cacheControl] == "no-store")
                 let reply = try decodeReply(r.body)
                 token = reply.token
                 let expected = before.addingTimeInterval(ViewerTokenStore.lifetime)
