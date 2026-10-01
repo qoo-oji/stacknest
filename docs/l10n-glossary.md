@@ -158,6 +158,11 @@ App の文字列カタログは **1 つの日本語キーに 1 つの英訳**し
 | パスワードロックを設定する（トグル） | Lock This Library with a Password | |
 | 表示件数 / スクロール（Web） | Items Per Page / Scroll | 選択肢は {n} per page／Infinite Scroll |
 | 1ページ [n] 件（App のリモート一覧） | Show [n] per page | 2 つの素のキー「1ページ」「件」の訳 |
+| StackNest と読書位置を同期する（対応アプリのみ） | Sync Reading Position with StackNest (Supported Apps Only) | G60。設定 ▸ 表示 ▸ 外部ビューアのトグル。文中で短く呼ぶときは Sync Reading Position with StackNest |
+| 本専用のトークン | per-book token | G60。外部ビューアに渡す、1 冊だけを読めるトークン。文中は小文字 |
+| 参照ファイル | reference file | G60。`.stacknestbook`。文中は小文字 |
+| ローカルコントロールの受け口（127.0.0.1） | Local Control endpoint (127.0.0.1) | G60。エラーの理由の中では小文字始まり（the Local Control endpoint …） |
+| この Mac の中だけの受け口 | 127.0.0.1 (this Mac only) | G60。設定とヘルプの説明文 |
 
 ### 2.5 破損チェック・メンテナンス・バックアップ
 

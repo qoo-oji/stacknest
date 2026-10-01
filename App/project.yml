@@ -97,6 +97,13 @@ targets:
                 - cbr
               public.mime-type:
                 - "application/vnd.comicbook-rar"
+          - UTTypeIdentifier: app.shelfsmith.stacknest.book-reference
+            UTTypeDescription: "StackNest Book Reference"
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - stacknestbook
     dependencies:
       - package: StackNest
         product: StackroomFormat

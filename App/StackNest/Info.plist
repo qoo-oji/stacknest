@@ -132,6 +132,23 @@
 				</array>
 			</dict>
 		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>StackNest Book Reference</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.shelfsmith.stacknest.book-reference</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>stacknestbook</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 </dict>
 </plist>
