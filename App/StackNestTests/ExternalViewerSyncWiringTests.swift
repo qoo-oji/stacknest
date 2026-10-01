@@ -8,6 +8,42 @@ import RemoteClient
 import StackroomFormat
 @testable import StackNest
 
+/// viewer-token にだけ答える URLProtocol（G60 の App テスト用）。それ以外の要求は 200 `{}`。
+/// 記録は URLSession のスレッドと main の両方から触るので `NSLock` で包む。
+final class G60ViewerTokenStub: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var storedIssueStatus = 200
+    nonisolated(unsafe) private static var storedIssueBody = Data()
+    nonisolated(unsafe) private static var storedPaths: [String] = []
+
+    static var issueStatus: Int {
+        get { lock.withLock { storedIssueStatus } }
+        set { lock.withLock { storedIssueStatus = newValue } }
+    }
+    static var issueBody: Data {
+        get { lock.withLock { storedIssueBody } }
+        set { lock.withLock { storedIssueBody = newValue } }
+    }
+    static var paths: [String] {
+        get { lock.withLock { storedPaths } }
+        set { lock.withLock { storedPaths = newValue } }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        Self.lock.withLock { Self.storedPaths.append("\(request.httpMethod ?? "") \(path)") }
+        let isIssue = path.hasSuffix("/viewer-token")
+        let resp = HTTPURLResponse(url: request.url!, statusCode: isIssue ? Self.issueStatus : 200,
+                                   httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: isIssue ? Self.issueBody : Data("{}".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 /// G60: 「StackNest と読書位置を同期する」の ON/OFF で開き方が変わること・失敗したら従来の開き方に戻ること。
 /// `HelperLauncher.launch` を差し替えるので、ローカルもリモートも**この 1 つの Suite** に置いて直列で走らせる
 /// （Suite を分けると並行に走り、差し替えが競合する）。
@@ -230,5 +266,163 @@ struct ExternalViewerSyncWiringTests {
         #expect(launches.entries.isEmpty)
         #expect(state.watchNotice.notice == nil, "同期失敗のお知らせは出さない")
         #expect(state.error != nil, "従来の開き方がビューア未設定を報告する")
+    }
+
+
+    // MARK: - リモート
+
+    private func makeRemoteState(_ env: Env, issueStatus: Int) throws -> RemoteLibraryState {
+        G60ViewerTokenStub.paths = []
+        G60ViewerTokenStub.issueStatus = issueStatus
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        G60ViewerTokenStub.issueBody = try encoder.encode(
+            ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000)))
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [G60ViewerTokenStub.self]
+        let client = RemoteLibraryClient(baseURL: URL(string: "http://127.0.0.1:1/")!, deviceToken: "device",
+                                         session: URLSession(configuration: cfg))
+        let s = RemoteLibraryState(
+            client: client, serverID: UUID(), libraryUUID: "LIB-\(UUID().uuidString)",
+            libraryName: "テスト", locked: false, libraryToken: nil,
+            coverCache: RemoteCoverCache(cache: nil, serverID: nil, libraryUUID: nil))
+        s.viewerSettings = env.settings
+        s.viewerHandoff = handoff(env)
+        return s
+    }
+
+    private func remoteBook(id: Int, filename: String, lastPage: Int) -> BookListItemDTO {
+        BookListItemDTO(
+            id: id, title: "本の題名", author: nil, series: nil, volume: nil,
+            rating: 0, unseen: true, bookType: 0, pages: 20, lastPage: lastPage,
+            lastReadAt: nil, dateAdded: Date(), hasCover: false, coverVersion: nil,
+            filename: filename)
+    }
+
+    @Test func remoteSyncOnHandsAReferenceFile() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 42, value: ManifestDTO(pageCount: 20, direction: "ltr", format: "archive", etag: "e"))
+
+        s.openViewer(book: remoteBook(id: 42, filename: "a.zip", lastPage: 5))
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(ref.book == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/42")
+        #expect(ref.token == "VIEWER-TOKEN")
+        #expect(ref.pageCount == 20)
+        #expect(ref.direction == "ltr")
+        #expect(ref.startPage == 5)
+        #expect(G60ViewerTokenStub.paths.contains("POST /api/v1/libraries/\(s.libraryUUID)/books/42/viewer-token"))
+        #expect(s.errorText == nil)
+        // 開いた後の既読の書き込み（投げっぱなしの POST /progress）が届くまで待つ。
+        // 待たずに抜けると、次のテストが記録を空にした後にこの要求が届いて記録を汚す。
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/42/progress") } }
+    }
+
+    @Test func remoteIssueFailureFallsBackToTheBuiltInViewerWithABanner() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 500)
+        s.testPutManifestHandoff(bookID: 43, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
+        // 内蔵ビューアの経路は「開き中」で早く戻らせる（テストホストで本物の窓を作らない）。
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 43)
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+
+        s.openViewer(book: remoteBook(id: 43, filename: "a.zip", lastPage: 0))
+        try await waitUntil { s.errorText != nil }
+
+        #expect(launches.entries.isEmpty)
+        #expect(s.errorText?.contains("内蔵ビューアで開きました") == true)
+        #expect(s.errorText?.contains("トークンを発行できませんでした") == true)
+    }
+
+    /// 旧サーバ（viewer-token のルートが無い＝404）は G60 前と同じ挙動なので、知らせずに内蔵で開く。
+    @Test func remoteOldServerFallsBackSilently() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 404)
+        s.testPutManifestHandoff(bookID: 45, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 45)
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+
+        s.openViewer(book: remoteBook(id: 45, filename: "a.zip", lastPage: 0))
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/45/viewer-token") } }
+        try await Task.sleep(for: .milliseconds(300))   // 404 を受けて内蔵へ倒すまでの余裕
+
+        #expect(launches.entries.isEmpty)
+        #expect(s.errorText == nil)
+    }
+
+    @Test func remoteSyncOffStaysBuiltIn() async throws {
+        let env = try makeEnv(sync: false); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 200)
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 44)
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+
+        s.openViewer(book: remoteBook(id: 44, filename: "a.zip", lastPage: 0))   // 同期 OFF の判定は同期的
+
+        #expect(launches.entries.isEmpty)
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+    }
+
+    /// 旧サーバが 501 を返しても、404 と同じく知らせずに内蔵で開く。
+    @Test func remoteNotImplementedFallsBackSilently() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 501)
+        s.testPutManifestHandoff(bookID: 46, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 46)
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+
+        s.openViewer(book: remoteBook(id: 46, filename: "a.zip", lastPage: 0))
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/46/viewer-token") } }
+        try await Task.sleep(for: .milliseconds(300))
+
+        #expect(launches.entries.isEmpty)
+        #expect(s.errorText == nil)
+    }
+
+    /// 使える外部ビューアが無いときは、トークンを要求せずに黙って内蔵で開く。
+    @Test func remoteMissingViewerSkipsTheTokenRequest() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        env.settings.externalViewerAppPath = env.base.appendingPathComponent("Nope.app").path
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let s = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 47, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 47)
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+
+        s.openViewer(book: remoteBook(id: 47, filename: "a.zip", lastPage: 0))
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(launches.entries.isEmpty)
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+        #expect(s.errorText == nil)
     }
 }

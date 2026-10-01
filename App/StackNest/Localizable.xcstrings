@@ -700,6 +700,16 @@
         }
       }
     },
+    "読書位置を同期できなかったため、内蔵ビューアで開きました（%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't sync the reading position, so the book opened in the built-in viewer (%@)."
+          }
+        }
+      }
+    },
     "電子書籍リーダーが使えません" : {
       "localizations" : {
         "en" : {

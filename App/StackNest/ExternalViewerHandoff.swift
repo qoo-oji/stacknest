@@ -3,6 +3,7 @@ import Foundation
 import AppCore
 import LibraryStore
 import LibraryServerAPI
+import RemoteClient
 
 /// G60: 対応した外部ビューアへ、本を読むための口（参照ファイル `.stacknestbook`）を渡す（spec §5）。
 ///
@@ -35,6 +36,9 @@ struct ExternalViewerHandoff {
         case localEndpointNotRunning
         case pageCountUnavailable
         case tokenUnavailable
+        /// 旧サーバ（`POST …/viewer-token` のルートが無い＝404、または未実装の 501）。G60 より前と同じ挙動なので、
+        /// 呼び出し側は理由を出さずに内蔵ビューアで開く。
+        case unsupportedByServer
         case referenceNotWritten
         case launchFailed(String)
         /// このウィンドウが解錠していない（または解錠後に変えられた）ロックの書庫。何も開かない。
@@ -47,7 +51,7 @@ struct ExternalViewerHandoff {
                 return String(localized: "ローカルコントロールの受け口（127.0.0.1）が動いていません")
             case .pageCountUnavailable:
                 return String(localized: "本のページ数を読めませんでした")
-            case .tokenUnavailable:
+            case .tokenUnavailable, .unsupportedByServer:
                 return String(localized: "トークンを発行できませんでした")
             case .referenceNotWritten:
                 return String(localized: "参照ファイルを書き出せませんでした")
@@ -93,6 +97,33 @@ struct ExternalViewerHandoff {
             startPage: BookReference.clampedStartPage(startPage, pageCount: pageCount))
         return hand(reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id,
                     bookPath: path, settings: settings)
+    }
+
+    /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
+    /// 基点は、このクライアントがサーバへ繋いでいる URL（ビューアは同じ Mac で動くので同じ道で届く）。
+    func openRemote(book: BookListItemDTO, manifest: ManifestDTO, serverID: UUID, serverBase: URL,
+                    libraryUUID: String, settings: ViewerSettings,
+                    issue: () async throws -> ViewerTokenReply) async -> Failure? {
+        let reply: ViewerTokenReply
+        do {
+            reply = try await issue()
+        } catch RemoteClientError.notFound {
+            return .unsupportedByServer
+        } catch RemoteClientError.server(501) {
+            return .unsupportedByServer
+        } catch {
+            return .tokenUnavailable
+        }
+        let reference = BookReference(
+            title: book.title,
+            book: BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id),
+            token: reply.token,
+            expiresAt: reply.expiresAt,
+            pageCount: manifest.pageCount,
+            direction: manifest.direction,
+            startPage: BookReference.clampedStartPage(book.lastPage ?? 0, pageCount: manifest.pageCount))
+        return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
+                    bookPath: book.filename ?? "", settings: settings)
     }
 
     private func hand(_ reference: BookReference, origin: BookReferenceStore.Origin, libraryUUID: String,

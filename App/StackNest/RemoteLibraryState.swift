@@ -174,6 +174,11 @@ final class RemoteLibraryState {
 
     let coverCache: RemoteCoverCache
 
+    /// G60: 外部ビューアの設定（テストは別の suite の設定を差し込む。本番は `.shared`）。
+    @ObservationIgnored var viewerSettings: ViewerSettings = .shared
+    /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
+    @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
+
     /// - Parameter coverCache: 既定は実利用のディスクキャッシュ（`RemotePageCache.shared`）を使う。
     ///   **テストは必ず注入すること** — 既定のままだと
     ///   `~/Library/Application Support/StackNest/RemoteCache/` に実データを作ってしまう
@@ -1843,6 +1848,21 @@ final class RemoteLibraryState {
                 return
             }
         }
+        // G60: 「StackNest と読書位置を同期する」が ON で、画像を外部ビューアで開く設定なら、
+        // ページで読む本は参照ファイルで外部ビューアへ渡す（判定の続きは manifest を見てから）。
+        if ExternalViewerSyncRouting.remoteMayOpenByReference(
+            filename: book.filename,
+            useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
+            syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer) {
+            Task { await self.openByReference(book: book, resumeDirect: resumeDirect, handedManifest: handedManifest) }
+            return
+        }
+        openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: handedManifest)
+    }
+
+    /// リモート本を内蔵ビューアで開く本体（G60 で `openViewer` から分けた。中身は従来のまま）。
+    /// 失敗バナーの消去と動画・テキストの弾きは `openViewer` の入口で済んでいる。
+    private func openInBuiltInViewer(book: BookListItemDTO, resumeDirect: Bool, handedManifest: ManifestDTO?) {
         // G15 V1: dedup 登録。既存窓があれば前面化して抜け、開き中なら無視して抜ける。
         let identity = ViewerIdentity.remote(serverID: serverID.uuidString, libraryUUID: libraryUUID, bookID: book.id)
         guard ViewerWindowRegistry.shared.beginOpen(identity) else { return }
@@ -2126,6 +2146,53 @@ final class RemoteLibraryState {
             }
             controller.present()
         }
+    }
+
+    /// G60: 同期 ON のリモートの本。manifest を見てページで読む本なら、サーバに本専用トークンを出して
+    /// もらい、参照ファイルで外部ビューアへ渡す。ページで読む本でなければ／使える外部ビューアが無ければ／
+    /// 失敗したら内蔵ビューア。
+    ///
+    /// 参照ファイルの経路は `ViewerWindowRegistry` を通さない（外部ビューアの窓は StackNest が持たない）。
+    /// 素早く 2 回開くとトークンを 2 枚出してビューアを 2 回起動するが、古い方は期限まで有効なだけで
+    /// 害は無いので許容する（計画レビュー M-4）。
+    private func openByReference(book: BookListItemDTO, resumeDirect: Bool, handedManifest: ManifestDTO?) async {
+        guard let manifest = await manifestForOpening(bookID: book.id, handed: handedManifest) else {
+            // manifest が取れない＝内蔵でも開けない見込み。理由の表示は内蔵の経路に任せる。
+            openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: nil)
+            return
+        }
+        guard ExternalViewerSyncRouting.remoteOpensByReference(
+            filename: book.filename, manifest: manifest,
+            useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
+            syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer),
+            // 使える外部ビューアが無いなら、トークンを出さずに黙って内蔵で開く。
+            HelperLauncher.hasUsableReferenceViewer(bookPath: book.filename ?? "", settings: viewerSettings) else {
+            openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
+            return
+        }
+        let client = self.client
+        let libraryUUID = self.libraryUUID
+        let libraryToken = self.libraryToken
+        let failure = await viewerHandoff.openRemote(
+            book: book, manifest: manifest, serverID: serverID, serverBase: client.baseURL,
+            libraryUUID: libraryUUID, settings: viewerSettings,
+            issue: { try await client.viewerToken(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken) })
+        if let failure {
+            openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
+            // 旧サーバ（ルートが無い）は G60 前と同じ挙動なので知らせない。それ以外は理由を出す。
+            if failure != .unsupportedByServer {
+                errorText = String(localized: "読書位置を同期できなかったため、内蔵ビューアで開きました（\(failure.reason)）")
+            }
+            return
+        }
+        // 開いた時点で既読にする（内蔵と同じ）。読み進めた位置は外部ビューアが書き戻す。
+        books = books.markingRead(bookID: book.id, at: Date())
+        viewerHandoff.recordLastRead(.remote(
+            serverID: serverID, serverURL: client.baseURL.absoluteString,
+            libraryUUID: libraryUUID, libraryName: libraryName,
+            bookID: book.id, title: book.title, locked: locked))
+        let page = BookReference.clampedStartPage(book.lastPage ?? 0, pageCount: manifest.pageCount)
+        Task { try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: page, libraryToken: libraryToken) }
     }
 
     /// G48-3: リモート書庫のテキスト EPUB。本体を /file から取ってキャッシュし、ローカルと同じ Washi の窓で開く。
