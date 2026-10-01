@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MIT
+import Testing
+import Foundation
+import AppCore
+@testable import StackNest
+
+/// G60 最終レビュー I-1: `reload()` を立て続けに呼んでも、自分の旧サーバとのポート競合で
+/// ポートを取り直さない（取り直すと、書き出し済みの参照ファイルが古いポートを指したまま使えなくなる）。
+///
+/// 本物のサーバも実ポートも UserDefaults.standard も使わない。`LocalControlController` の継ぎ目に
+/// 偽のサーバ（ポートの占有を模す）と偽のポートの置き場を差し込む。
+@MainActor
+@Suite("G60: ローカル制御の再起動の直列化", .serialized)
+struct LocalControlControllerReloadTests {
+    /// 偽のポートの置き場と、偽のサーバが占有しているポート。
+    @MainActor final class FakePorts {
+        var stored = 50_001
+        var regenerated = 0
+        var bound: Set<Int> = []
+    }
+
+    /// 偽のサーバ。ポートが使われていれば EADDRINUSE を投げる。取り消されるまで占有し、
+    /// 取り消された後も少し遅れて（本物の graceful shutdown のように）ポートを放す。
+    func runner(_ ports: FakePorts) -> @MainActor (Int, LocalEndpointMode) async throws -> Void {
+        { port, _ in
+            if ports.bound.contains(port) { throw POSIXError(.EADDRINUSE) }
+            ports.bound.insert(port)
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
+            // 取り消しの効かない後始末の時間。
+            await Task.detached { try? await Task.sleep(for: .milliseconds(50)) }.value
+            ports.bound.remove(port)
+        }
+    }
+
+    func makeController(_ ports: FakePorts, mode: LocalEndpointMode? = .full) -> LocalControlController {
+        let c = LocalControlController()
+        c.endpointModeProvider = { mode }
+        c.portProvider = { ports.stored }
+        c.portRegenerator = {
+            ports.regenerated += 1
+            ports.stored += 1
+            return ports.stored
+        }
+        c.serverRunnerOverride = runner(ports)
+        return c
+    }
+
+    func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !condition() {
+            if ContinuousClock.now >= deadline { Issue.record("待ちきれなかった"); return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// 走っているサーバに `reload()` を 2 回続けて送る。ポートは変わらず、最後に 1 つだけ走っている。
+    @Test func twoRapidReloadsKeepThePortAndEndWithOneServer() async throws {
+        let ports = FakePorts()
+        let c = makeController(ports)
+        c.startIfEnabled()
+        try await waitUntil { ports.bound == [50_001] }
+
+        c.reload()
+        c.reload()
+        // 再起動が落ち着くまで待つ（偽サーバの後始末は 50ms）。
+        try await Task.sleep(for: .milliseconds(400))
+        try await waitUntil { c.isRunning && ports.bound.count == 1 }
+
+        #expect(ports.regenerated == 0, "自分の旧サーバとの競合でポートを取り直さない")
+        #expect(ports.stored == 50_001)
+        #expect(ports.bound == [50_001])
+        #expect(c.isRunning)
+
+        c.stop()
+        try await waitUntil { ports.bound.isEmpty }
+    }
+
+    /// 本当に別のプロセスがポートを使っているときは、従来どおり取り直して起動する。
+    @Test func aPortHeldByAnotherProcessIsStillRegenerated() async throws {
+        let ports = FakePorts()
+        ports.bound = [50_001]   // 別のプロセスが占有
+        let c = makeController(ports)
+
+        c.startIfEnabled()
+        try await waitUntil { ports.bound.contains(50_002) }
+
+        #expect(ports.regenerated == 1)
+        #expect(ports.stored == 50_002)
+        #expect(c.isRunning)
+
+        c.stop()
+        try await waitUntil { !ports.bound.contains(50_002) }
+    }
+
+    /// 終了時の `stop()` は、待ちの途中の再起動も取り消す（終了した後にサーバを起こさない）。
+    @Test func stopCancelsAPendingRestart() async throws {
+        let ports = FakePorts()
+        let c = makeController(ports)
+        c.startIfEnabled()
+        try await waitUntil { ports.bound == [50_001] }
+
+        c.reload()
+        c.stop()
+        try await Task.sleep(for: .milliseconds(400))
+
+        #expect(ports.bound.isEmpty, "stop() の後にサーバが起動していない")
+        #expect(!c.isRunning)
+    }
+}

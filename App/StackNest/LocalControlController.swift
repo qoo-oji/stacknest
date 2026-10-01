@@ -43,14 +43,66 @@ final class LocalControlController {
     /// ことで、実サーバを起動しないテストからも「fanout が本当に注入されているか」を検証できる。
     var maintenanceEventFanout: MaintenanceEventFanout { SharedMaintenanceRegistry.fanout }
 
-    func startIfEnabled() {
+    // MARK: - テスト用の継ぎ目（本番は既定のまま）
+
+    /// 口の動き方（nil なら起動しない）。テストは UserDefaults.standard を読まずに差し替える。
+    @ObservationIgnored var endpointModeProvider: @MainActor () -> LocalEndpointMode? = {
         // G60: 「ローカルコントロールを許可」が OFF でも「StackNest と読書位置を同期する」が ON なら、
         // 本専用トークンだけを受け付ける形で起動する（CLI／MCP のトークンと /local のルートは持たない）。
-        guard let mode = LocalEndpointMode.decide(
+        LocalEndpointMode.decide(
             localAutomationEnabled: ServerPreferences.localAutomationEnabled(),
-            viewerSyncEnabled: ViewerSettings.shared.syncsReadingPositionWithExternalViewer) else { return }
+            viewerSyncEnabled: ViewerSettings.shared.syncsReadingPositionWithExternalViewer)
+    }
+    /// 保存されたポートを読む。テストは UserDefaults.standard に触れずに差し替える。
+    @ObservationIgnored var portProvider: @MainActor () -> Int = { ServerPreferences.localControlPort() }
+    /// ポート競合のときにポートを取り直して保存する。テストは呼ばれた回数を数える。
+    @ObservationIgnored var portRegenerator: @MainActor () -> Int = { ServerPreferences.regenerateLocalControlPort() }
+    /// 非 nil なら本物のサーバを組まずにこれを走らせる（実ポートを使わないテスト用）。
+    /// 本物と同じく、取り消されたら後始末をして戻り、ポートが使われていれば EADDRINUSE を投げること。
+    @ObservationIgnored var serverRunnerOverride: (@MainActor (_ port: Int, _ mode: LocalEndpointMode) async throws -> Void)?
+
+    func startIfEnabled() {
+        guard let mode = endpointModeProvider() else { return }
         guard !isRunning else { return }
-        let usedPort = ServerPreferences.localControlPort()
+        let usedPort = portProvider()
+        let run: () async throws -> Void
+        if let runner = serverRunnerOverride {
+            run = { try await runner(usedPort, mode) }
+        } else {
+            run = Self.makeServer(port: usedPort, mode: mode, maintenanceRegistry: maintenanceRegistry,
+                                  maintenanceEventFanout: maintenanceEventFanout)
+        }
+        isRunning = true
+        serverTask = Task {
+            do {
+                try await run()
+            } catch {
+                // 起動失敗（ポート競合等）。cancel 由来の正常停止は除外。
+                // ポート競合なら別ポートへ再採番して 1〜2 回まで自動リトライ（loopback ランダム高位ポート）。
+                if !Task.isCancelled,
+                   case .portInUse = ServerStartError.classify(error, port: usedPort),
+                   Self.maxPortRetries > 0 {
+                    await MainActor.run {
+                        // 判定の後に取り消された（reload()／stop() が割り込んだ）なら、取り直さない。
+                        // 後の起動はその呼び出し側が担う。
+                        guard !Task.isCancelled else { return }
+                        guard self.portRetries < Self.maxPortRetries else { self.isRunning = false; return }
+                        self.portRetries += 1
+                        _ = self.portRegenerator()
+                        self.isRunning = false
+                        self.startIfEnabled()   // 新ポートで再起動
+                    }
+                    return
+                }
+            }
+            await MainActor.run { self.isRunning = false }
+        }
+    }
+
+    /// 本物のローカル制御サーバを組み、走らせる処理を返す。
+    private static func makeServer(port usedPort: Int, mode: LocalEndpointMode,
+                                   maintenanceRegistry: MaintenanceJobRegistry,
+                                   maintenanceEventFanout: MaintenanceEventFanout) -> () async throws -> Void {
         let config = LibraryServerConfig(
             host: "127.0.0.1",
             port: usedPort,
@@ -142,49 +194,56 @@ final class LocalControlController {
                                      maintenanceRegistry: maintenanceRegistry,
                                      maintenanceEventFanout: maintenanceEventFanout)
         let app = core.buildApplication()
-        isRunning = true
-        serverTask = Task {
-            do {
-                try await app.runService()
-            } catch {
-                // 起動失敗（ポート競合等）。cancel 由来の正常停止は除外。
-                // ポート競合なら別ポートへ再採番して 1〜2 回まで自動リトライ（loopback ランダム高位ポート）。
-                if !Task.isCancelled,
-                   case .portInUse = ServerStartError.classify(error, port: usedPort),
-                   Self.maxPortRetries > 0 {
-                    await MainActor.run {
-                        guard self.portRetries < Self.maxPortRetries else { self.isRunning = false; return }
-                        self.portRetries += 1
-                        _ = ServerPreferences.regenerateLocalControlPort()
-                        self.isRunning = false
-                        self.startIfEnabled()   // 新ポートで再起動
-                    }
-                    return
-                }
-            }
-            await MainActor.run { self.isRunning = false }
-        }
+        return { try await app.runService() }
     }
 
     func stop() {
+        // 待ちの途中の再起動も取り消す（終了した後にサーバを起こさない）。
+        pendingRestart?.cancel()
+        pendingRestart = nil
         serverTask?.cancel()
         serverTask = nil
         isRunning = false
         portRetries = 0
     }
 
-    /// 設定変更（有効/無効・トークン再生成）後の再構成。
+    /// `reload()` の再起動の鎖の末尾。次の `reload()` はこれを待ってから動く。
+    private var pendingRestart: Task<Void, Never>?
+
+    /// 設定変更（有効/無効・トークン再生成・読書位置の同期）後の再構成。
     /// 旧 serverTask の graceful shutdown（runService の return = ポート解放）を待ってから
     /// 起動し直す。stop(); start() を即時に呼ぶと旧サーバがポート解放前に同ポートへ再 bind して
     /// IOError になる（ServerController.restart() と同じ対策・4.1b smoke A5）。
+    ///
+    /// G60 最終レビュー I-1: 立て続けに呼ばれても直列に動かす。以前は 2 回目の呼び出しが
+    /// 「旧サーバ無し」と見てすぐ起動し、まだポートを持っている 1 回目の旧サーバと競合して
+    /// ポートを取り直していた（書き出し済みの参照ファイルが古いポートを指したまま使えなくなる）。
+    /// 各呼び出しは前の再起動を待ち、その再起動が立てたサーバも止めて待ってから起動する。
     func reload() {
         let old = serverTask
+        let previous = pendingRestart
         serverTask?.cancel()
         serverTask = nil
         isRunning = false
         portRetries = 0
-        Task {   // @MainActor を継承
+        pendingRestart = Task {   // @MainActor を継承
+            // stop() でこの再起動が取り消されたら、待っている前の再起動も取り消す。
+            await withTaskCancellationHandler {
+                await previous?.value
+            } onCancel: {
+                previous?.cancel()
+            }
             _ = await old?.value
+            // 前の再起動（またはポート競合の取り直し）が立てたサーバも止め、ポートを放すまで待つ。
+            while let started = serverTask {
+                started.cancel()
+                serverTask = nil
+                isRunning = false
+                _ = await started.value
+            }
+            // stop() で取り消されたら起動しない。
+            guard !Task.isCancelled else { return }
+            portRetries = 0
             startIfEnabled()
         }
     }
