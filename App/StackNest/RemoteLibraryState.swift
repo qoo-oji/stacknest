@@ -178,10 +178,10 @@ final class RemoteLibraryState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
-    /// G60 テスト用: 内蔵ビューアで開く本体の代わりに呼ぶ（nil なら本物）。
-    /// 「内蔵へ倒した」ことを待つ陽性の合図に使い、本物の窓・`LastReadTracker.shared` に触れない。
     /// G60 テスト用: ダウンロード済みコピーの読書位置の問い合わせ（nil なら本物の `OfflineStore`）。
     @ObservationIgnored var offlineLastPageOverride: ((Int) -> Int?)?
+    /// G60 テスト用: 内蔵ビューアで開く本体の代わりに呼ぶ（nil なら本物）。
+    /// 「内蔵へ倒した」ことを待つ陽性の合図に使い、本物の窓・`LastReadTracker.shared` に触れない。
     @ObservationIgnored var builtInOpenOverride: ((BookListItemDTO, ManifestDTO?) -> Void)?
 
     /// - Parameter coverCache: 既定は実利用のディスクキャッシュ（`RemotePageCache.shared`）を使う。
