@@ -379,4 +379,29 @@ struct HelperLauncherTests {
         #expect(reason.contains("アーカイブ"))
         #expect(calls.entries.isEmpty)
     }
+
+    /// PDF は .text に分類されるが、参照ファイルはアーカイブの外部ビューアで開く（テキストの指定は使わない）。
+    @Test @MainActor
+    func openReferenceForPDFUsesTheArchiveViewer() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let archiveViewer = try makeFakeViewer("ArchiveViewer")
+        let textViewer = try makeFakeViewer("TextViewer")
+        defer {
+            try? FileManager.default.removeItem(at: archiveViewer)
+            try? FileManager.default.removeItem(at: textViewer)
+        }
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = archiveViewer.path
+        settings.categoryViewerPaths[.text] = textViewer.path
+
+        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
+                                             bookPath: "/lib/a.pdf", settings: settings) == nil)
+        #expect(calls.entries.first?.viewerURL.path == archiveViewer.path)
+    }
 }

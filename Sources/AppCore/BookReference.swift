@@ -5,7 +5,7 @@ import LibraryStore
 /// G60: 参照ファイル（`.stacknestbook`）の中身・版 1（spec §5.4）。
 /// 対応した外部ビューアは `book` の API からページを取り、読み進めたページを書き戻す。
 /// 形式の公開文書は `docs/book-reference-format.md`（日英）。項目を変えたらあちらも直す。
-public struct BookReference: Codable, Equatable, Sendable {
+public struct BookReference: Codable, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public static let formatName = "stacknest-book-reference"
     public static let currentVersion = 1
     public static let fileExtension = "stacknestbook"
@@ -38,6 +38,14 @@ public struct BookReference: Codable, Equatable, Sendable {
         self.direction = direction
         self.startPage = startPage
     }
+
+    /// トークンを出さない（ログやテスト失敗の表示に平文が漏れないように）。
+    public var description: String {
+        "BookReference(title: \(title), book: \(book), token: <redacted>, expiresAt: \(expiresAt), "
+            + "pageCount: \(pageCount), direction: \(direction), startPage: \(startPage))"
+    }
+
+    public var debugDescription: String { description }
 
     /// `http://host:port/` と書庫・本から、本の API の基点を作る。
     public static func bookURL(serverBase: URL, libraryUUID: String, bookID: Int) -> String {
@@ -109,15 +117,19 @@ public struct BookReferenceStore: Sendable {
     public func write(_ reference: BookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
         guard Self.isSafeComponent(libraryUUID) else { throw WriteError.invalidLibraryUUID }
         let ownerOnlyDirectory: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
-        // 根は先に 700 で作る（中間ディレクトリにも同じ属性が付く）。既にあれば 700 に直す。
+        // 根は先に 700 で作る。シンボリックリンクなら（リンク先には触れず）リンクごと消して作り直す。
+        try removeIfSymlink(root)
         try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: ownerOnlyDirectory)
         try fm.setAttributes(ownerOnlyDirectory, ofItemAtPath: root.path)
         let originDirectory = root.appendingPathComponent(origin.directoryName, isDirectory: true)
         let libraryDirectory = originDirectory.appendingPathComponent(libraryUUID, isDirectory: true)
         let room = libraryDirectory.appendingPathComponent(String(bookID), isDirectory: true)
-        try fm.createDirectory(at: room, withIntermediateDirectories: true, attributes: ownerOnlyDirectory)
-        // 中間ディレクトリに属性が付くかは Foundation の実装次第なので、各段を明示的に 700 にする。
+        // 各段を実ディレクトリの 700 にする（既存の緩い権限も締め直す。リンクはリンク先を触らず作り直す）。
         for directory in [originDirectory, libraryDirectory, room] {
+            try removeIfSymlink(directory)
+            if !fm.fileExists(atPath: directory.path) {
+                try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: ownerOnlyDirectory)
+            }
             try fm.setAttributes(ownerOnlyDirectory, ofItemAtPath: directory.path)
         }
         for name in (try? fm.contentsOfDirectory(atPath: room.path)) ?? [] {
@@ -126,12 +138,39 @@ public struct BookReferenceStore: Sendable {
         let name = OfflineExternalLink.safeFileName(title: reference.title, fallbackID: bookID,
                                                     fileExtension: BookReference.fileExtension)
         let dest = room.appendingPathComponent(name)
-        // 不変条件: ファイルを書く前に、根から本の部屋まですべて 700 にしてある。`.atomic` の一時ファイルは
-        // umask の権限（多くは 644）で一瞬できるが、700 のディレクトリの中なので他のユーザーは届かない。
-        // 書いた直後に 600 にする。
-        try reference.encoded().write(to: dest, options: .atomic)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dest.path)
+        // トークンの平文が入るので、最初から 600 で作った一時ファイルに書いて rename する（644 の瞬間を作らない）。
+        let temp = room.appendingPathComponent(".tmp-\(UUID().uuidString)")
+        do {
+            try Self.writeOwnerOnly(reference.encoded(), to: temp)
+            if rename(temp.path, dest.path) != 0 {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        } catch {
+            try? fm.removeItem(at: temp)
+            throw error
+        }
         return dest
+    }
+
+    /// リンクそのものを調べ（リンク先は辿らない）、シンボリックリンクならリンクだけを消す。
+    private func removeIfSymlink(_ url: URL) throws {
+        let type = (try? fm.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+        if type == .typeSymbolicLink { try fm.removeItem(at: url) }
+    }
+
+    /// 600 で新規作成（O_EXCL・O_NOFOLLOW）して書き切る。
+    private static func writeOwnerOnly(_ data: Data, to url: URL) throws {
+        let fd = open(url.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { close(fd) }
+        var offset = 0
+        try data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+            while offset < buf.count {
+                let n = Darwin.write(fd, buf.baseAddress! + offset, buf.count - offset)
+                if n < 0 { if errno == EINTR { continue }; throw CocoaError(.fileWriteUnknown) }
+                offset += n
+            }
+        }
     }
 
     /// 期限切れ・読めない参照ファイルを消し、空になったディレクトリを畳む。起動時に呼ぶ。消した件数を返す。
@@ -154,8 +193,9 @@ public struct BookReferenceStore: Sendable {
     private func removeEmptyDirectories(under directory: URL) {
         for name in (try? fm.contentsOfDirectory(atPath: directory.path)) ?? [] {
             let child = directory.appendingPathComponent(name, isDirectory: true)
-            var isDirectory: ObjCBool = false
-            guard fm.fileExists(atPath: child.path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
+            // リンクは辿らない（根の外の空ディレクトリを消さない）。
+            let type = (try? fm.attributesOfItem(atPath: child.path))?[.type] as? FileAttributeType
+            guard type == .typeDirectory else { continue }
             removeEmptyDirectories(under: child)
             if ((try? fm.contentsOfDirectory(atPath: child.path)) ?? []).isEmpty {
                 try? fm.removeItem(at: child)

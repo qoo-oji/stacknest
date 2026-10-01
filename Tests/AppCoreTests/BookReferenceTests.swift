@@ -139,4 +139,69 @@ struct BookReferenceTests {
         #expect(!fm.fileExists(atPath: store.root.appendingPathComponent("local/LIB-2").path))
         #expect(fm.fileExists(atPath: store.root.path))
     }
+
+    private func mode(_ url: URL) throws -> Int {
+        (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1
+    }
+
+    @Test func tightensPreExistingLooseDirectories() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let levels = [store.root,
+                      store.root.appendingPathComponent("local"),
+                      store.root.appendingPathComponent("local/LIB-1"),
+                      store.root.appendingPathComponent("local/LIB-1/42")]
+        try FileManager.default.createDirectory(at: levels[3], withIntermediateDirectories: true)
+        for l in levels { try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: l.path) }
+        let url = try store.write(sample(), origin: .local, libraryUUID: "LIB-1", bookID: 42)
+        for l in levels { #expect(try mode(l) == 0o700, "\(l.lastPathComponent)") }
+        #expect(try mode(url) == 0o600)
+    }
+
+    @Test func leavesNoTemporaryFileBehind() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let url = try store.write(sample(), origin: .local, libraryUUID: "LIB-1", bookID: 42)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path).count == 1)
+    }
+
+    @Test func symlinkedRoomIsReplacedWithoutTouchingTheTarget() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outside.path)
+        let victim = outside.appendingPathComponent("keep.txt")
+        try Data("x".utf8).write(to: victim)
+        let lib = store.root.appendingPathComponent("local/LIB-1", isDirectory: true)
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: lib.appendingPathComponent("42"), withDestinationURL: outside)
+
+        let url = try store.write(sample(), origin: .local, libraryUUID: "LIB-1", bookID: 42)
+        #expect(FileManager.default.fileExists(atPath: victim.path))
+        #expect(try mode(outside) == 0o755)
+        let type = try FileManager.default.attributesOfItem(atPath: url.deletingLastPathComponent().path)[.type] as? FileAttributeType
+        #expect(type == .typeDirectory)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path) == ["keep.txt"])
+    }
+
+    @Test func pruneDoesNotFollowSymlinksOutOfTheRoot() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let outsideEmpty = base.appendingPathComponent("outside/empty", isDirectory: true)
+        try FileManager.default.createDirectory(at: outsideEmpty, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: store.root.appendingPathComponent("link"),
+            withDestinationURL: base.appendingPathComponent("outside"))
+        store.pruneExpired()
+        #expect(FileManager.default.fileExists(atPath: outsideEmpty.path))
+    }
+
+    @Test func descriptionsNeverShowTheToken() {
+        #expect(!String(describing: sample()).contains("SECRET-TOKEN"))
+        #expect(!String(reflecting: sample()).contains("SECRET-TOKEN"))
+        #expect(!"\(sample())".contains("SECRET-TOKEN"))
+    }
 }

@@ -65,11 +65,15 @@ public enum HelperLauncher {
     /// 文言は `open(book:settings:)` と同じキーを使う（新しい訳は要らない）。
     @MainActor
     public static func openReference(_ referenceURL: URL, bookPath: String, settings: ViewerSettings) -> AppError? {
-        let isEPUB = (bookPath as NSString).pathExtension.lowercased() == "epub"
-        let category: BookCategory = isEPUB ? .archive : BookCategory.classify(path: bookPath)
-        let resolved = isEPUB
-            ? settings.resolvedViewerPath(for: .archive)
-            : settings.resolvedViewerPath(forPath: bookPath, category: category)
+        // 参照ファイルはページで読む本の外部ビューアに渡す。EPUB・PDF などアーカイブ・フォルダ・画像以外は
+        // アーカイブの指定で引く（テキスト用に選んだアプリは .stacknestbook を開けないことが多い）。
+        let classified = BookCategory.classify(path: bookPath)
+        let category: BookCategory
+        switch classified {
+        case .archive, .folder, .image: category = classified
+        default: category = .archive
+        }
+        let resolved = settings.resolvedViewerPath(for: category)
         let shownName = referenceURL.lastPathComponent
         guard let viewerPath = resolved else {
             return .launchFailed(
