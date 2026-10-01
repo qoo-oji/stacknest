@@ -15,6 +15,13 @@ final class G60ViewerTokenStub: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var storedIssueStatus = 200
     nonisolated(unsafe) private static var storedIssueBody = Data()
     nonisolated(unsafe) private static var storedPaths: [String] = []
+    nonisolated(unsafe) private static var storedIssueHeaders: [String: String] = [:]
+
+    /// viewer-token の応答に足すヘッダ（施錠ゲートの 403 は `X-Library-Locked: 1`）。
+    static var issueHeaders: [String: String] {
+        get { lock.withLock { storedIssueHeaders } }
+        set { lock.withLock { storedIssueHeaders = newValue } }
+    }
 
     static var issueStatus: Int {
         get { lock.withLock { storedIssueStatus } }
@@ -36,7 +43,8 @@ final class G60ViewerTokenStub: URLProtocol, @unchecked Sendable {
         Self.lock.withLock { Self.storedPaths.append("\(request.httpMethod ?? "") \(path)") }
         let isIssue = path.hasSuffix("/viewer-token")
         let resp = HTTPURLResponse(url: request.url!, statusCode: isIssue ? Self.issueStatus : 200,
-                                   httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                                   httpVersion: "HTTP/1.1",
+                                   headerFields: ["Content-Type": "application/json"].merging(isIssue ? Self.issueHeaders : [:]) { $1 })!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: isIssue ? Self.issueBody : Data("{}".utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -81,13 +89,16 @@ struct ExternalViewerSyncWiringTests {
                    settings: settings, tokens: ViewerTokenStore(defaults: suite))
     }
 
-    func handoff(_ env: Env, endpointRunning: Bool = true) -> ExternalViewerHandoff {
+    final class LastReads { var items: [LastReadBook] = [] }
+    final class Fallbacks { var entries: [(bookID: Int, manifest: ManifestDTO?)] = [] }
+
+    func handoff(_ env: Env, endpointRunning: Bool = true, lastReads: LastReads? = nil) -> ExternalViewerHandoff {
         ExternalViewerHandoff(
             tokens: env.tokens,
             references: BookReferenceStore(baseDirectory: env.base.appendingPathComponent("AppSupport")),
             localPort: { 4321 },
             isLocalEndpointRunning: { endpointRunning },
-            recordLastRead: { _ in },
+            recordLastRead: { lastReads?.items.append($0) },
             now: { Date() })
     }
 
@@ -271,9 +282,14 @@ struct ExternalViewerSyncWiringTests {
 
     // MARK: - リモート
 
-    private func makeRemoteState(_ env: Env, issueStatus: Int) throws -> RemoteLibraryState {
+    /// 内蔵ビューアで開く本体は差し替える（`builtInOpenOverride`）。本物の窓・`LastReadTracker.shared` に触れず、
+    /// 「内蔵へ倒した」を陽性の合図として待てる。ダウンロード済みコピーの問い合わせも差し替える（実 `~/Library` を読まない）。
+    private func makeRemoteState(_ env: Env, issueStatus: Int, libraryToken: String? = nil,
+                                 issueHeaders: [String: String] = [:], lastReads: LastReads? = nil,
+                                 offlineLastPage: Int? = nil) throws -> (RemoteLibraryState, Fallbacks) {
         G60ViewerTokenStub.paths = []
         G60ViewerTokenStub.issueStatus = issueStatus
+        G60ViewerTokenStub.issueHeaders = issueHeaders
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         G60ViewerTokenStub.issueBody = try encoder.encode(
@@ -284,11 +300,14 @@ struct ExternalViewerSyncWiringTests {
                                          session: URLSession(configuration: cfg))
         let s = RemoteLibraryState(
             client: client, serverID: UUID(), libraryUUID: "LIB-\(UUID().uuidString)",
-            libraryName: "テスト", locked: false, libraryToken: nil,
+            libraryName: "テスト", locked: false, libraryToken: libraryToken,
             coverCache: RemoteCoverCache(cache: nil, serverID: nil, libraryUUID: nil))
         s.viewerSettings = env.settings
-        s.viewerHandoff = handoff(env)
-        return s
+        s.viewerHandoff = handoff(env, lastReads: lastReads)
+        s.offlineLastPageOverride = { _ in offlineLastPage }
+        let fallbacks = Fallbacks()
+        s.builtInOpenOverride = { book, manifest in fallbacks.entries.append((book.id, manifest)) }
+        return (s, fallbacks)
     }
 
     private func remoteBook(id: Int, filename: String, lastPage: Int) -> BookListItemDTO {
@@ -299,16 +318,23 @@ struct ExternalViewerSyncWiringTests {
             filename: filename)
     }
 
+    private func archiveManifest() -> ManifestDTO {
+        ManifestDTO(pageCount: 20, direction: "ltr", format: "archive", etag: "e")
+    }
+
     @Test func remoteSyncOnHandsAReferenceFile() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
         let launches = Launches()
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
         HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 200)
-        s.testPutManifestHandoff(bookID: 42, value: ManifestDTO(pageCount: 20, direction: "ltr", format: "archive", etag: "e"))
+        let lastReads = LastReads()
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200, lastReads: lastReads)
+        s.testPutManifestHandoff(bookID: 42, value: archiveManifest())
+        let book = remoteBook(id: 42, filename: "a.zip", lastPage: 5)
+        s.books = [book]
 
-        s.openViewer(book: remoteBook(id: 42, filename: "a.zip", lastPage: 5))
+        s.openViewer(book: book)
         try await waitUntil { !launches.entries.isEmpty }
 
         let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
@@ -319,9 +345,33 @@ struct ExternalViewerSyncWiringTests {
         #expect(ref.startPage == 5)
         #expect(G60ViewerTokenStub.paths.contains("POST /api/v1/libraries/\(s.libraryUUID)/books/42/viewer-token"))
         #expect(s.errorText == nil)
+        #expect(fallbacks.entries.isEmpty)
+        // 内蔵と同じに、開いた時点で既読にし、最後に開いた本として記録する。
+        #expect(s.books.first?.unseen == false)
+        #expect(lastReads.items == [.remote(
+            serverID: s.serverID, serverURL: "http://127.0.0.1:1/", libraryUUID: s.libraryUUID,
+            libraryName: "テスト", bookID: 42, title: "本の題名", locked: false)])
         // 開いた後の既読の書き込み（投げっぱなしの POST /progress）が届くまで待つ。
         // 待たずに抜けると、次のテストが記録を空にした後にこの要求が届いて記録を汚す。
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/42/progress") } }
+    }
+
+    /// ダウンロード済みコピーの方が先まで読んでいるときは、内蔵と同じにそちらから始める（サーバを巻き戻さない）。
+    @Test func remoteStartPageUsesTheFurtherOfServerAndOfflinePosition() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, offlineLastPage: 12)
+        s.testPutManifestHandoff(bookID: 48, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 48, filename: "a.zip", lastPage: 5))
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(ref.startPage == 12)
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/48/progress") } }
     }
 
     @Test func remoteIssueFailureFallsBackToTheBuiltInViewerWithABanner() async throws {
@@ -330,17 +380,15 @@ struct ExternalViewerSyncWiringTests {
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
         HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 500)
-        s.testPutManifestHandoff(bookID: 43, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
-        // 内蔵ビューアの経路は「開き中」で早く戻らせる（テストホストで本物の窓を作らない）。
-        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 43)
-        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
-        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 500)
+        s.testPutManifestHandoff(bookID: 43, value: archiveManifest())
 
         s.openViewer(book: remoteBook(id: 43, filename: "a.zip", lastPage: 0))
-        try await waitUntil { s.errorText != nil }
+        try await waitUntil { !fallbacks.entries.isEmpty }
 
         #expect(launches.entries.isEmpty)
+        #expect(fallbacks.entries.count == 1)
+        #expect(fallbacks.entries.first?.manifest?.pageCount == 20, "取得済みの manifest を内蔵へ渡す")
         #expect(s.errorText?.contains("内蔵ビューアで開きました") == true)
         #expect(s.errorText?.contains("トークンを発行できませんでした") == true)
     }
@@ -352,35 +400,15 @@ struct ExternalViewerSyncWiringTests {
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
         HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 404)
-        s.testPutManifestHandoff(bookID: 45, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
-        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 45)
-        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
-        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 404)
+        s.testPutManifestHandoff(bookID: 45, value: archiveManifest())
 
         s.openViewer(book: remoteBook(id: 45, filename: "a.zip", lastPage: 0))
-        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/45/viewer-token") } }
-        try await Task.sleep(for: .milliseconds(300))   // 404 を受けて内蔵へ倒すまでの余裕
+        try await waitUntil { !fallbacks.entries.isEmpty }
 
+        #expect(G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/45/viewer-token") })
         #expect(launches.entries.isEmpty)
         #expect(s.errorText == nil)
-    }
-
-    @Test func remoteSyncOffStaysBuiltIn() async throws {
-        let env = try makeEnv(sync: false); defer { env.cleanup() }
-        let launches = Launches()
-        let original = HelperLauncher.launch
-        defer { HelperLauncher.launch = original }
-        HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 200)
-        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 44)
-        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
-        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
-
-        s.openViewer(book: remoteBook(id: 44, filename: "a.zip", lastPage: 0))   // 同期 OFF の判定は同期的
-
-        #expect(launches.entries.isEmpty)
-        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
     }
 
     /// 旧サーバが 501 を返しても、404 と同じく知らせずに内蔵で開く。
@@ -390,18 +418,36 @@ struct ExternalViewerSyncWiringTests {
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
         HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 501)
-        s.testPutManifestHandoff(bookID: 46, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
-        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 46)
-        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
-        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 501)
+        s.testPutManifestHandoff(bookID: 46, value: archiveManifest())
 
         s.openViewer(book: remoteBook(id: 46, filename: "a.zip", lastPage: 0))
-        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/46/viewer-token") } }
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitUntil { !fallbacks.entries.isEmpty }
 
+        #expect(G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/46/viewer-token") })
         #expect(launches.entries.isEmpty)
         #expect(s.errorText == nil)
+    }
+
+    /// 施錠ゲートの 403（パスワード変更など）。他のリモート呼び出しと同じく解錠へ戻し、何も開かない。
+    @Test func remoteLockGateAtIssuanceReturnsToUnlockAndOpensNothing() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(
+            env, issueStatus: 403, libraryToken: "LIB-TOKEN", issueHeaders: [RemoteClientError.libraryLockedHeader: "1"])
+        s.testPutManifestHandoff(bookID: 49, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 49, filename: "a.zip", lastPage: 0))
+        try await waitUntil { s.libraryToken == nil || !fallbacks.entries.isEmpty || s.errorText != nil }
+
+        #expect(s.libraryToken == nil, "失効としてトークンを捨てる（解錠フォームへ戻る）")
+        #expect(s.locked)
+        #expect(s.errorText?.contains("パスワードが変更されました") == true)
+        #expect(launches.entries.isEmpty)
+        #expect(fallbacks.entries.isEmpty, "内蔵へも倒さない")
     }
 
     /// 使える外部ビューアが無いときは、トークンを要求せずに黙って内蔵で開く。
@@ -412,17 +458,63 @@ struct ExternalViewerSyncWiringTests {
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
         HelperLauncher.launch = recording(launches)
-        let s = try makeRemoteState(env, issueStatus: 200)
-        s.testPutManifestHandoff(bookID: 47, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "e"))
-        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 47)
-        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
-        defer { ViewerWindowRegistry.shared.cancelOpen(identity) }
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 47, value: archiveManifest())
 
         s.openViewer(book: remoteBook(id: 47, filename: "a.zip", lastPage: 0))
-        try await Task.sleep(for: .milliseconds(500))
+        try await waitUntil { !fallbacks.entries.isEmpty }
 
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+        #expect(launches.entries.isEmpty)
+        #expect(s.errorText == nil)
+    }
+
+    @Test func remoteSyncOffStaysBuiltIn() async throws {
+        let env = try makeEnv(sync: false); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 44, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 44, filename: "a.zip", lastPage: 0))
+
+        // 同期 OFF なら内蔵の本体が**同期的に**呼ばれる（参照ファイルの Task を作っていれば、ここではまだ呼ばれない）。
+        #expect(fallbacks.entries.count == 1)
+        try await Task.sleep(for: .milliseconds(50))   // 余計な Task があれば、ここで走り出す
+        #expect(fallbacks.entries.count == 1)
         #expect(launches.entries.isEmpty)
         #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
-        #expect(s.errorText == nil)
+    }
+
+    final class FakeViewerWindow: ViewerWindowControlling {
+        var focused = 0
+        func focus() { focused += 1 }
+        func close() {}
+    }
+
+    /// この本の内蔵窓が既に開いているなら、従来どおり前面化するだけ（外部ビューアへ渡さない）。
+    @Test func remoteOpenBuiltInWindowIsFrontedInsteadOfHandingOff() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 50, value: archiveManifest())
+        let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: 50)
+        let window = FakeViewerWindow()
+        #expect(ViewerWindowRegistry.shared.beginOpen(identity))
+        ViewerWindowRegistry.shared.finishOpen(identity, controller: window)
+        defer { ViewerWindowRegistry.shared.unregister(controller: window) }
+
+        s.openViewer(book: remoteBook(id: 50, filename: "a.zip", lastPage: 0))
+
+        #expect(window.focused == 1)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+        #expect(launches.entries.isEmpty)
+        #expect(fallbacks.entries.isEmpty)
     }
 }

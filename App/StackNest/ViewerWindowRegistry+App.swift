@@ -29,6 +29,13 @@ final class ViewerWindowRegistry {
         }
     }
 
+    /// G60: この本の内蔵ビューア窓が既にある（開き中を含む）なら、前面化（開き中は無視）して true を返す。
+    /// 登録は変えない（外部ビューアへ渡す経路が、開いている内蔵窓を差し置いて二重に開かないための問い合わせ）。
+    func frontIfPresent(_ id: ViewerIdentity) -> Bool {
+        if core.openIdentities.contains(id) { controllers[id]?.focus(); return true }
+        return core.openingIdentities.contains(id)
+    }
+
     /// 生成完了。設定 OFF なら他窓を閉じる。
     func finishOpen(_ id: ViewerIdentity, controller: any ViewerWindowControlling) {
         let toClose = core.finish(id, allowMultiple: ViewerSettings.shared.allowMultipleViewerWindows)

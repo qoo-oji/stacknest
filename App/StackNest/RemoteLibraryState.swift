@@ -178,6 +178,11 @@ final class RemoteLibraryState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
+    /// G60 テスト用: 内蔵ビューアで開く本体の代わりに呼ぶ（nil なら本物）。
+    /// 「内蔵へ倒した」ことを待つ陽性の合図に使い、本物の窓・`LastReadTracker.shared` に触れない。
+    /// G60 テスト用: ダウンロード済みコピーの読書位置の問い合わせ（nil なら本物の `OfflineStore`）。
+    @ObservationIgnored var offlineLastPageOverride: ((Int) -> Int?)?
+    @ObservationIgnored var builtInOpenOverride: ((BookListItemDTO, ManifestDTO?) -> Void)?
 
     /// - Parameter coverCache: 既定は実利用のディスクキャッシュ（`RemotePageCache.shared`）を使う。
     ///   **テストは必ず注入すること** — 既定のままだと
@@ -1854,6 +1859,9 @@ final class RemoteLibraryState {
             filename: book.filename,
             useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
             syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer) {
+            // この本の内蔵窓が既にあれば従来どおり前面化するだけ（外部ビューアを二重に開かない）。
+            let identity = ViewerIdentity.remote(serverID: serverID.uuidString, libraryUUID: libraryUUID, bookID: book.id)
+            if ViewerWindowRegistry.shared.frontIfPresent(identity) { return }
             Task { await self.openByReference(book: book, resumeDirect: resumeDirect, handedManifest: handedManifest) }
             return
         }
@@ -1863,6 +1871,7 @@ final class RemoteLibraryState {
     /// リモート本を内蔵ビューアで開く本体（G60 で `openViewer` から分けた。中身は従来のまま）。
     /// 失敗バナーの消去と動画・テキストの弾きは `openViewer` の入口で済んでいる。
     private func openInBuiltInViewer(book: BookListItemDTO, resumeDirect: Bool, handedManifest: ManifestDTO?) {
+        if let override = builtInOpenOverride { override(book, handedManifest); return }
         // G15 V1: dedup 登録。既存窓があれば前面化して抜け、開き中なら無視して抜ける。
         let identity = ViewerIdentity.remote(serverID: serverID.uuidString, libraryUUID: libraryUUID, bookID: book.id)
         guard ViewerWindowRegistry.shared.beginOpen(identity) else { return }
@@ -2157,7 +2166,8 @@ final class RemoteLibraryState {
     /// 害は無いので許容する（計画レビュー M-4）。
     private func openByReference(book: BookListItemDTO, resumeDirect: Bool, handedManifest: ManifestDTO?) async {
         guard let manifest = await manifestForOpening(bookID: book.id, handed: handedManifest) else {
-            // manifest が取れない＝内蔵でも開けない見込み。理由の表示は内蔵の経路に任せる。
+            // manifest が取れない。ダウンロード済みの本はローカルのコピーで開けるので、内蔵の経路に任せる
+            // （開けないときの理由の表示も内蔵の経路が担う）。
             openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: nil)
             return
         }
@@ -2173,10 +2183,27 @@ final class RemoteLibraryState {
         let client = self.client
         let libraryUUID = self.libraryUUID
         let libraryToken = self.libraryToken
+        // 続きのページは内蔵と同じ解決（ダウンロード済みの本をオフラインで先へ読んでいても、サーバを巻き戻さない）。
+        let offlineLastPage: Int?
+        if let override = offlineLastPageOverride {
+            offlineLastPage = override(book.id)
+        } else {
+            offlineLastPage = offlineStore.all().first {
+                $0.serverID == serverID && $0.libraryUUID == libraryUUID && $0.detail.id == book.id
+            }?.lastPage
+        }
+        let resumePage = BookReference.clampedStartPage(
+            resolveResumePage(server: book.lastPage, offline: offlineLastPage), pageCount: manifest.pageCount)
         let failure = await viewerHandoff.openRemote(
             book: book, manifest: manifest, serverID: serverID, serverBase: client.baseURL,
-            libraryUUID: libraryUUID, settings: viewerSettings,
+            libraryUUID: libraryUUID, startPage: resumePage, settings: viewerSettings,
             issue: { try await client.viewerToken(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken) })
+        if failure == .libraryLocked {
+            // 施錠ゲートの 403。他のリモート呼び出しと同じく失効として拾い（解錠フォームへ戻す）、
+            // 何も開かない（内蔵へ倒しても同じ拒否に当たるだけ）。
+            presentRemoteError(.libraryLocked)
+            return
+        }
         if let failure {
             openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
             // 旧サーバ（ルートが無い）は G60 前と同じ挙動なので知らせない。それ以外は理由を出す。
@@ -2191,8 +2218,7 @@ final class RemoteLibraryState {
             serverID: serverID, serverURL: client.baseURL.absoluteString,
             libraryUUID: libraryUUID, libraryName: libraryName,
             bookID: book.id, title: book.title, locked: locked))
-        let page = BookReference.clampedStartPage(book.lastPage ?? 0, pageCount: manifest.pageCount)
-        Task { try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: page, libraryToken: libraryToken) }
+        Task { try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: resumePage, libraryToken: libraryToken) }
     }
 
     /// G48-3: リモート書庫のテキスト EPUB。本体を /file から取ってキャッシュし、ローカルと同じ Washi の窓で開く。

@@ -27,12 +27,20 @@ struct RemoteManifestHandoffTests {
         RemoteCoverCache(cache: nil, serverID: nil, libraryUUID: nil)
     }
 
-    private func makeState() -> RemoteLibraryState {
-        RemoteLibraryState(
+    /// G60: `openViewer` は外部ビューアの設定（同期の ON/OFF）で分岐する。実機の設定（`UserDefaults.standard`）に
+    /// 左右されないよう、同期 OFF の隔離した suite を差し込む。戻り値の `cleanup` を `defer` で呼ぶこと。
+    private func makeState() -> (state: RemoteLibraryState, cleanup: () -> Void) {
+        let suiteName = "g60-handoff-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        let settings = ViewerSettings(defaults: suite)
+        settings.syncsReadingPositionWithExternalViewer = false
+        let s = RemoteLibraryState(
             client: RemoteLibraryClient(baseURL: URL(string: "http://127.0.0.1:1/")!, deviceToken: "device"),
             serverID: UUID(), libraryUUID: "LIB-\(UUID().uuidString)",
             libraryName: "テスト", locked: false, libraryToken: "TOKEN",
             coverCache: makeMemoryOnlyCache())
+        s.viewerSettings = settings
+        return (s, { suite.removePersistentDomain(forName: suiteName) })
     }
 
     private func makeBook(id: Int) -> BookListItemDTO {
@@ -46,7 +54,8 @@ struct RemoteManifestHandoffTests {
     /// **わざと壊して落ちることを確認済み**（`openViewer` 先頭の `take` を Task の中に戻すと、この
     /// テストは `testTakeManifestHandoff` が非 nil を返して落ちる）。
     @Test func openViewerThatDefersToAnExistingOpenStillClearsTheHandoff() {
-        let s = makeState()
+        let (s, cleanup) = makeState()
+        defer { cleanup() }
         let bookID = 909_001
         let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: bookID)
 
@@ -67,7 +76,8 @@ struct RemoteManifestHandoffTests {
 
     /// 対照: 預かりが無い本を同じ経路（開き中を無視）で呼んでも、何も起きず nil のまま。
     @Test func openViewerThatDefersWithNoHandoffStaysEmpty() {
-        let s = makeState()
+        let (s, cleanup) = makeState()
+        defer { cleanup() }
         let bookID = 909_002
         let identity = ViewerIdentity.remote(serverID: s.serverID.uuidString, libraryUUID: s.libraryUUID, bookID: bookID)
 

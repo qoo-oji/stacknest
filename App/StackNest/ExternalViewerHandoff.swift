@@ -101,8 +101,9 @@ struct ExternalViewerHandoff {
 
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
     /// 基点は、このクライアントがサーバへ繋いでいる URL（ビューアは同じ Mac で動くので同じ道で届く）。
+    /// `startPage` は呼び出し側が解決した続きのページ（内蔵と同じ `resolveResumePage`）。ここで範囲に収める。
     func openRemote(book: BookListItemDTO, manifest: ManifestDTO, serverID: UUID, serverBase: URL,
-                    libraryUUID: String, settings: ViewerSettings,
+                    libraryUUID: String, startPage: Int, settings: ViewerSettings,
                     issue: () async throws -> ViewerTokenReply) async -> Failure? {
         let reply: ViewerTokenReply
         do {
@@ -111,6 +112,9 @@ struct ExternalViewerHandoff {
             return .unsupportedByServer
         } catch RemoteClientError.server(501) {
             return .unsupportedByServer
+        } catch RemoteClientError.libraryLocked {
+            // 施錠ゲートの 403（パスワード変更など）。呼び出し側は解錠へ戻し、何も開かない。
+            return .libraryLocked
         } catch {
             return .tokenUnavailable
         }
@@ -121,7 +125,7 @@ struct ExternalViewerHandoff {
             expiresAt: reply.expiresAt,
             pageCount: manifest.pageCount,
             direction: manifest.direction,
-            startPage: BookReference.clampedStartPage(book.lastPage ?? 0, pageCount: manifest.pageCount))
+            startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
         return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
                     bookPath: book.filename ?? "", settings: settings)
     }
