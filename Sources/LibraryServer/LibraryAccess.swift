@@ -36,6 +36,14 @@ actor LibraryTokenStore {
         guard let current = currentCredential, current == e.credential else { return false }
         return e.expiresAt > clock.now
     }
+
+    /// G60: 有効なトークン（期限内・同じ書庫）が**発行時に認証した世代**を返す。未知・期限切れ・別の書庫は nil。
+    /// 現在の世代とは比べない。呼び出し側は `LibraryResolver.resolve` で現行と一致することを確かめた後に、
+    /// この「検証した値」を使う（現在値を読み直すと、間のパスワード変更をすり抜ける）。
+    func credential(for token: String, libraryUUID: String) -> String? {
+        guard let e = tokens[token], e.libraryUUID == libraryUUID, e.expiresAt > clock.now else { return nil }
+        return e.credential
+    }
 }
 
 /// ロック庫のライブラリトークンをリクエストから取り出す。

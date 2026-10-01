@@ -432,6 +432,14 @@ public struct RemoteLibraryClient: Sendable {
         _ = try await send(request(url, method: "POST", libraryToken: libraryToken, body: body, contentType: "application/json"))
     }
 
+    /// G60: その本専用の読み取りトークンを発行してもらう（read 以上で可・施錠庫は `libraryToken` が要る）。
+    /// 旧サーバ（ルートが無い）は 404 → `RemoteClientError.notFound`。
+    public func viewerToken(libraryUUID: String, bookID: Int, libraryToken: String?) async throws -> ViewerTokenReply {
+        let url = makeURL("libraries/\(libraryUUID)/books/\(bookID)/viewer-token")
+        let data = try await send(request(url, method: "POST", libraryToken: libraryToken))
+        return try decode(ViewerTokenReply.self, data)
+    }
+
     /// G48-3: テキスト EPUB の読書位置（spine＋進行率＋cfi）。サーバ側で既読化もする。
     public func postEPUBProgress(libraryUUID: String, bookID: Int, locator: EPUBLocatorDTO, libraryToken: String?) async throws {
         let body = try JSONEncoder().encode(locator)

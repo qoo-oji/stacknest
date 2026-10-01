@@ -39,3 +39,4 @@ extension OpenLibraryReply: ResponseEncodable {}
 extension FinderTagSyncStatusReply: ResponseEncodable {}
 extension FinderTagResyncReply: ResponseEncodable {}
 extension RenameFilesReply: ResponseEncodable {}
+extension ViewerTokenReply: ResponseEncodable {}

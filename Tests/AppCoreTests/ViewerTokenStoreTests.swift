@@ -34,6 +34,16 @@ struct ViewerTokenStoreTests {
         #expect(validRecord(store.lookup(token: issued.token, issuer: .sharedServer, now: t0))?.id == issued.record.id)
     }
 
+    /// 平文のトークンは print・dump・失敗メッセージに出さない。
+    @Test func issuedTokenDescriptionsRedactThePlaintext() {
+        let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
+        let issued = ViewerTokenStore(defaults: d).issue(
+            libraryUUID: "LIB-1", bookID: 7, issuer: .sharedServer, lockCredential: nil)
+        #expect(!String(describing: issued).contains(issued.token))
+        #expect(!String(reflecting: issued).contains(issued.token))
+        #expect(!"\(issued)".contains(issued.token))
+    }
+
     @Test func onlyTheHashIsStored() throws {
         let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
         let store = ViewerTokenStore(defaults: d)

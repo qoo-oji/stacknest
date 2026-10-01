@@ -2012,6 +2012,32 @@ public struct LibraryServerCore: Sendable {
             config.onBookChanged?(lib.uuid, row.id)
             return HTTPResponse.Status.ok
         }
+        // G60: 本専用の読み取りトークン。対応した外部ビューアへ参照ファイルで渡す（spec §5.2）。
+        // 発行できるのはその本を読める接続（read 以上・scope 内・施錠庫は解錠済み）。scope 外は他のルートと同じく 404。
+        // 本専用トークン自身はこのルートに来られない（BearerAuthMiddleware が 403 にする）。
+        api.post("libraries/:lib/books/:id/viewer-token") { [viewerTokens = config.viewerTokens, issuer = config.viewerTokenIssuer] request, context in
+            guard let viewerTokens else { throw HTTPError(.notImplemented) }
+            let (lib, row) = try await resolver.resolveBook(request, context)
+            // 施錠庫は resolveBook が**検証した**書庫トークンの世代（解錠に使ったパスワード）に結び付ける。
+            // currentLockCredential() を読み直すと、検証とこの行の間のパスワード変更をすり抜ける（G25d と同じ誤り）。
+            let lockCredential: String?
+            if lib.isLocked {
+                guard let presented = libraryToken(from: request),
+                      let verified = await tokenStore.credential(for: presented, libraryUUID: lib.uuid) else {
+                    throw LibraryAccessError.locked
+                }
+                lockCredential = verified
+            } else {
+                lockCredential = nil
+            }
+            // グラントで認証した接続なら、そのグラントに結び付ける（グラントの削除で失効・作者の決定）。
+            // 固定トークンの経路（grantID == "legacy"）は結び付けない。
+            let issuedByGrantID: String? = context.grantID == "legacy" ? nil : context.grantID
+            let issued = viewerTokens.issue(
+                libraryUUID: lib.uuid, bookID: row.id, issuer: issuer,
+                lockCredential: lockCredential, issuedByGrantID: issuedByGrantID)
+            return ViewerTokenReply(token: issued.token, expiresAt: issued.record.expiresAt)
+        }
         // G48-2: EPUB の読書位置。画像本の /progress と同じく後勝ちで保存し既読化する。
         api.post("libraries/:lib/books/:id/epub-progress") { [config] request, context in
             let (lib, row) = try await resolver.resolveBook(request, context)

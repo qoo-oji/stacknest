@@ -37,6 +37,14 @@ public struct IssuedViewerToken: Sendable, Equatable {
     public let record: ViewerTokenRecord
 }
 
+/// 平文のトークンを print・dump・失敗メッセージ・ログへ出さない。
+extension IssuedViewerToken: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "IssuedViewerToken(expiresAt: \(record.expiresAt), book: \(record.libraryUUID)/\(record.bookID), token: <redacted>)"
+    }
+    public var debugDescription: String { description }
+}
+
 /// G60: 提示されたトークンの照合結果。
 public enum ViewerTokenLookup: Sendable, Equatable {
     case valid(ViewerTokenRecord)

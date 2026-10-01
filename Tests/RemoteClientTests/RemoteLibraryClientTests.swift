@@ -115,6 +115,19 @@ struct StubBackedRemoteClientTests {
             #expect(StubURLProtocol.lastRequest?.httpMethod == "POST")
         }
 
+        /// G60: 本専用トークンの発行は POST・書庫のトークンを付ける・応答の日時は ISO 8601。
+        @Test func viewerTokenPostsAndDecodes() async throws {
+            let expires = Date(timeIntervalSince1970: 1_900_000_000)
+            StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"],
+                                         body: try enc().encode(ViewerTokenReply(token: "VT", expiresAt: expires)))
+            let client = makeClient()
+            let reply = try await client.viewerToken(libraryUUID: "u1", bookID: 9, libraryToken: "LTOK")
+            #expect(reply == ViewerTokenReply(token: "VT", expiresAt: expires))
+            #expect(StubURLProtocol.lastRequest?.httpMethod == "POST")
+            #expect(StubURLProtocol.lastRequest?.url?.path == "/api/v1/libraries/u1/books/9/viewer-token")
+            #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Library-Token") == "LTOK")
+        }
+
         @Test func forbiddenMapsTo403Error() async throws {
             StubURLProtocol.stub = .init(status: 403, headers: [:], body: Data())
             let client = makeClient()

@@ -319,6 +319,19 @@ public struct SessionReply: Codable, Sendable {
     }
 }
 
+/// G60: 本専用の読み取りトークン（`POST /libraries/{lib}/books/{id}/viewer-token` の応答）。
+/// その本の manifest・pages・cover の取得と progress の書き込みだけができる。
+public struct ViewerTokenReply: Codable, Sendable, Equatable {
+    public let token: String
+    /// 有効期限（ISO 8601）。
+    public let expiresAt: Date
+
+    public init(token: String, expiresAt: Date) {
+        self.token = token
+        self.expiresAt = expiresAt
+    }
+}
+
 /// 棚（ユーザー定義棚 / スマート棚）の一覧 DTO（spec §3.3 /shelves）。
 public struct ShelfDTO: Codable, Sendable {
     public let id: Int64

@@ -85,6 +85,13 @@ struct OpenAPIDTOParityTests {
         expectKeys(try object(fullDetail()).keys, in: "BookDetailDTO", spec: spec)
     }
 
+    /// G60: 本専用トークンの発行の応答。
+    @Test func viewerTokenReplyKeysAreInTheSpec() throws {
+        let spec = try specText()
+        expectKeys(try object(ViewerTokenReply(token: "t", expiresAt: Date(timeIntervalSince1970: 0))).keys,
+                   in: "ViewerTokenReply", spec: spec)
+    }
+
     @Test func bookPageKeysAreInTheSpec() throws {
         let spec = try specText()
         let page = try object(BookPageDTO(items: [fullListItem()], total: 1, page: 1, perPage: 50))
