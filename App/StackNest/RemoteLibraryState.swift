@@ -2176,7 +2176,10 @@ final class RemoteLibraryState {
             useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
             syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer),
             // 使える外部ビューアが無いなら、トークンを出さずに黙って内蔵で開く。
-            HelperLauncher.hasUsableReferenceViewer(bookPath: book.filename ?? "", settings: viewerSettings) else {
+            // 種類は manifest の format から決める（フォルダの本の filename には拡張子が無い）。
+            HelperLauncher.hasUsableReferenceViewer(
+                category: HelperLauncher.referenceCategory(manifestFormat: manifest.format),
+                settings: viewerSettings) else {
             openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
             return
         }

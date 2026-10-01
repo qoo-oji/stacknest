@@ -96,7 +96,7 @@ struct ExternalViewerHandoff {
             direction: BookReference.directionString(direction),
             startPage: BookReference.clampedStartPage(startPage, pageCount: pageCount))
         return hand(reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id,
-                    bookPath: path, settings: settings)
+                    category: HelperLauncher.referenceCategory(bookPath: path), settings: settings)
     }
 
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
@@ -126,19 +126,20 @@ struct ExternalViewerHandoff {
             pageCount: manifest.pageCount,
             direction: manifest.direction,
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
+        // リモートのフォルダの本は filename に拡張子が無いので、種類は manifest の format から決める。
         return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
-                    bookPath: book.filename ?? "", settings: settings)
+                    category: HelperLauncher.referenceCategory(manifestFormat: manifest.format), settings: settings)
     }
 
     private func hand(_ reference: BookReference, origin: BookReferenceStore.Origin, libraryUUID: String,
-                      bookID: Int, bookPath: String, settings: ViewerSettings) -> Failure? {
+                      bookID: Int, category: BookCategory, settings: ViewerSettings) -> Failure? {
         let url: URL
         do {
             url = try references.write(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
         } catch {
             return .referenceNotWritten
         }
-        if let error = HelperLauncher.openReference(url, bookPath: bookPath, settings: settings) {
+        if let error = HelperLauncher.openReference(url, category: category, settings: settings) {
             return .launchFailed(error.localizedDescription)
         }
         return nil

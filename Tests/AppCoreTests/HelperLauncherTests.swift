@@ -404,4 +404,65 @@ struct HelperLauncherTests {
                                              bookPath: "/lib/a.pdf", settings: settings) == nil)
         #expect(calls.entries.first?.viewerURL.path == archiveViewer.path)
     }
+
+    // MARK: - G60 最終レビュー M-1: リモートの本は manifest の format で種類を決める
+
+    /// manifest の format → 参照ファイルを渡すビューアの種類。archive・folder・image はそのまま、
+    /// それ以外（PDF の text、動画、画像の EPUB、未知の値）はアーカイブの指定。
+    @Test func referenceCategoryFromManifestFormat() {
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "archive") == .archive)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "folder") == .folder)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "image") == .image)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "text") == .archive)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "video") == .archive)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "epub") == .archive)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "") == .archive)
+        #expect(HelperLauncher.referenceCategory(manifestFormat: "unknown") == .archive)
+    }
+
+    /// フォルダとアーカイブに別のビューアを設定しているとき、種類 `.folder` の参照ファイルはフォルダのビューアで開く
+    /// （リモートのフォルダの本は filename に拡張子が無く、パスから決めるとアーカイブに倒れていた）。
+    @Test @MainActor
+    func openReferenceWithFolderCategoryUsesTheFolderViewer() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let archiveViewer = try makeFakeViewer("ArchiveViewer")
+        let folderViewer = try makeFakeViewer("FolderViewer")
+        defer {
+            try? FileManager.default.removeItem(at: archiveViewer)
+            try? FileManager.default.removeItem(at: folderViewer)
+        }
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = archiveViewer.path
+        settings.categoryViewerPaths[.folder] = folderViewer.path
+        let category = HelperLauncher.referenceCategory(manifestFormat: "folder")
+
+        #expect(HelperLauncher.hasUsableReferenceViewer(category: category, settings: settings))
+        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
+                                             category: category, settings: settings) == nil)
+        #expect(calls.entries.count == 1)
+        #expect(calls.entries.first?.viewerURL.path == folderViewer.path)
+    }
+
+    /// 種類で引くとき、そのビューアが未設定または実在しなければ「使えない」。
+    @Test @MainActor
+    func hasUsableReferenceViewerByCategory() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let settings = ViewerSettings(defaults: suite)
+        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "何も設定していない")
+        settings.categoryViewerPaths[.folder] = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Missing-\(UUID().uuidString).app").path
+        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "実在しない")
+        let folderViewer = try makeFakeViewer("FolderViewer")
+        defer { try? FileManager.default.removeItem(at: folderViewer) }
+        settings.categoryViewerPaths[.folder] = folderViewer.path
+        #expect(HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings))
+    }
 }

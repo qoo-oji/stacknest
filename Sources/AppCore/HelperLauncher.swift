@@ -59,8 +59,25 @@ public enum HelperLauncher {
     }
 
     /// G60: 参照ファイルを渡すビューアの種類（アーカイブ・フォルダ・画像以外はアーカイブの指定で引く）。
-    private static func referenceCategory(bookPath: String) -> BookCategory {
-        let classified = BookCategory.classify(path: bookPath)
+    /// ローカルの本はパスから決める（フォルダはディスク上のディレクトリとして判定される）。
+    public static func referenceCategory(bookPath: String) -> BookCategory {
+        referenceViewerCategory(BookCategory.classify(path: bookPath))
+    }
+
+    /// G60: リモートの本の参照ファイルを渡すビューアの種類。サーバの manifest の `format` から決める
+    /// （リモートのフォルダの本は filename に拡張子が無く、パスからはアーカイブに倒れてしまうため）。
+    /// `archive`・`folder`・`image` はそれぞれの指定、それ以外（PDF の `text`、画像の EPUB など）はアーカイブの指定。
+    public static func referenceCategory(manifestFormat: String) -> BookCategory {
+        switch manifestFormat {
+        case "archive": return .archive
+        case "folder": return .folder
+        case "image": return .image
+        default: return .archive
+        }
+    }
+
+    /// アーカイブ・フォルダ・画像はそのまま、それ以外（動画・テキスト）はアーカイブの指定に寄せる。
+    private static func referenceViewerCategory(_ classified: BookCategory) -> BookCategory {
         switch classified {
         case .archive, .folder, .image: return classified
         default: return .archive
@@ -68,22 +85,36 @@ public enum HelperLauncher {
     }
 
     /// G60: 参照ファイルを渡す外部ビューアが設定済みで実在するか（トークンを出す前に確かめる）。
+    /// ローカルの本用（パスから種類を決める）。
     @MainActor
     public static func hasUsableReferenceViewer(bookPath: String, settings: ViewerSettings) -> Bool {
-        guard let path = settings.resolvedViewerPath(for: referenceCategory(bookPath: bookPath)) else { return false }
+        hasUsableReferenceViewer(category: referenceCategory(bookPath: bookPath), settings: settings)
+    }
+
+    /// G60: 参照ファイルを渡す外部ビューアが設定済みで実在するか。種類は呼び出し側が決める
+    /// （リモートの本は `referenceCategory(manifestFormat:)`）。
+    @MainActor
+    public static func hasUsableReferenceViewer(category: BookCategory, settings: ViewerSettings) -> Bool {
+        guard let path = settings.resolvedViewerPath(for: referenceViewerCategory(category)) else { return false }
         return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く（ローカルの本用。
+    /// 種類はパスから決める）。
+    @MainActor
+    public static func openReference(_ referenceURL: URL, bookPath: String, settings: ViewerSettings) -> AppError? {
+        openReference(referenceURL, category: referenceCategory(bookPath: bookPath), settings: settings)
     }
 
     /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く。
     /// ビューアの決め方は `open(book:settings:)` と同じ（種類ごとの指定 → 既定）。ただし EPUB
     /// （リモートの画像の EPUB）は**アーカイブの指定**で引く。参照ファイルはページで読むので、
     /// 文字の EPUB 用に選んだアプリではなく画像の本のアプリに渡す。
+    /// 種類は `referenceCategory(bookPath:)`／`referenceCategory(manifestFormat:)` で決めたもの。
     /// 文言は `open(book:settings:)` と同じキーを使う（新しい訳は要らない）。
     @MainActor
-    public static func openReference(_ referenceURL: URL, bookPath: String, settings: ViewerSettings) -> AppError? {
-        // 参照ファイルはページで読む本の外部ビューアに渡す。EPUB・PDF などアーカイブ・フォルダ・画像以外は
-        // アーカイブの指定で引く（テキスト用に選んだアプリは .stacknestbook を開けないことが多い）。
-        let category = referenceCategory(bookPath: bookPath)
+    public static func openReference(_ referenceURL: URL, category: BookCategory, settings: ViewerSettings) -> AppError? {
+        let category = referenceViewerCategory(category)
         let resolved = settings.resolvedViewerPath(for: category)
         let shownName = referenceURL.lastPathComponent
         guard let viewerPath = resolved else {

@@ -356,6 +356,30 @@ struct ExternalViewerSyncWiringTests {
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/42/progress") } }
     }
 
+    /// リモートのフォルダの本（filename に拡張子が無い）は、manifest の format でフォルダの外部ビューアへ渡す
+    /// （filename の拡張子から決めるとアーカイブの指定に倒れていた＝最終レビュー M-1）。
+    @Test func remoteFolderBookUsesTheFolderViewer() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let folderViewer = env.base.appendingPathComponent("FolderViewer.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderViewer, withIntermediateDirectories: true)
+        env.settings.categoryViewerPaths[.folder] = folderViewer.path
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 51, value: ManifestDTO(pageCount: 20, direction: "rtl", format: "folder", etag: "e"))
+
+        s.openViewer(book: remoteBook(id: 51, filename: "フォルダの本", lastPage: 0))
+        try await waitUntil { !launches.entries.isEmpty || !fallbacks.entries.isEmpty }
+
+        #expect(fallbacks.entries.isEmpty)
+        let launched = try #require(launches.entries.first)
+        #expect(launched.file.pathExtension == "stacknestbook")
+        #expect(launched.viewer.path == folderViewer.path, "フォルダの本はフォルダの外部ビューアで開く")
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/51/progress") } }
+    }
+
     /// ダウンロード済みコピーの方が先まで読んでいるときは、内蔵と同じにそちらから始める（サーバを巻き戻さない）。
     @Test func remoteStartPageUsesTheFurtherOfServerAndOfflinePosition() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
