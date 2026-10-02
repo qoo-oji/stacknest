@@ -163,6 +163,14 @@ App の文字列カタログは **1 つの日本語キーに 1 つの英訳**し
 | 参照ファイル | reference file | G60。`.stacknestbook`。文中は小文字 |
 | ローカルコントロールの受け口（127.0.0.1） | Local Control endpoint (127.0.0.1) | G60。エラーの理由の中では小文字始まり（the Local Control endpoint …） |
 | この Mac の中だけの受け口 | 127.0.0.1 (this Mac only) | G60。設定とヘルプの説明文 |
+| 対応アプリ | supported app | G60 v3。Info.plist の `StackNestViewerSupport` で対応を宣言したアプリ。文中は小文字 |
+| 〈アプリ名〉が本を読み込んでいません | 〈app〉 hasn't loaded the book. | G60 v3。参照ファイルを渡してから一定時間後のお知らせ |
+| 従来の開き方で開く | Open the Usual Way | G60 v3。そのお知らせのボタン（ローカル＝ファイルのまま、リモート＝内蔵ビューア） |
+| 〈アプリ名〉：未対応（今までどおり開きます） | 〈app〉: Not supported (opens the usual way) | G60 v3。設定 ▸ 表示 ▸ 外部ビューアの状態の行 |
+| 〈アプリ名〉：対応を宣言（未確認） | 〈app〉: Declares support (not yet confirmed) | G60 v3。同上 |
+| 〈アプリ名〉：対応を確認（〈日時〉・〈版〉） | 〈app〉: Support confirmed (〈date〉, version 〈version〉) | G60 v3。同上。版が分からなければ日時だけ |
+| 名乗り（X-StackNest-Viewer） | identification header | G60 v3。形式の文書だけで使う |
+| 中継（する） | relay | G60 v3（spec §5.8・試用）。リモートの本を 127.0.0.1 の口で取り次ぐこと。文中は小文字 |
 
 ### 2.5 破損チェック・メンテナンス・バックアップ
 

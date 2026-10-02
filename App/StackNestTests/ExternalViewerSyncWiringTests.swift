@@ -1081,6 +1081,34 @@ struct ExternalViewerSyncWiringTests {
         #expect(s.viewerNotice.notice == nil)
     }
 
+    /// 中継の確認は手元の保存先を読むだけなので、窓を閉じても走り続け、確認できたビューアの記録を失わない。
+    @Test func closingTheWindowKeepsARelayCheckRunning() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let tokens = env.tokens
+        let waits = Delays()
+        let usedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, relay: true, sleep: {
+            waits.append($0)
+            try await Task.sleep(for: .milliseconds(400))
+            for r in tokens.allRecords() {
+                tokens.recordFirstUse(id: r.id, viewer: "com.example.viewer/1.80; format=1", now: usedAt)
+            }
+        })
+        s.testPutManifestHandoff(bookID: 68, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 68, filename: "a.zip", lastPage: 0))
+        try await waitUntil { !waits.values.isEmpty }
+        s.cancelViewerUseChecks()
+        try await waitUntil { env.confirmed.confirmed(bundleIdentifier: "com.example.fakeviewer") != nil }
+
+        let seen = try #require(env.confirmed.confirmed(bundleIdentifier: "com.example.fakeviewer"))
+        #expect(seen.viewerVersion == "1.80")
+    }
+
     /// 中継を切った形で v2 のサーバ（`tokenID` の無い応答）でも参照ファイルで渡し、確認は走らせない（待ちも照会も無い）。
     /// 中継のときは手元の中継の鍵で確かめるので、この許容は中継を切った形だけに残る。
     @Test func remoteReplyWithoutTokenIDHandsOffWithoutACheck() async throws {

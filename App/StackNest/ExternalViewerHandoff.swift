@@ -148,7 +148,7 @@ struct ExternalViewerHandoff {
                     fetchStatus: @escaping @Sendable (_ tokenID: String) async throws -> ViewerTokenStatusReply,
                     onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
                     onUsed: @escaping @MainActor @Sendable () -> Void = {},
-                    onCheckStarted: @MainActor (Task<Void, Never>) -> Void = { _ in }) async -> Failure? {
+                    onCheckStarted: @MainActor (Task<Void, Never>, _ cancelsOnClose: Bool) -> Void = { _, _ in }) async -> Failure? {
         // 中継には 127.0.0.1 の口が要る。動いていなければリモートの鍵も出してもらわない。
         if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
         let reply: ViewerTokenReply
@@ -220,7 +220,7 @@ struct ExternalViewerHandoff {
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
         return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
                     settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed,
-                    onCheckStarted: onCheckStarted)
+                    cancelsOnClose: !relaysRemoteBooks, onCheckStarted: onCheckStarted)
     }
 
     /// G60 v3: 待ってから 1 度だけ確かめる。待ちが取り消されたら確かめない（`.unknown`）。
@@ -243,7 +243,8 @@ struct ExternalViewerHandoff {
                       readUse: (@Sendable () async -> UseOutcome)?,
                       onNotUsed: @escaping @MainActor @Sendable (String) -> Void,
                       onUsed: @escaping @MainActor @Sendable () -> Void,
-                      onCheckStarted: @MainActor (Task<Void, Never>) -> Void = { _ in }) -> Failure? {
+                      cancelsOnClose: Bool = false,
+                      onCheckStarted: @MainActor (Task<Void, Never>, _ cancelsOnClose: Bool) -> Void = { _, _ in }) -> Failure? {
         let url: URL
         do {
             url = try references.write(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
@@ -257,7 +258,7 @@ struct ExternalViewerHandoff {
         // 確かめる手段が無い（v2 のサーバ）なら確認しない。
         if let readUse {
             onCheckStarted(startUseCheck(delay: settings.viewerUseCheckDelay, viewer: viewer, read: readUse,
-                                         onNotUsed: onNotUsed, onUsed: onUsed))
+                                         onNotUsed: onNotUsed, onUsed: onUsed), cancelsOnClose)
         }
         return nil
     }
@@ -266,7 +267,7 @@ struct ExternalViewerHandoff {
     /// 従来の開き方のボタンを出してもらう。トークンは取り消さない（ビューアが遅れて読み始めても動くように）。
     /// 使われていたら、渡した先のアプリを「確認できた対応ビューア」として記録し（鍵はアプリの bundle id・版は名乗り）、
     /// `onUsed`（前の渡しで出した「読み込んでいません」を呼び出し側が消す）。
-    /// 確認は 1 回だけで、お知らせを消すために照会を繰り返さない。返す Task は呼び出し側が閉じるときに取り消せる。
+    /// 確認は 1 回だけで、お知らせを消すために照会を繰り返さない。返す Task は呼び出し側が閉じるときに取り消せる（取り消すのは HTTP で照会する直接つなぐ形だけ。手元の保存先を読む確認は窓と無関係に走らせる）。
     private func startUseCheck(delay: Duration, viewer: ReferenceViewer,
                                read: @escaping @Sendable () async -> UseOutcome,
                                onNotUsed: @escaping @MainActor @Sendable (String) -> Void,

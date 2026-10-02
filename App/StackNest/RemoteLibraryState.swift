@@ -180,13 +180,26 @@ final class RemoteLibraryState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
-    /// G60 v3: 渡した後の使用の確認（待ち）。窓を閉じたら取り消す（直接つなぐ形で閉じた後に照会を投げない）。
-    @ObservationIgnored private var viewerUseChecks: [Task<Void, Never>] = []
+    /// G60 v3: 渡した後の使用の確認（待ち）。`cancelsOnClose` は直接つなぐ形（HTTP で照会する確認）だけ true。
+    /// 終わった確認は自分で外す（溜めない）。
+    @ObservationIgnored private var viewerUseChecks: [UUID: (task: Task<Void, Never>, cancelsOnClose: Bool)] = [:]
 
-    /// G60 v3: 待っている使用の確認をすべて取り消す（窓・画面を閉じるとき）。
+    /// G60 v3: 窓・画面を閉じるとき、待っている**直接つなぐ形**の確認を取り消す（閉じた後に照会を投げない）。
+    /// 中継の確認は手元の保存先を読むだけなので取り消さない（窓を閉じても、確認できたビューアの記録を失わない）。
     func cancelViewerUseChecks() {
-        viewerUseChecks.forEach { $0.cancel() }
-        viewerUseChecks.removeAll()
+        for (id, check) in viewerUseChecks where check.cancelsOnClose {
+            check.task.cancel()
+            viewerUseChecks[id] = nil
+        }
+    }
+
+    private func trackViewerUseCheck(_ task: Task<Void, Never>, cancelsOnClose: Bool) {
+        let id = UUID()
+        viewerUseChecks[id] = (task, cancelsOnClose)
+        Task { [weak self] in
+            await task.value
+            self?.viewerUseChecks[id] = nil
+        }
     }
     /// G60 テスト用: ダウンロード済みコピーの読書位置の問い合わせ（nil なら本物の `OfflineStore`）。
     @ObservationIgnored var offlineLastPageOverride: ((Int) -> Int?)?
@@ -2217,7 +2230,9 @@ final class RemoteLibraryState {
             },
             // 後の確認で使われたと分かったら、前の渡しで出した「読み込んでいません」を消す（この枠はそれ専用）。
             onUsed: { [weak self] in self?.viewerNotice.dismiss() },
-            onCheckStarted: { [weak self] task in self?.viewerUseChecks.append(task) })
+            onCheckStarted: { [weak self] task, cancelsOnClose in
+                self?.trackViewerUseCheck(task, cancelsOnClose: cancelsOnClose)
+            })
         if failure == .libraryLocked {
             // 施錠ゲートの 403。他のリモート呼び出しと同じく失効として拾い（解錠フォームへ戻す）、
             // 何も開かない（内蔵へ倒しても同じ拒否に当たるだけ）。
