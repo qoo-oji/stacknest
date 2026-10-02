@@ -33,6 +33,8 @@ struct ExternalViewerHandoff {
     /// G60 v3: 参照ファイルを渡してから、使われたかを確かめるまで待つ処理。本番は `Task.sleep`。
     /// 投げたら（取り消し）確かめない。
     var sleep: @Sendable (Duration) async throws -> Void
+    /// G60 v3: 確認できた対応ビューアの記録（設定の状態の行が読む）。
+    var confirmedViewers: ConfirmedViewerStore
 
     static var live: ExternalViewerHandoff {
         ExternalViewerHandoff(
@@ -44,7 +46,8 @@ struct ExternalViewerHandoff {
             now: { Date() },
             relays: .shared,
             relaysRemoteBooks: ExternalViewerSyncRouting.relaysRemoteBooks,
-            sleep: { try await Task.sleep(for: $0) })
+            sleep: { try await Task.sleep(for: $0) },
+            confirmedViewers: .shared)
     }
 
     enum Failure: Error, Equatable {
@@ -144,7 +147,8 @@ struct ExternalViewerHandoff {
                     issue: () async throws -> ViewerTokenReply,
                     fetchStatus: @escaping @Sendable (_ tokenID: String) async throws -> ViewerTokenStatusReply,
                     onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
-                    onUsed: @escaping @MainActor @Sendable () -> Void = {}) async -> Failure? {
+                    onUsed: @escaping @MainActor @Sendable () -> Void = {},
+                    onCheckStarted: @MainActor (Task<Void, Never>) -> Void = { _ in }) async -> Failure? {
         // 中継には 127.0.0.1 の口が要る。動いていなければリモートの鍵も出してもらわない。
         if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
         let reply: ViewerTokenReply
@@ -215,7 +219,8 @@ struct ExternalViewerHandoff {
             direction: manifest.direction,
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
         return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
-                    settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed)
+                    settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed,
+                    onCheckStarted: onCheckStarted)
     }
 
     /// G60 v3: 待ってから 1 度だけ確かめる。待ちが取り消されたら確かめない（`.unknown`）。
@@ -237,7 +242,8 @@ struct ExternalViewerHandoff {
                       bookID: Int, settings: ViewerSettings, viewer: ReferenceViewer,
                       readUse: (@Sendable () async -> UseOutcome)?,
                       onNotUsed: @escaping @MainActor @Sendable (String) -> Void,
-                      onUsed: @escaping @MainActor @Sendable () -> Void) -> Failure? {
+                      onUsed: @escaping @MainActor @Sendable () -> Void,
+                      onCheckStarted: @MainActor (Task<Void, Never>) -> Void = { _ in }) -> Failure? {
         let url: URL
         do {
             url = try references.write(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
@@ -250,31 +256,55 @@ struct ExternalViewerHandoff {
         }
         // 確かめる手段が無い（v2 のサーバ）なら確認しない。
         if let readUse {
-            startUseCheck(delay: settings.viewerUseCheckDelay, viewer: viewer, read: readUse,
-                          onNotUsed: onNotUsed, onUsed: onUsed)
+            onCheckStarted(startUseCheck(delay: settings.viewerUseCheckDelay, viewer: viewer, read: readUse,
+                                         onNotUsed: onNotUsed, onUsed: onUsed))
         }
         return nil
     }
 
     /// G60 v3: 渡してから一定時間後に一度だけ確かめる（spec §5.7）。使われていなければ呼び出し側に知らせ、
     /// 従来の開き方のボタンを出してもらう。トークンは取り消さない（ビューアが遅れて読み始めても動くように）。
-    /// 使われていたら `onUsed`（前の渡しで出した「読み込んでいません」を呼び出し側が消す）。
-    /// 確認は 1 回だけで、お知らせを消すために照会を繰り返さない（後の渡しが無ければ、お知らせは手で閉じるまで残る）。
+    /// 使われていたら、渡した先のアプリを「確認できた対応ビューア」として記録し（鍵はアプリの bundle id・版は名乗り）、
+    /// `onUsed`（前の渡しで出した「読み込んでいません」を呼び出し側が消す）。
+    /// 確認は 1 回だけで、お知らせを消すために照会を繰り返さない。返す Task は呼び出し側が閉じるときに取り消せる。
     private func startUseCheck(delay: Duration, viewer: ReferenceViewer,
                                read: @escaping @Sendable () async -> UseOutcome,
                                onNotUsed: @escaping @MainActor @Sendable (String) -> Void,
-                               onUsed: @escaping @MainActor @Sendable () -> Void) {
+                               onUsed: @escaping @MainActor @Sendable () -> Void) -> Task<Void, Never> {
         let sleep = self.sleep
+        let confirmedViewers = self.confirmedViewers
         let name = viewer.declaration.displayName
-        Task { @MainActor in
+        let appBundleIdentifier = viewer.declaration.bundleIdentifier
+        return Task { @MainActor in
             switch await Self.checkUse(after: delay, sleep: sleep, read: read) {
             case .notUsed:
                 onNotUsed(name)
-            case .used:
+            case .used(let firstUsedAt, let identification):
+                confirmedViewers.record(appBundleIdentifier: appBundleIdentifier, viewer: identification, at: firstUsedAt)
                 onUsed()
             case .unknown:
                 break
             }
+        }
+    }
+}
+
+/// G60 v3: 設定の「外部ビューア」の節に出す、対応の状態の 1 行（spec §5.7）。行を出さないときは nil。
+enum ExternalViewerSupportStatusText {
+    static func line(_ status: ExternalViewerSupportStatus) -> String? {
+        switch status {
+        case .none:
+            return nil
+        case .unsupported(let name):
+            return String(localized: "\(name)：未対応（今までどおり開きます）")
+        case .declared(let name):
+            return String(localized: "\(name)：対応を宣言（未確認）")
+        case .confirmed(let name, let at, let version):
+            let date = at.formatted(date: .abbreviated, time: .shortened)
+            if let version {
+                return String(localized: "\(name)：対応を確認（\(date)・\(version)）")
+            }
+            return String(localized: "\(name)：対応を確認（\(date)）")
         }
     }
 }

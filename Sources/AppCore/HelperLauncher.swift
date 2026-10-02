@@ -99,13 +99,6 @@ public enum HelperLauncher {
         return ReferenceViewer.resolve(appURL: URL(fileURLWithPath: path, isDirectory: true))
     }
 
-    /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く（ローカルの本用。
-    /// 種類はパスから決める）。
-    @MainActor
-    public static func openReference(_ referenceURL: URL, bookPath: String, settings: ViewerSettings) -> AppError? {
-        openReference(referenceURL, category: referenceCategory(bookPath: bookPath), settings: settings)
-    }
-
     /// G60 v3: 参照ファイルを、**対応を確かめたビューア**（`ReferenceViewer.appURL`）で開く。設定を引き直さない
     /// （確認と起動の間に設定が変わっても、確かめたアプリに渡す）。実在の見張りは残す。
     @MainActor
@@ -117,33 +110,6 @@ public enum HelperLauncher {
             )
         }
         launch(referenceURL, viewer.appURL)
-        return nil
-    }
-
-    /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く。
-    /// ビューアの決め方は `open(book:settings:)` と同じ（種類ごとの指定 → 既定）。ただし EPUB
-    /// （リモートの画像の EPUB）は**アーカイブの指定**で引く。参照ファイルはページで読むので、
-    /// 文字の EPUB 用に選んだアプリではなく画像の本のアプリに渡す。
-    /// 種類は `referenceCategory(bookPath:)`／`referenceCategory(manifestFormat:)` で決めたもの。
-    /// 文言は `open(book:settings:)` と同じキーを使う（新しい訳は要らない）。
-    @MainActor
-    public static func openReference(_ referenceURL: URL, category: BookCategory, settings: ViewerSettings) -> AppError? {
-        let category = referenceViewerCategory(category)
-        let resolved = settings.resolvedViewerPath(for: category)
-        let shownName = referenceURL.lastPathComponent
-        guard let viewerPath = resolved else {
-            return .launchFailed(
-                path: shownName,
-                reason: L10n.format("%@ 用の外部ビューアが未設定です。設定 (⌘,) で選択してください。", category.displayName)
-            )
-        }
-        guard FileManager.default.fileExists(atPath: viewerPath) else {
-            return .launchFailed(
-                path: shownName,
-                reason: L10n.format("外部ビューアが見つかりません: %@\n設定 (⌘,) で再選択してください。", viewerPath)
-            )
-        }
-        launch(referenceURL, URL(fileURLWithPath: viewerPath))
         return nil
     }
 }

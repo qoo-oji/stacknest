@@ -38,6 +38,8 @@ struct SettingsView: View {
 
     /// ローカルアクセス Toggle / 再生成後の body 再評価用トークン。
     @State private var localControlRefresh = UUID()
+    /// G60 v3: 「外部ビューア」の節の状態の行（`refreshViewerSupportLine` が入れる。nil なら出さない）。
+    @State private var viewerSupportLine: String?
 
     /// 各 row の左端ラベル幅 (px)。caption の indent もこの値+spacing で揃える。
     /// 「指定ライブラリ」(7文字) 等の最長ラベルを 1 行に収める想定で 110pt。
@@ -270,6 +272,19 @@ struct SettingsView: View {
                     Text("対応した外部ビューアが、本のページを StackNest から受け取って表示し、読み進めたページを StackNest に書き戻します。画像を外部ビューアで開く設定のときに効き、リモートの本も外部ビューアで開きます。ON のあいだは、ローカルコントロールが OFF でも、この Mac の中だけの受け口（127.0.0.1）が本専用のトークンだけを受け付けます。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        // G60 v3: 状態の行は @State に持ち、表示時・ビューアの変更・確認の成立で計算し直す
+                        // （body の中で plist を読まない。確認は設定を開いたまま成立しうる）。
+                        .onAppear { refreshViewerSupportLine() }
+                        .onChange(of: settings.resolvedViewerPath(for: .archive)) { _, _ in refreshViewerSupportLine() }
+                        .onReceive(NotificationCenter.default.publisher(for: .confirmedViewersDidChange)) { _ in
+                            refreshViewerSupportLine()
+                        }
+                    // G60 v3: 画像の本の外部ビューア（アーカイブの指定→既定）が対応しているか（spec §5.7）。
+                    if let line = viewerSupportLine {
+                        Text(line)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("リモートキャッシュ") {
@@ -365,6 +380,12 @@ struct SettingsView: View {
     }
 
     // MARK: - Row builders
+
+    /// G60 v3: 画像の本の外部ビューアの対応の状態を計算し直す（Info.plist と確認の記録を読む）。
+    private func refreshViewerSupportLine() {
+        viewerSupportLine = ExternalViewerSupportStatusText.line(
+            ExternalViewerSupportStatus.make(appPath: settings.resolvedViewerPath(for: .archive), confirmed: .shared))
+    }
 
     @ViewBuilder
     private func viewerSettingsRow(

@@ -327,7 +327,7 @@ struct HelperLauncherTests {
     }
 
     @Test @MainActor
-    func openReferenceUsesTheBooksViewer() throws {
+    func referenceViewerForALocalBookIsTheBooksViewer() throws {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
@@ -337,11 +337,14 @@ struct HelperLauncherTests {
         HelperLauncher.launch = recordingLaunch(into: calls)
         let viewer = try makeFakeViewer("ArchiveViewer")
         defer { try? FileManager.default.removeItem(at: viewer) }
+        try declareReferenceSupport(viewer)
         let settings = ViewerSettings(defaults: suite)
         settings.categoryViewerPaths[.archive] = viewer.path
         let ref = URL(fileURLWithPath: "/tmp/本の題名.stacknestbook")
 
-        #expect(HelperLauncher.openReference(ref, bookPath: "/lib/a.zip", settings: settings) == nil)
+        let resolved = try #require(HelperLauncher.referenceViewer(bookPath: "/lib/a.zip", settings: settings))
+        #expect(resolved.appURL.path == viewer.path)
+        #expect(HelperLauncher.openReference(ref, viewer: resolved) == nil)
         #expect(calls.entries.count == 1)
         #expect(calls.entries.first?.fileURL == ref)
         #expect(calls.entries.first?.viewerURL.path == viewer.path)
@@ -349,73 +352,112 @@ struct HelperLauncherTests {
 
     /// リモートの画像の EPUB は「画像の本」の外部ビューア（アーカイブの指定）で開く。EPUB 用の指定は使わない。
     @Test @MainActor
-    func openReferenceForImageEPUBUsesTheArchiveViewer() throws {
+    func referenceViewerForImageEPUBIsTheArchiveViewer() throws {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
-        let calls = RecordedCalls()
-        let originalLaunch = HelperLauncher.launch
-        defer { HelperLauncher.launch = originalLaunch }
-        HelperLauncher.launch = recordingLaunch(into: calls)
         let archiveViewer = try makeFakeViewer("ArchiveViewer")
         let epubViewer = try makeFakeViewer("EPUBViewer")
         defer {
             try? FileManager.default.removeItem(at: archiveViewer)
             try? FileManager.default.removeItem(at: epubViewer)
         }
+        try declareReferenceSupport(archiveViewer)
+        try declareReferenceSupport(epubViewer)
         let settings = ViewerSettings(defaults: suite)
         settings.categoryViewerPaths[.archive] = archiveViewer.path
         settings.epubViewerAppPath = epubViewer.path
 
-        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
-                                             bookPath: "comic.epub", settings: settings) == nil)
-        #expect(calls.entries.first?.viewerURL.path == archiveViewer.path)
+        #expect(HelperLauncher.referenceViewer(bookPath: "comic.epub", settings: settings)?.appURL.path
+                == archiveViewer.path)
     }
 
     @Test @MainActor
-    func openReferenceWithoutAViewerFails() {
+    func referenceViewerWithoutAViewerIsNil() {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
-        let calls = RecordedCalls()
-        let originalLaunch = HelperLauncher.launch
-        defer { HelperLauncher.launch = originalLaunch }
-        HelperLauncher.launch = recordingLaunch(into: calls)
         let settings = ViewerSettings(defaults: suite)
 
-        let err = HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
-                                               bookPath: "/lib/a.zip", settings: settings)
-        guard case let .launchFailed(_, reason)? = err else {
-            Issue.record("Expected .launchFailed, got \(String(describing: err))"); return
-        }
-        #expect(reason.contains("アーカイブ"))
-        #expect(calls.entries.isEmpty)
+        #expect(HelperLauncher.referenceViewer(bookPath: "/lib/a.zip", settings: settings) == nil)
     }
 
     /// PDF は .text に分類されるが、参照ファイルはアーカイブの外部ビューアで開く（テキストの指定は使わない）。
     @Test @MainActor
-    func openReferenceForPDFUsesTheArchiveViewer() throws {
+    func referenceViewerForPDFIsTheArchiveViewer() throws {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
-        let calls = RecordedCalls()
-        let originalLaunch = HelperLauncher.launch
-        defer { HelperLauncher.launch = originalLaunch }
-        HelperLauncher.launch = recordingLaunch(into: calls)
         let archiveViewer = try makeFakeViewer("ArchiveViewer")
         let textViewer = try makeFakeViewer("TextViewer")
         defer {
             try? FileManager.default.removeItem(at: archiveViewer)
             try? FileManager.default.removeItem(at: textViewer)
         }
+        try declareReferenceSupport(archiveViewer)
+        try declareReferenceSupport(textViewer)
         let settings = ViewerSettings(defaults: suite)
         settings.categoryViewerPaths[.archive] = archiveViewer.path
         settings.categoryViewerPaths[.text] = textViewer.path
 
-        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
-                                             bookPath: "/lib/a.pdf", settings: settings) == nil)
-        #expect(calls.entries.first?.viewerURL.path == archiveViewer.path)
+        #expect(HelperLauncher.referenceViewer(bookPath: "/lib/a.pdf", settings: settings)?.appURL.path
+                == archiveViewer.path)
     }
+
+    /// G60 v3: 起動は確かめたビューア（`viewer.appURL`）そのもの。設定を引き直さない（設定が変わっても確かめたアプリへ）。
+    @Test @MainActor
+    func openReferenceWithAViewerLaunchesThatViewerNotTheSettings() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let checked = try makeFakeViewer("CheckedViewer")
+        let other = try makeFakeViewer("OtherViewer")
+        defer {
+            try? FileManager.default.removeItem(at: checked)
+            try? FileManager.default.removeItem(at: other)
+        }
+        try declareReferenceSupport(checked)
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = checked.path
+        let viewer = try #require(HelperLauncher.referenceViewer(bookPath: "/lib/a.zip", settings: settings))
+        settings.categoryViewerPaths[.archive] = other.path  // 確認の後に設定が変わった
+        let ref = URL(fileURLWithPath: "/tmp/x.stacknestbook")
+
+        #expect(HelperLauncher.openReference(ref, viewer: viewer) == nil)
+        #expect(calls.entries.count == 1)
+        #expect(calls.entries.first?.fileURL == ref)
+        #expect(calls.entries.first?.viewerURL.path == checked.path)
+    }
+
+    /// 確かめた後でビューアが消えていたら起動しない（理由付きで失敗する）。
+    @Test @MainActor
+    func openReferenceWithAVanishedViewerFails() throws {
+        let suiteName = "test-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let calls = RecordedCalls()
+        let originalLaunch = HelperLauncher.launch
+        defer { HelperLauncher.launch = originalLaunch }
+        HelperLauncher.launch = recordingLaunch(into: calls)
+        let viewer = try makeFakeViewer("GoneViewer")
+        try declareReferenceSupport(viewer)
+        let settings = ViewerSettings(defaults: suite)
+        settings.categoryViewerPaths[.archive] = viewer.path
+        let resolved = try #require(HelperLauncher.referenceViewer(bookPath: "/lib/a.zip", settings: settings))
+        try FileManager.default.removeItem(at: viewer)
+
+        let err = HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"), viewer: resolved)
+        guard case let .launchFailed(_, reason)? = err else {
+            Issue.record("Expected .launchFailed, got \(String(describing: err))"); return
+        }
+        #expect(reason.contains(viewer.path))
+        #expect(calls.entries.isEmpty)
+    }
+
 
     // MARK: - G60 最終レビュー M-1: リモートの本は manifest の format で種類を決める
 
@@ -435,32 +477,27 @@ struct HelperLauncherTests {
     /// フォルダとアーカイブに別のビューアを設定しているとき、種類 `.folder` の参照ファイルはフォルダのビューアで開く
     /// （リモートのフォルダの本は filename に拡張子が無く、パスから決めるとアーカイブに倒れていた）。
     @Test @MainActor
-    func openReferenceWithFolderCategoryUsesTheFolderViewer() throws {
+    func referenceViewerWithFolderCategoryIsTheFolderViewer() throws {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
-        let calls = RecordedCalls()
-        let originalLaunch = HelperLauncher.launch
-        defer { HelperLauncher.launch = originalLaunch }
-        HelperLauncher.launch = recordingLaunch(into: calls)
         let archiveViewer = try makeFakeViewer("ArchiveViewer")
         let folderViewer = try makeFakeViewer("FolderViewer")
         defer {
             try? FileManager.default.removeItem(at: archiveViewer)
             try? FileManager.default.removeItem(at: folderViewer)
         }
+        try declareReferenceSupport(archiveViewer)
+        try declareReferenceSupport(folderViewer)
         let settings = ViewerSettings(defaults: suite)
         settings.categoryViewerPaths[.archive] = archiveViewer.path
         settings.categoryViewerPaths[.folder] = folderViewer.path
         let category = HelperLauncher.referenceCategory(manifestFormat: "folder")
-        try declareReferenceSupport(folderViewer)
 
-        #expect(HelperLauncher.referenceViewer(category: category, settings: settings) != nil)
-        #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
-                                             category: category, settings: settings) == nil)
-        #expect(calls.entries.count == 1)
-        #expect(calls.entries.first?.viewerURL.path == folderViewer.path)
+        #expect(HelperLauncher.referenceViewer(category: category, settings: settings)?.appURL.path
+                == folderViewer.path)
     }
+
 
     /// 種類で引くとき、そのビューアが未設定・実在しない・対応を宣言していなければ nil。
     @Test @MainActor

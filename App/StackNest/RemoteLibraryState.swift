@@ -180,6 +180,14 @@ final class RemoteLibraryState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
+    /// G60 v3: 渡した後の使用の確認（待ち）。窓を閉じたら取り消す（直接つなぐ形で閉じた後に照会を投げない）。
+    @ObservationIgnored private var viewerUseChecks: [Task<Void, Never>] = []
+
+    /// G60 v3: 待っている使用の確認をすべて取り消す（窓・画面を閉じるとき）。
+    func cancelViewerUseChecks() {
+        viewerUseChecks.forEach { $0.cancel() }
+        viewerUseChecks.removeAll()
+    }
     /// G60 テスト用: ダウンロード済みコピーの読書位置の問い合わせ（nil なら本物の `OfflineStore`）。
     @ObservationIgnored var offlineLastPageOverride: ((Int) -> Int?)?
     /// G60 テスト用: 内蔵ビューアで開く本体の代わりに呼ぶ（nil なら本物）。
@@ -2208,7 +2216,8 @@ final class RemoteLibraryState {
                 self?.presentViewerDidNotLoad(book: book, resumeDirect: resumeDirect, manifest: manifest, viewerName: name)
             },
             // 後の確認で使われたと分かったら、前の渡しで出した「読み込んでいません」を消す（この枠はそれ専用）。
-            onUsed: { [weak self] in self?.viewerNotice.dismiss() })
+            onUsed: { [weak self] in self?.viewerNotice.dismiss() },
+            onCheckStarted: { [weak self] task in self?.viewerUseChecks.append(task) })
         if failure == .libraryLocked {
             // 施錠ゲートの 403。他のリモート呼び出しと同じく失効として拾い（解錠フォームへ戻す）、
             // 何も開かない（内蔵へ倒しても同じ拒否に当たるだけ）。
@@ -2239,7 +2248,8 @@ final class RemoteLibraryState {
             kind: .warning,
             text: String(localized: "\(viewerName) が本を読み込んでいません"),
             action: NoticeAction(title: String(localized: "従来の開き方で開く")) { [weak self] in
-                self?.openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
+                // 押されるのは手渡しの何時間も後でありうるので、手渡しの時の manifest は使わず取り直す。
+                self?.openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: nil)
             }))
     }
 

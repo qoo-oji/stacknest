@@ -63,6 +63,46 @@
         }
       }
     },
+    "%@：対応を宣言（未確認）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: Declares support (not yet confirmed)"
+          }
+        }
+      }
+    },
+    "%@：対応を確認（%@・%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: Support confirmed (%@, version %@)"
+          }
+        }
+      }
+    },
+    "%@：対応を確認（%@）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: Support confirmed (%@)"
+          }
+        }
+      }
+    },
+    "%@：未対応（今までどおり開きます）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: Not supported (opens the usual way)"
+          }
+        }
+      }
+    },
     "%lld / %lld ページ" : {
       "localizations" : {
         "en" : {

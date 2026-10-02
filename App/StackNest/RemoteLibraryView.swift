@@ -336,6 +336,8 @@ struct RemoteLibraryView: View {
             await state.runLiveSync()
         }
         .onAppear { perInput = String(state.per) }
+        // G60 v3: 閉じたら、待っている外部ビューアの使用の確認を取り消す（以後は照会を投げない）。
+        .onDisappear { state.cancelViewerUseChecks() }
         .onChange(of: state.per) { _, newValue in
             // setPer 経由などで per が変わったら TextField を同期。
             let synced = String(newValue)
