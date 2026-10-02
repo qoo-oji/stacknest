@@ -2175,9 +2175,9 @@ final class RemoteLibraryState {
             filename: book.filename, manifest: manifest,
             useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
             syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer),
-            // 使える外部ビューアが無いなら、トークンを出さずに黙って内蔵で開く。
+            // 使える外部ビューア（StackNestViewerSupport を宣言したもの）が無いなら、トークンを出さずに黙って内蔵で開く。
             // 種類は manifest の format から決める（フォルダの本の filename には拡張子が無い）。
-            HelperLauncher.hasUsableReferenceViewer(
+            let viewer = HelperLauncher.referenceViewer(
                 category: HelperLauncher.referenceCategory(manifestFormat: manifest.format),
                 settings: viewerSettings) else {
             openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
@@ -2198,7 +2198,7 @@ final class RemoteLibraryState {
         let resumePage = BookReference.clampedStartPage(
             resolveResumePage(server: book.lastPage, offline: offlineLastPage), pageCount: manifest.pageCount)
         let failure = await viewerHandoff.openRemote(
-            book: book, manifest: manifest, serverID: serverID, serverBase: client.baseURL,
+            book: book, manifest: manifest, viewer: viewer, serverID: serverID, serverBase: client.baseURL,
             libraryUUID: libraryUUID, startPage: resumePage, settings: viewerSettings,
             issue: { try await client.viewerToken(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken) })
         if failure == .libraryLocked {

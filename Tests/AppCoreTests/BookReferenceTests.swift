@@ -15,10 +15,20 @@ struct BookReferenceTests {
 
     private func sample(title: String = "本の題名",
                         expiresAt: Date = Date(timeIntervalSince1970: 1_790_000_000)) -> BookReference {
-        BookReference(title: title,
+        BookReference(version: 1, title: title,
                       book: "http://192.168.1.10:51234/api/v1/libraries/LIB-1/books/42",
                       token: "SECRET-TOKEN", expiresAt: expiresAt,
                       pageCount: 180, direction: "rtl", startPage: 41)
+    }
+
+    /// G60 v3: 版はビューアの宣言から選んだ値をそのまま書く。
+    @Test func writesTheChosenVersion() throws {
+        let ref = BookReference(version: 2, title: "本の題名", book: "http://h:1/api/v1/libraries/L/books/1",
+                                token: "T", expiresAt: Date(timeIntervalSince1970: 1_790_000_000),
+                                pageCount: 1, direction: "rtl", startPage: 0)
+        let obj = try #require(try JSONSerialization.jsonObject(with: ref.encoded()) as? [String: Any])
+        #expect(obj["version"] as? Int == 2)
+        #expect(ref.version == 2)
     }
 
     @Test func encodesTheVersionOneFields() throws {

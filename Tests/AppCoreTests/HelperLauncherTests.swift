@@ -314,11 +314,14 @@ struct HelperLauncherTests {
         return url
     }
 
-    /// G60 v2: 偽アプリに「参照ファイルの型を宣言した Info.plist」を足す。
+    /// G60 v3: 偽アプリに StackNest への対応の宣言（`StackNestViewerSupport`）を書く。
     private func declareReferenceSupport(_ app: URL) throws {
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        let plist: [String: Any] = ["CFBundleDocumentTypes": [["LSItemContentTypes": [BookReference.typeIdentifier]]]]
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.example.viewer",
+            ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: [1]],
+        ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: contents.appendingPathComponent("Info.plist"))
     }
@@ -452,29 +455,29 @@ struct HelperLauncherTests {
         let category = HelperLauncher.referenceCategory(manifestFormat: "folder")
         try declareReferenceSupport(folderViewer)
 
-        #expect(HelperLauncher.hasUsableReferenceViewer(category: category, settings: settings))
+        #expect(HelperLauncher.referenceViewer(category: category, settings: settings) != nil)
         #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
                                              category: category, settings: settings) == nil)
         #expect(calls.entries.count == 1)
         #expect(calls.entries.first?.viewerURL.path == folderViewer.path)
     }
 
-    /// 種類で引くとき、そのビューアが未設定または実在しなければ「使えない」。
+    /// 種類で引くとき、そのビューアが未設定・実在しない・対応を宣言していなければ nil。
     @Test @MainActor
-    func hasUsableReferenceViewerByCategory() throws {
+    func referenceViewerByCategory() throws {
         let suiteName = "test-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: suiteName)!
         defer { suite.removePersistentDomain(forName: suiteName) }
         let settings = ViewerSettings(defaults: suite)
-        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "何も設定していない")
+        #expect(HelperLauncher.referenceViewer(category: .folder, settings: settings) == nil, "何も設定していない")
         settings.categoryViewerPaths[.folder] = FileManager.default.temporaryDirectory
             .appendingPathComponent("Missing-\(UUID().uuidString).app").path
-        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "実在しない")
+        #expect(HelperLauncher.referenceViewer(category: .folder, settings: settings) == nil, "実在しない")
         let folderViewer = try makeFakeViewer("FolderViewer")
         defer { try? FileManager.default.removeItem(at: folderViewer) }
         settings.categoryViewerPaths[.folder] = folderViewer.path
-        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "実在するが対応の宣言が無い")
+        #expect(HelperLauncher.referenceViewer(category: .folder, settings: settings) == nil, "実在するが対応の宣言が無い")
         try declareReferenceSupport(folderViewer)
-        #expect(HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings))
+        #expect(HelperLauncher.referenceViewer(category: .folder, settings: settings)?.formatVersion == 1)
     }
 }

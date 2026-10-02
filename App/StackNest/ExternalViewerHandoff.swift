@@ -65,7 +65,8 @@ struct ExternalViewerHandoff {
 
     /// ローカルの書庫の本。127.0.0.1 の口で使えるトークンを手元で出す（HTTP を通さない・spec §5.2）。
     /// グラントに結び付けない（`issuedByGrantID` は nil）。本人の Mac の中だけの口なので。
-    func openLocal(book: BookRow, libraryUUID: String, lockCredential: () -> String?, verifiedLockHash: () -> String?,
+    func openLocal(book: BookRow, libraryUUID: String, viewer: ReferenceViewer,
+                   lockCredential: () -> String?, verifiedLockHash: () -> String?,
                    startPage: Int,
                    direction: PageDirection, settings: ViewerSettings) async -> Failure? {
         guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
@@ -88,6 +89,7 @@ struct ExternalViewerHandoff {
         // その場合は開き直せば直る＝許容）。
         guard let base = URL(string: "http://127.0.0.1:\(localPort())/") else { return .referenceNotWritten }
         let reference = BookReference(
+            version: viewer.formatVersion,
             title: book.title,
             book: BookReference.bookURL(serverBase: base, libraryUUID: libraryUUID, bookID: book.id),
             token: issued.token,
@@ -102,8 +104,8 @@ struct ExternalViewerHandoff {
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
     /// 基点は、このクライアントがサーバへ繋いでいる URL（ビューアは同じ Mac で動くので同じ道で届く）。
     /// `startPage` は呼び出し側が解決した続きのページ（内蔵と同じ `resolveResumePage`）。ここで範囲に収める。
-    func openRemote(book: BookListItemDTO, manifest: ManifestDTO, serverID: UUID, serverBase: URL,
-                    libraryUUID: String, startPage: Int, settings: ViewerSettings,
+    func openRemote(book: BookListItemDTO, manifest: ManifestDTO, viewer: ReferenceViewer, serverID: UUID,
+                    serverBase: URL, libraryUUID: String, startPage: Int, settings: ViewerSettings,
                     issue: () async throws -> ViewerTokenReply) async -> Failure? {
         let reply: ViewerTokenReply
         do {
@@ -119,6 +121,7 @@ struct ExternalViewerHandoff {
             return .tokenUnavailable
         }
         let reference = BookReference(
+            version: viewer.formatVersion,
             title: book.title,
             book: BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id),
             token: reply.token,

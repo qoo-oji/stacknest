@@ -1409,20 +1409,26 @@ final class AppState {
 
     /// G60: 参照ファイルで渡す本か（1 冊ずつ判定する。複数選択に動画などが混ざってもよい）。
     private func opensByReference(_ book: BookRow) -> Bool {
-        ExternalViewerSyncRouting.localOpensByReference(
+        referenceViewer(for: book) != nil
+    }
+
+    /// G60 v3: 参照ファイルを渡す外部ビューア。渡さない本・未対応のアプリなら nil。
+    /// ビューアが未設定・実在しない・`StackNestViewerSupport` が無いなら、トークンを出さずに従来の開き方
+    /// （未設定ならその失敗を報告する）へ。
+    private func referenceViewer(for book: BookRow) -> ReferenceViewer? {
+        guard ExternalViewerSyncRouting.localOpensByReference(
             path: book.path ?? "",
             useBuiltInImageViewer: viewerSettings.useBuiltInImageViewer,
-            syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer)
-            // ビューアが未設定・実在しないなら、トークンを出さずに従来の開き方（その失敗を報告する）へ。
-            && HelperLauncher.hasUsableReferenceViewer(bookPath: book.path ?? "", settings: viewerSettings)
+            syncEnabled: viewerSettings.syncsReadingPositionWithExternalViewer) else { return nil }
+        return HelperLauncher.referenceViewer(bookPath: book.path ?? "", settings: viewerSettings)
     }
 
     /// G60: 画像の本は参照ファイルで、それ以外はファイルで、順に外部ビューアへ渡す。
     /// 参照ファイルで渡せなかった本はファイルで開き、理由を書庫の窓のお知らせ（`watchNotice` を共用）に出す。
     func openInExternalViewerSyncing(_ books: [BookRow]) async {
         for book in books {
-            if opensByReference(book) {
-                if let failure = await handOffToExternalViewer(book) {
+            if let viewer = referenceViewer(for: book) {
+                if let failure = await handOffToExternalViewer(book, viewer: viewer) {
                     if failure == .libraryLocked {
                         // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
                         // 解錠シートの出る状態にして、解錠後にもう一度開いてもらう。
@@ -1447,7 +1453,7 @@ final class AppState {
     }
 
     /// G60: 1 冊を参照ファイルで渡す。開く位置は保存済みの読書位置。
-    private func handOffToExternalViewer(_ book: BookRow) async -> ExternalViewerHandoff.Failure? {
+    private func handOffToExternalViewer(_ book: BookRow, viewer: ReferenceViewer) async -> ExternalViewerHandoff.Failure? {
         guard let settings = librarySettings else { return .tokenUnavailable }
         let startPage = (try? database?.loadViewerState(bookID: book.id))?.lastPage ?? 0
         // ロックの世代は、127.0.0.1 の口が照合に使うのと同じ DB の値（`ServedLibrary.currentLockCredential()`）
@@ -1457,6 +1463,7 @@ final class AppState {
         return await viewerHandoff.openLocal(
             book: book,
             libraryUUID: settings.ensureLibraryUUID(),
+            viewer: viewer,
             lockCredential: lockCredential,
             verifiedLockHash: { [weak self] in self?.verifiedHash },
             startPage: startPage,

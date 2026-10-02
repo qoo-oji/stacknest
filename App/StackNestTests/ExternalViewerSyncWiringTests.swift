@@ -74,18 +74,30 @@ struct ExternalViewerSyncWiringTests {
         }
     }
 
-    /// G60 v2: 参照ファイルの型を宣言した Info.plist を偽アプリに足す（宣言の無いアプリには参照ファイルを渡さない）。
-    static func declareReferenceSupport(_ app: URL) throws {
+    /// G60 v3: 偽アプリの Info.plist に、StackNest への対応の宣言（`StackNestViewerSupport`）を書く。
+    static func declareReferenceSupport(_ app: URL, versions: [Int] = [1]) throws {
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        let plist: [String: Any] = ["CFBundleDocumentTypes": [["LSItemContentTypes": [BookReference.typeIdentifier]]]]
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.example.fakeviewer",
+            "CFBundleName": "FakeViewer",
+            ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: versions],
+        ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: contents.appendingPathComponent("Info.plist"))
     }
 
-    /// 参照ファイルの型を宣言していない（zip だけの）Info.plist に差し替える。
-    static func writeUndeclaredInfoPlist(_ app: URL) throws {
-        let plist: [String: Any] = ["CFBundleDocumentTypes": [["CFBundleTypeExtensions": ["zip", "cbz"]]]]
+    /// G60 v3: 参照ファイルの型（UTType・拡張子）だけを宣言し、`StackNestViewerSupport` を持たない Info.plist
+    /// （v2 で対応とみなしていた形）に差し替える。v3 では未対応。
+    static func writeTypeOnlyInfoPlist(_ app: URL) throws {
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.example.fakeviewer",
+            "CFBundleName": "FakeViewer",
+            "CFBundleDocumentTypes": [
+                ["LSItemContentTypes": [BookReference.typeIdentifier]],
+                ["CFBundleTypeExtensions": [BookReference.fileExtension, "zip"]],
+            ],
+        ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: app.appendingPathComponent("Contents/Info.plist"))
     }
@@ -179,6 +191,7 @@ struct ExternalViewerSyncWiringTests {
         #expect(ref.title == "本の題名")
         #expect(ref.pageCount == 3)
         #expect(ref.startPage == 2)
+        #expect(ref.version == 1, "宣言 [1] との共通の最大")
         guard case .valid(let record) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
             Issue.record("参照ファイルのトークンが 127.0.0.1 の口で有効でない"); return
         }
@@ -267,6 +280,7 @@ struct ExternalViewerSyncWiringTests {
 
         let failure = await h.openLocal(
             book: row, libraryUUID: try #require(state.librarySettings?.ensureLibraryUUID()),
+            viewer: try #require(HelperLauncher.referenceViewer(bookPath: row.path ?? "", settings: env.settings)),
             lockCredential: { "H2" }, verifiedLockHash: { "H1" }, startPage: 0,
             direction: .rightToLeft, settings: env.settings)
         #expect(failure == .libraryLocked)
@@ -297,11 +311,11 @@ struct ExternalViewerSyncWiringTests {
     }
 
 
-    /// G60 v2: 実在するが参照ファイルの型を宣言していないビューアには、トークンも参照ファイルもお知らせも出さず、
-    /// G60 前と同じにファイルそのものを渡す。
-    @Test func localViewerWithoutDeclarationGetsTheFileSilently() async throws {
+    /// G60 v3: 参照ファイルの型だけを宣言し `StackNestViewerSupport` を持たないビューアには、トークンも参照ファイルも
+    /// お知らせも出さず、G60 前と同じにファイルそのものを渡す（v2 ではこの形を対応とみなしていた）。
+    @Test func localTypeOnlyViewerGetsTheFileSilently() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
-        try Self.writeUndeclaredInfoPlist(env.viewerApp)
+        try Self.writeTypeOnlyInfoPlist(env.viewerApp)
         let launches = Launches()
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
@@ -319,6 +333,44 @@ struct ExternalViewerSyncWiringTests {
         #expect(referenceFiles(env).isEmpty)
         #expect(state.watchNotice.notice == nil)
         #expect(state.error == nil)
+    }
+
+    /// G60 v3: 将来の版を併せて宣言していても、StackNest が書ける最大（1）で書く。
+    @Test func localReferenceUsesTheNegotiatedVersion() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        try Self.declareReferenceSupport(env.viewerApp, versions: [1, 9])
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (state, row, _) = try makeLocalState(env, handoff: handoff(env))
+
+        state.openBooks([row])
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(ref.version == 1)
+    }
+
+    /// G60 v3: 共通の版が無い（[9] だけを宣言）なら未対応。ファイルのまま黙って渡す。
+    @Test func localViewerWithNoCommonVersionGetsTheFile() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        try Self.declareReferenceSupport(env.viewerApp, versions: [9])
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (state, row, dir) = try makeLocalState(env, handoff: handoff(env))
+
+        state.openBooks([row])
+        try await waitUntil { !launches.entries.isEmpty }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(launches.entries.count == 1)
+        #expect(launches.entries.first?.file.path == dir.path)
+        #expect(env.tokens.allRecords().isEmpty)
+        #expect(referenceFiles(env).isEmpty)
+        #expect(state.watchNotice.notice == nil)
     }
 
     // MARK: - リモート
@@ -535,10 +587,10 @@ struct ExternalViewerSyncWiringTests {
         #expect(s.errorText == nil)
     }
 
-    /// G60 v2: 宣言の無い外部ビューアには、トークンを要求せずに黙って内蔵で開く。
-    @Test func remoteViewerWithoutDeclarationSkipsTheTokenRequest() async throws {
+    /// G60 v3: 参照ファイルの型だけを宣言した外部ビューアには、トークンを要求せずに黙って内蔵で開く。
+    @Test func remoteTypeOnlyViewerSkipsTheTokenRequest() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
-        try Self.writeUndeclaredInfoPlist(env.viewerApp)
+        try Self.writeTypeOnlyInfoPlist(env.viewerApp)
         let launches = Launches()
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }

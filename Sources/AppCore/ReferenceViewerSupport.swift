@@ -1,34 +1,94 @@
 // SPDX-License-Identifier: MIT
 import Foundation
 
-/// G60 v2: 外部ビューアのアプリが、参照ファイル（`.stacknestbook`）を開けると**宣言しているか**。
-/// StackNest は宣言したアプリにだけ参照ファイルを渡す（それ以外のアプリは従来どおりの開き方）。
+/// G60 v3: 外部ビューアのアプリが `Contents/Info.plist` に置く、StackNest への対応の宣言（spec §5.6）。
 ///
-/// `Contents/Info.plist` の `CFBundleDocumentTypes` に、次のどちらかを持つ項目があれば対応とみなす。
-/// - `LSItemContentTypes` に `BookReference.typeIdentifier`（UTType は大文字小文字を区別しない）
-/// - `CFBundleTypeExtensions` に `BookReference.fileExtension`（大文字小文字は区別しない）
+///     <key>StackNestViewerSupport</key>
+///     <dict>
+///       <key>referenceFormatVersions</key>
+///       <array><integer>1</integer></array>
+///     </dict>
 ///
-/// plist は `PropertyListSerialization` で直接読む（`Bundle(url:)` はキャッシュするので使わない。
-/// LaunchServices への登録にも頼らない）。plist が無い・読めない・形が違うときは「対応していない」。
-public func appDeclaresBookReferenceSupport(appURL: URL) -> Bool {
-    let plistURL = appURL.appendingPathComponent("Contents/Info.plist", isDirectory: false)
-    guard let data = try? Data(contentsOf: plistURL),
-          let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-            as? [String: Any],
-          let documentTypes = plist["CFBundleDocumentTypes"] as? [Any]
-    else { return false }
+/// 判定はこの専用のキーだけで行う。参照ファイルの型（UTType・拡張子）を開けるという宣言は使わない
+/// （`*` や `public.json` を開けると宣言しているだけのアプリを紛れ込ませないため。v2 の判定を置き換えた）。
+/// plist は `PropertyListSerialization` で毎回直接読む（`Bundle(url:)` はキャッシュするので使わない。
+/// LaunchServices の登録にも頼らない）。
+public struct ViewerSupportDeclaration: Sendable, Equatable {
+    public static let infoPlistKey = "StackNestViewerSupport"
+    public static let versionsKey = "referenceFormatVersions"
 
-    let wantedType = BookReference.typeIdentifier.lowercased()
-    let wantedExtension = BookReference.fileExtension.lowercased()
-    for case let entry as [String: Any] in documentTypes {
-        if let types = entry["LSItemContentTypes"] as? [Any],
-           types.contains(where: { ($0 as? String)?.lowercased() == wantedType }) {
-            return true
-        }
-        if let extensions = entry["CFBundleTypeExtensions"] as? [Any],
-           extensions.contains(where: { ($0 as? String)?.lowercased() == wantedExtension }) {
-            return true
-        }
+    /// `CFBundleIdentifier`（無ければ nil）。確認できた対応ビューアの記録の鍵に使う。
+    public let bundleIdentifier: String?
+    /// 画面に出す名前（`CFBundleDisplayName` → `CFBundleName` → `.app` を除いたファイル名）。
+    public let displayName: String
+    /// 宣言された版（正の整数だけ・宣言の順）。キーが無い・形が違うなら空。
+    public let referenceFormatVersions: [Int]
+
+    public init(bundleIdentifier: String?, displayName: String, referenceFormatVersions: [Int]) {
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = displayName
+        self.referenceFormatVersions = referenceFormatVersions
     }
-    return false
+
+    /// 参照ファイルに書く版。宣言と StackNest が書ける版（`BookReference.writableVersions`）の共通の最大。
+    /// 共通の版が無い（＝未対応）なら nil。
+    public var chosenFormatVersion: Int? {
+        Self.chooseVersion(declared: referenceFormatVersions, writable: BookReference.writableVersions)
+    }
+
+    /// 宣言された版と書ける版の共通の最大。共通が無ければ nil。
+    public static func chooseVersion(declared: [Int], writable: [Int]) -> Int? {
+        Set(declared).intersection(writable).max()
+    }
+
+    /// `appURL` の `Contents/Info.plist` を読む。plist が無い・読めない・辞書でないなら nil。
+    /// 宣言のキーが無いだけなら、版が空の宣言を返す（設定の「未対応」の表示に名前を使うため）。
+    public static func read(appURL: URL) -> ViewerSupportDeclaration? {
+        let plistURL = appURL.appendingPathComponent("Contents/Info.plist", isDirectory: false)
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+                as? [String: Any]
+        else { return nil }
+        let displayName = nonEmptyString(plist["CFBundleDisplayName"])
+            ?? nonEmptyString(plist["CFBundleName"])
+            ?? appURL.deletingPathExtension().lastPathComponent
+        var versions: [Int] = []
+        if let support = plist[infoPlistKey] as? [String: Any],
+           let declared = support[versionsKey] as? [Any] {
+            versions = declared.compactMap(integerValue)
+        }
+        return ViewerSupportDeclaration(bundleIdentifier: nonEmptyString(plist["CFBundleIdentifier"]),
+                                        displayName: displayName,
+                                        referenceFormatVersions: versions)
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let s = value as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return s
+    }
+
+    /// plist の `<integer>` で正の値だけ。`<true/>` と `<real>1</real>` は NSNumber として 1 に橋渡しされてしまう
+    /// ので、真偽値と浮動小数点を先に外す。文字列（"1"）・配列なども外す。
+    static func integerValue(_ value: Any) -> Int? {
+        guard let number = value as? NSNumber else { return nil }
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
+        if CFNumberIsFloatType(number as CFNumber) { return nil }
+        let n = number.intValue
+        return n > 0 ? n : nil
+    }
+}
+
+/// G60 v3: 参照ファイルを渡せる外部ビューア（実在し、宣言に StackNest が書ける版がある）。
+public struct ReferenceViewer: Sendable, Equatable {
+    public let appURL: URL
+    public let declaration: ViewerSupportDeclaration
+    /// 参照ファイルの `version` に書く版（`ViewerSupportDeclaration.chosenFormatVersion`）。
+    public let formatVersion: Int
+
+    /// 宣言を読み、対応していれば返す（未対応・読めないなら nil）。
+    public static func resolve(appURL: URL) -> ReferenceViewer? {
+        guard let declaration = ViewerSupportDeclaration.read(appURL: appURL),
+              let version = declaration.chosenFormatVersion else { return nil }
+        return ReferenceViewer(appURL: appURL, declaration: declaration, formatVersion: version)
+    }
 }

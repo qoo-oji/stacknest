@@ -2,12 +2,13 @@
 import Foundation
 import LibraryStore
 
-/// G60: 参照ファイル（`.stacknestbook`）の中身・版 1（spec §5.4）。
+/// G60: 参照ファイル（`.stacknestbook`）の中身（spec §5.4。版は §5.6 の交渉で決まり、今は 1 だけ）。
 /// 対応した外部ビューアは `book` の API からページを取り、読み進めたページを書き戻す。
 /// 形式の公開文書は `docs/book-reference-format.md`（日英）。項目を変えたらあちらも直す。
 public struct BookReference: Codable, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public static let formatName = "stacknest-book-reference"
-    public static let currentVersion = 1
+    /// G60 v3: StackNest が書ける参照ファイルの版。ビューアの宣言（`StackNestViewerSupport`）との共通の最大を書く。
+    public static let writableVersions: [Int] = [1]
     public static let fileExtension = "stacknestbook"
     public static let typeIdentifier = "app.shelfsmith.stacknest.book-reference"
 
@@ -26,10 +27,11 @@ public struct BookReference: Codable, Equatable, Sendable, CustomStringConvertib
     /// 0 始まり。開いた時点の読書位置。
     public let startPage: Int
 
-    public init(title: String, book: String, token: String, expiresAt: Date,
+    /// - Parameter version: 書く版（`ReferenceViewer.formatVersion`＝宣言との共通の最大）。
+    public init(version: Int, title: String, book: String, token: String, expiresAt: Date,
                 pageCount: Int, direction: String, startPage: Int) {
         self.format = Self.formatName
-        self.version = Self.currentVersion
+        self.version = version
         self.title = title
         self.book = book
         self.token = token

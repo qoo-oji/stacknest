@@ -84,21 +84,19 @@ public enum HelperLauncher {
         }
     }
 
-    /// G60: 参照ファイルを渡す外部ビューアが設定済みで実在し、かつ参照ファイルの型を開けると宣言しているか
-    /// （トークンを出す前に確かめる。宣言していないアプリには渡さず、従来の開き方に任せる＝G60 v2）。
-    /// ローカルの本用（パスから種類を決める）。
+    /// G60 v3: 参照ファイルを渡す外部ビューア（設定済みで実在し、`StackNestViewerSupport` で StackNest が書ける版を
+    /// 宣言しているもの）。トークンを出す前に引く。nil なら渡さず、従来の開き方に任せる。ローカルの本用（パスから種類を決める）。
     @MainActor
-    public static func hasUsableReferenceViewer(bookPath: String, settings: ViewerSettings) -> Bool {
-        hasUsableReferenceViewer(category: referenceCategory(bookPath: bookPath), settings: settings)
+    public static func referenceViewer(bookPath: String, settings: ViewerSettings) -> ReferenceViewer? {
+        referenceViewer(category: referenceCategory(bookPath: bookPath), settings: settings)
     }
 
-    /// G60: 参照ファイルを渡す外部ビューアが設定済みで実在し、対応を宣言しているか。種類は呼び出し側が決める
-    /// （リモートの本は `referenceCategory(manifestFormat:)`）。
+    /// G60 v3: 参照ファイルを渡す外部ビューア。種類は呼び出し側が決める（リモートの本は `referenceCategory(manifestFormat:)`）。
     @MainActor
-    public static func hasUsableReferenceViewer(category: BookCategory, settings: ViewerSettings) -> Bool {
-        guard let path = settings.resolvedViewerPath(for: referenceViewerCategory(category)) else { return false }
-        guard FileManager.default.fileExists(atPath: path) else { return false }
-        return appDeclaresBookReferenceSupport(appURL: URL(fileURLWithPath: path, isDirectory: true))
+    public static func referenceViewer(category: BookCategory, settings: ViewerSettings) -> ReferenceViewer? {
+        guard let path = settings.resolvedViewerPath(for: referenceViewerCategory(category)) else { return nil }
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        return ReferenceViewer.resolve(appURL: URL(fileURLWithPath: path, isDirectory: true))
     }
 
     /// G60: 参照ファイル（`.stacknestbook`）を、その本の画像の外部ビューアで開く（ローカルの本用。
