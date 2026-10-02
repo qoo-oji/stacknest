@@ -109,7 +109,9 @@ struct ViewerRelayTests {
         let relayID = registry.register(ViewerRelayTarget(
             serverID: UUID(), serverBase: URL(string: "http://100.64.0.5:51234/")!,
             libraryUUID: "LIB-R", bookID: 42, remoteToken: "REMOTE-SECRET"))
-        let issued = store.issue(libraryUUID: "LIB-R", bookID: 42, issuer: .localEndpoint,
+        // 中継の鍵の記録は本物の書庫・本を持たない（見張り用の値）。実際の相手は中継の記録（`registry`）にだけある。
+        let issued = store.issue(libraryUUID: ViewerTokenRecord.relaySentinelLibraryUUID,
+                                 bookID: ViewerTokenRecord.relaySentinelBookID, issuer: .localEndpoint,
                                  lockCredential: nil, relayID: relayID)
         RelayRemoteStub.reset()
         return Fixture(store: store, registry: registry, relayID: relayID, token: issued.token,
@@ -286,7 +288,8 @@ struct ViewerRelayTests {
     /// 中継の記録が無い（StackNest を終了した後など）なら 401（ビューアは「StackNest から開き直して」を出す）。
     @Test func missingRelayRecordIs401() async throws {
         let fx = makeFixture(); defer { fx.done() }
-        let orphan = fx.store.issue(libraryUUID: "LIB-R", bookID: 42, issuer: .localEndpoint,
+        let orphan = fx.store.issue(libraryUUID: ViewerTokenRecord.relaySentinelLibraryUUID,
+                                    bookID: ViewerTokenRecord.relaySentinelBookID, issuer: .localEndpoint,
                                     lockCredential: nil, relayID: "GONE").token
         try await makeApp(fx).test(.router) { client in
             try await client.execute(uri: "/api/v1/relay/GONE/manifest", method: .get,
@@ -347,6 +350,83 @@ struct ViewerRelayTests {
         }
         #expect(fx.store.record(id: fx.recordID)?.firstUsedAt != nil)
         #expect(fx.store.record(id: fx.recordID)?.viewer == "com.example.viewer/1.80; format=1")
+    }
+
+
+    // MARK: - レビュー（Task 3b M-3・Minor-1・Minor-2）
+
+    /// M-3: 中継の鍵の記録は見張り用の書庫・本（`relay`・0）を持つので、中継より前のビルドが本の鍵として
+    /// 解釈しても、本物の本の道は通らない（手元に同じ UUID の書庫があっても、同じ bookID の本を読めない）。
+    @Test func relayRecordIdentityNeverMatchesARealBookPath() {
+        let fx = makeFixture(); defer { fx.done() }
+        guard let record = fx.store.record(id: fx.recordID) else { Issue.record("記録が無い"); return }
+        #expect(record.libraryUUID == ViewerTokenRecord.relaySentinelLibraryUUID)
+        #expect(record.bookID == ViewerTokenRecord.relaySentinelBookID)
+        #expect(record.relayID == fx.relayID)
+        // 実在の書庫の UUID（UUID 形式）にも、実在しうる本の id（1 以上）にも一致しない。
+        #expect(UUID(uuidString: record.libraryUUID) == nil)
+        #expect(record.bookID == 0)
+        for (lib, book) in [("LIB-R", 42), (UUID().uuidString, 1), (UUID().uuidString, 0)] {
+            let base = "/api/v1/libraries/\(lib)/books/\(book)"
+            for (method, tail) in [(HTTPRequest.Method.get, "manifest"), (.get, "cover"), (.get, "pages/0"), (.post, "progress")] {
+                // 旧ビルドの判定（`allows(libraryUUID: record.libraryUUID, bookID: record.bookID)`）が通さない。
+                let allowed = ViewerTokenRoutes.allows(method: method, path: "\(base)/\(tail)",
+                                                       libraryUUID: record.libraryUUID, bookID: record.bookID)
+                #expect(!allowed, "\(lib)/\(book)/\(tail)")
+            }
+        }
+        // 中継の鍵そのものは、自分の relayID の道を通る（見張り用の値でも中継は動く）。
+        #expect(ViewerTokenRoutes.allowsRelay(method: .get, path: "/api/v1/relay/\(fx.relayID)/manifest",
+                                              relayID: fx.relayID))
+    }
+
+    /// Minor-1: 本文の上限は逐次に数える。作業を始めない（`resume` しない）データ作業に上限を超える 1 かたまりを渡した
+    /// 時点で取り消される（全部を受けてから数えるのではない）。上限以内のかたまりでは取り消さない。
+    @Test func streamingCapCancelsTheTaskAsSoonAsAChunkExceedsIt() {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        func task() -> URLSessionDataTask {
+            session.dataTask(with: URLRequest(url: URL(string: "http://127.0.0.1:1/")!))   // resume しない
+        }
+        let within = task()
+        let loader = ViewerRelayForwarder.BoundedLoader(limit: 16)
+        loader.urlSession(session, dataTask: within, didReceive: Data(repeating: 1, count: 16))
+        #expect(within.state == .suspended, "上限ちょうどは取り消さない")
+
+        let over = task()
+        let loader2 = ViewerRelayForwarder.BoundedLoader(limit: 16)
+        loader2.urlSession(session, dataTask: over, didReceive: Data(repeating: 1, count: 10))
+        #expect(over.state == .suspended)
+        loader2.urlSession(session, dataTask: over, didReceive: Data(repeating: 1, count: 7))
+        #expect(over.state != .suspended, "累計が上限を超えた 1 かたまりで、残りを待たずに取り消す（\(over.state.rawValue)）")
+    }
+
+    /// Minor-2（意図した動き）: 中継の鍵の初回使用は「有効な中継の鍵で 127.0.0.1 の口に届いた」こと。
+    /// リモートが 502 を返しても、中継の記録が無くて 401 でも記録される（本を読み込めたかは意味しない）。
+    @Test func relayFirstUseMeansReachingTheEndpoint() async throws {
+        // 取り次ぎ先が届かない（502）。
+        let fx = makeFixture(); defer { fx.done() }
+        RelayRemoteStub.failure = .cannotConnectToHost
+        #expect(fx.store.record(id: fx.recordID)?.firstUsedAt == nil)
+        try await makeApp(fx).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .badGateway)
+            }
+        }
+        #expect(fx.store.record(id: fx.recordID)?.firstUsedAt != nil, "502 でも「届いた」は記録する")
+
+        // 中継の記録が無い（終了後の孤児の鍵）。
+        let orphan = fx.store.issue(libraryUUID: ViewerTokenRecord.relaySentinelLibraryUUID,
+                                    bookID: ViewerTokenRecord.relaySentinelBookID, issuer: .localEndpoint,
+                                    lockCredential: nil, relayID: "GONE")
+        try await makeApp(fx).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/GONE/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(orphan.token)"]) { r in
+                #expect(r.status == .unauthorized)
+            }
+        }
+        #expect(fx.store.record(id: orphan.record.id)?.firstUsedAt != nil, "401（中継の記録なし）でも記録する")
     }
 
     // MARK: - レビュー（I-2・I-3・M-1・M-4・M-6 と足りないテスト）

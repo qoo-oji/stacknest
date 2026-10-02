@@ -14,6 +14,19 @@ struct Notice: Equatable {
     var text: String
     /// 「詳細」で開くアラートの本文（長い一覧はここへ）。
     var detail: String?
+    /// G60 v3: お知らせに付けるボタン（1 つまで）。押したら操作を行い、お知らせを閉じる。
+    var action: NoticeAction? = nil
+}
+
+/// G60 v3: お知らせのボタン。クロージャは比べられないので、作るたびに振る `id` で比べる
+/// （同じ文言でも別の本の操作は別物として扱う。`.animation(value:)` の差分にも使われる）。
+struct NoticeAction: Equatable {
+    let title: String
+    /// `@Sendable` にしておくと `Notice` が Sendable のまま保てる（捕まえるのは `[weak self]` と値型だけ）。
+    let perform: @MainActor @Sendable () -> Void
+    let id = UUID()
+
+    static func == (lhs: NoticeAction, rhs: NoticeAction) -> Bool { lhs.id == rhs.id }
 }
 
 /// お知らせ 1 枠。表示中の `Notice` と、その自動消去タイマーを一緒に持つ。
@@ -78,6 +91,13 @@ struct NoticeBanner: View {
                 .font(.callout)
                 .lineLimit(3)
                 .frame(maxWidth: 520, alignment: .leading)
+            if let action = notice.action {
+                // 文言は呼び出し側が訳したもの（`String(localized:)`）。押したら操作してから閉じる。
+                Button(action.title) {
+                    action.perform()
+                    onDismiss()
+                }
+            }
             if notice.detail != nil {
                 Button("詳細") { showDetail() }
                     .buttonStyle(.link)

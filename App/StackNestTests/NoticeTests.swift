@@ -71,6 +71,20 @@ struct NoticeSlotTests {
         await settle { false }
         #expect(slot.notice?.text == "後", "前の info のタイマーが後の警告を消した")
     }
+
+    /// G60 v3: ボタン付きのお知らせ。クロージャは比べられないので、作るたびに振る id で比べる
+    /// （同じ文言でも別の本の操作は別物。`.animation(value:)` の差分にも使われる）。
+    @Test("お知らせのボタンは作るたびに別物")
+    @MainActor
+    func actionsCompareByIdentity() {
+        let a = NoticeAction(title: "従来の開き方で開く") {}
+        let b = NoticeAction(title: "従来の開き方で開く") {}
+        #expect(a == a)
+        #expect(a != b)
+        #expect(Notice(kind: .warning, text: "x", action: a) == Notice(kind: .warning, text: "x", action: a))
+        #expect(Notice(kind: .warning, text: "x", action: a) != Notice(kind: .warning, text: "x", action: b))
+        #expect(Notice(kind: .warning, text: "x") != Notice(kind: .warning, text: "x", action: a))
+    }
 }
 
 /// 手で進める待ち方。`sleeper` を `NoticeSlot` に渡すと、自動消去のタスクはここで止まり、

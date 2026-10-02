@@ -7,9 +7,14 @@ import RemoteClient
 
 /// G60: 対応した外部ビューアへ、本を読むための口（参照ファイル `.stacknestbook`）を渡す（spec §5）。
 ///
-/// ローカルの書庫の本は手元でトークンを出して 127.0.0.1 の口を指す（リモートの本は 6b で足す）。
-/// 参照ファイルを書いて、画像の本の外部ビューアで開く。失敗したら理由（`Failure`）を返し、
-/// 呼び出し側が従来の開き方に戻して理由を出す。
+/// ローカルの書庫の本は手元でトークンを出して 127.0.0.1 の口を指し、リモートの本はサーバに出してもらう
+/// （中継のときは手元の口を指す）。参照ファイルを書いて、画像の本の外部ビューアで開く。
+/// 失敗したら理由（`Failure`）を返し、呼び出し側が従来の開き方に戻して理由を出す。
+///
+/// G60 v3: 渡す先は `StackNestViewerSupport` を宣言したアプリだけ（`ReferenceViewer`・呼び出し側が引く）。
+/// **起動するのは、その確認で得た `viewer.appURL`**（設定を引き直さない。確認と起動の間に設定が変わっても、
+/// 確かめたアプリに渡す）。渡してから `ViewerSettings.viewerUseCheckDelay`（既定 15 秒）後に一度だけトークンが
+/// 使われたかを確かめ、使われていなければ `onNotUsed` で呼び出し側に知らせる（spec §5.7）。**トークンは取り消さない。**
 ///
 /// 依存はすべてプロパティにしてある。テストは UserDefaults.standard・実ポート・`LastReadTracker.shared` に
 /// 触れずに差し替える（テストホストは本物のアプリと同じ defaults の領域を使うため）。
@@ -25,6 +30,9 @@ struct ExternalViewerHandoff {
     var relays: ViewerRelayRegistry
     /// G60 v3: リモートの本を中継するか。本番は `ExternalViewerSyncRouting.relaysRemoteBooks`（判断は 1 か所）。
     var relaysRemoteBooks: Bool
+    /// G60 v3: 参照ファイルを渡してから、使われたかを確かめるまで待つ処理。本番は `Task.sleep`。
+    /// 投げたら（取り消し）確かめない。
+    var sleep: @Sendable (Duration) async throws -> Void
 
     static var live: ExternalViewerHandoff {
         ExternalViewerHandoff(
@@ -35,7 +43,8 @@ struct ExternalViewerHandoff {
             recordLastRead: { LastReadTracker.shared.record($0) },
             now: { Date() },
             relays: .shared,
-            relaysRemoteBooks: ExternalViewerSyncRouting.relaysRemoteBooks)
+            relaysRemoteBooks: ExternalViewerSyncRouting.relaysRemoteBooks,
+            sleep: { try await Task.sleep(for: $0) })
     }
 
     enum Failure: Error, Equatable {
@@ -69,12 +78,24 @@ struct ExternalViewerHandoff {
         }
     }
 
+    /// G60 v3: 参照ファイルを渡した後の確認の結果（spec §5.7）。
+    enum UseOutcome: Equatable, Sendable {
+        /// ビューアがトークンで本を読んだ（初めて通った日時と名乗り）。
+        case used(firstUsedAt: Date, viewer: String?)
+        /// 待った後もまだ使われていない。
+        case notUsed
+        /// 確かめられなかった（照会の失敗・記録が無い・待ちの取り消し）。何も出さない。
+        case unknown
+    }
+
     /// ローカルの書庫の本。127.0.0.1 の口で使えるトークンを手元で出す（HTTP を通さない・spec §5.2）。
     /// グラントに結び付けない（`issuedByGrantID` は nil）。本人の Mac の中だけの口なので。
     func openLocal(book: BookRow, libraryUUID: String, viewer: ReferenceViewer,
                    lockCredential: () -> String?, verifiedLockHash: () -> String?,
                    startPage: Int,
-                   direction: PageDirection, settings: ViewerSettings) async -> Failure? {
+                   direction: PageDirection, settings: ViewerSettings,
+                   onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
+                   onUsed: @escaping @MainActor @Sendable () -> Void = {}) async -> Failure? {
         guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
         guard let path = book.path, !path.isEmpty else { return .pageCountUnavailable }
         let pageCount: Int
@@ -103,18 +124,27 @@ struct ExternalViewerHandoff {
             pageCount: pageCount,
             direction: BookReference.directionString(direction),
             startPage: BookReference.clampedStartPage(startPage, pageCount: pageCount))
-        return hand(reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id,
-                    category: HelperLauncher.referenceCategory(bookPath: path), settings: settings)
+        // 確認は、127.0.0.1 の口と同じトークンの保存先を直接読む（HTTP を通さない・spec §5.7）。
+        let tokens = self.tokens
+        let tokenID = issued.record.id
+        return hand(reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id, settings: settings,
+                    viewer: viewer, readUse: { Self.outcome(of: tokens.record(id: tokenID)) },
+                    onNotUsed: onNotUsed, onUsed: onUsed)
     }
 
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
     /// G60 v3（spec §5.8・試用）: `relaysRemoteBooks` なら、ビューアには手元の 127.0.0.1 の口の中継
     /// （`…/api/v1/relay/<relayID>`）と中継の鍵を渡し、リモートの鍵は中継の記録（メモリ）にだけ置く。
-    /// そうでなければ（直接つなぐ形）基点はこのクライアントがサーバへ繋いでいる URL で、鍵はリモートの鍵。
+    /// 確認はローカルの本と同じく中継の鍵の初回使用を手元の保存先で読む（照会 API は使わない）。
+    /// そうでなければ（直接つなぐ形）基点はこのクライアントがサーバへ繋いでいる URL で、鍵はリモートの鍵、
+    /// 確認は `fetchStatus`（`GET /viewer-tokens/{tokenID}`）。v2 のサーバ（`tokenID` を返さない）なら確認しない。
     /// `startPage` は呼び出し側が解決した続きのページ（内蔵と同じ `resolveResumePage`）。ここで範囲に収める。
     func openRemote(book: BookListItemDTO, manifest: ManifestDTO, viewer: ReferenceViewer, serverID: UUID,
                     serverBase: URL, libraryUUID: String, startPage: Int, settings: ViewerSettings,
-                    issue: () async throws -> ViewerTokenReply) async -> Failure? {
+                    issue: () async throws -> ViewerTokenReply,
+                    fetchStatus: @escaping @Sendable (_ tokenID: String) async throws -> ViewerTokenStatusReply,
+                    onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
+                    onUsed: @escaping @MainActor @Sendable () -> Void = {}) async -> Failure? {
         // 中継には 127.0.0.1 の口が要る。動いていなければリモートの鍵も出してもらわない。
         if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
         let reply: ViewerTokenReply
@@ -133,6 +163,7 @@ struct ExternalViewerHandoff {
         let bookURL: String
         let token: String
         let expiresAt: Date
+        var readUse: (@Sendable () async -> UseOutcome)?
         if relaysRemoteBooks {
             // 中継の記録の期限・中継の鍵の期限・参照ファイルの期限を同じ時刻から決める。
             let issuedAt = now()
@@ -142,17 +173,37 @@ struct ExternalViewerHandoff {
             let relayID = relays.register(ViewerRelayTarget(
                 serverID: serverID, serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id,
                 remoteToken: reply.token), expiresAt: relayExpiry, now: issuedAt)
-            let local = tokens.issue(libraryUUID: libraryUUID, bookID: book.id, issuer: .localEndpoint,
+            // 中継の鍵の記録には本物の書庫・本を持たせない（見張り用の値。本物は中継の記録だけ・M-3）。
+            let local = tokens.issue(libraryUUID: ViewerTokenRecord.relaySentinelLibraryUUID,
+                                     bookID: ViewerTokenRecord.relaySentinelBookID, issuer: .localEndpoint,
                                      lockCredential: nil, relayID: relayID, now: issuedAt)
             // ポートは参照ファイルを組む直前に読む（ローカルの本と同じ）。
             guard let base = URL(string: "http://127.0.0.1:\(localPort())/") else { return .referenceNotWritten }
             bookURL = BookReference.relayURL(localBase: base, relayID: relayID)
             token = local.token
             expiresAt = min(local.record.expiresAt, reply.expiresAt)
+            // 確認はローカルの本と同じく、手元の保存先の中継の鍵の初回使用を読む（照会 API は使わない）。
+            // 中継の鍵の初回使用は「有効な中継の鍵で口に届いた」こと（リモートが 502 でも記録される・意図した動き）。
+            let relayTokens = self.tokens
+            let relayTokenID = local.record.id
+            readUse = { Self.outcome(of: relayTokens.record(id: relayTokenID)) }
         } else {
             bookURL = BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id)
             token = reply.token
             expiresAt = reply.expiresAt
+            // v2 のサーバは tokenID を返さない。そのときは確認を走らせない（参照ファイルでは渡す＝v2 と同じ振る舞い）。
+            if let tokenID = reply.tokenID {
+                readUse = {
+                    // 照会に失敗したら確かめられない（知らせない）。
+                    do {
+                        let status = try await fetchStatus(tokenID)
+                        guard let usedAt = status.firstUsedAt else { return .notUsed }
+                        return .used(firstUsedAt: usedAt, viewer: status.viewer)
+                    } catch {
+                        return .unknown
+                    }
+                }
+            }
         }
         let reference = BookReference(
             version: viewer.formatVersion,
@@ -163,22 +214,67 @@ struct ExternalViewerHandoff {
             pageCount: manifest.pageCount,
             direction: manifest.direction,
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
-        // リモートのフォルダの本は filename に拡張子が無いので、種類は manifest の format から決める。
         return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
-                    category: HelperLauncher.referenceCategory(manifestFormat: manifest.format), settings: settings)
+                    settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed)
+    }
+
+    /// G60 v3: 待ってから 1 度だけ確かめる。待ちが取り消されたら確かめない（`.unknown`）。
+    static func checkUse(after delay: Duration,
+                         sleep: @Sendable (Duration) async throws -> Void,
+                         read: @Sendable () async -> UseOutcome) async -> UseOutcome {
+        do { try await sleep(delay) } catch { return .unknown }
+        return await read()
+    }
+
+    /// G60 v3: 保存先の記録から確認の結果を作る（ローカルの本・中継の鍵）。記録が無い（掃除された）なら確かめられない。
+    nonisolated static func outcome(of record: ViewerTokenRecord?) -> UseOutcome {
+        guard let record else { return .unknown }
+        guard let usedAt = record.firstUsedAt else { return .notUsed }
+        return .used(firstUsedAt: usedAt, viewer: record.viewer)
     }
 
     private func hand(_ reference: BookReference, origin: BookReferenceStore.Origin, libraryUUID: String,
-                      bookID: Int, category: BookCategory, settings: ViewerSettings) -> Failure? {
+                      bookID: Int, settings: ViewerSettings, viewer: ReferenceViewer,
+                      readUse: (@Sendable () async -> UseOutcome)?,
+                      onNotUsed: @escaping @MainActor @Sendable (String) -> Void,
+                      onUsed: @escaping @MainActor @Sendable () -> Void) -> Failure? {
         let url: URL
         do {
             url = try references.write(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
         } catch {
             return .referenceNotWritten
         }
-        if let error = HelperLauncher.openReference(url, category: category, settings: settings) {
+        // 確かめたビューア（`viewer.appURL`）をそのまま起動する。設定は引き直さない（I-1）。
+        if let error = HelperLauncher.openReference(url, viewer: viewer) {
             return .launchFailed(error.localizedDescription)
         }
+        // 確かめる手段が無い（v2 のサーバ）なら確認しない。
+        if let readUse {
+            startUseCheck(delay: settings.viewerUseCheckDelay, viewer: viewer, read: readUse,
+                          onNotUsed: onNotUsed, onUsed: onUsed)
+        }
         return nil
+    }
+
+    /// G60 v3: 渡してから一定時間後に一度だけ確かめる（spec §5.7）。使われていなければ呼び出し側に知らせ、
+    /// 従来の開き方のボタンを出してもらう。トークンは取り消さない（ビューアが遅れて読み始めても動くように）。
+    /// 使われていたら `onUsed`（前の渡しで出した「読み込んでいません」を呼び出し側が消す）。
+    /// 確認は 1 回だけで、お知らせを消すために照会を繰り返さない（後の渡しが無ければ、お知らせは手で閉じるまで残る）。
+    private func startUseCheck(delay: Duration, viewer: ReferenceViewer,
+                               read: @escaping @Sendable () async -> UseOutcome,
+                               onNotUsed: @escaping @MainActor @Sendable (String) -> Void,
+                               onUsed: @escaping @MainActor @Sendable () -> Void) {
+        let sleep = self.sleep
+        let name = viewer.declaration.displayName
+        Task { @MainActor in
+            switch await Self.checkUse(after: delay, sleep: sleep, read: read) {
+            case .notUsed:
+                onNotUsed(name)
+            case .used:
+                onUsed()
+            case .unknown:
+                break
+            }
+        }
     }
 }

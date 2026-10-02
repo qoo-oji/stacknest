@@ -102,6 +102,7 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
                 // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ。この中間処理が返す 401・403 は数えない（下流の施錠の 403 は数える）。
                 // 以後は照合の結果を見るだけで書かない（ページを取るたびに保存しない）。
                 // 中継の鍵（spec §5.8）では、記録は中継の記録の照合（401）と取り次ぎ（502）より前に書く。
+                // これは意図した動き（`ViewerRelayTests.relayFirstUseMeansReachingTheEndpoint` で固定）。
                 // つまり中継の鍵の「初回使用」は「ビューアが有効な中継の鍵で 127.0.0.1 の口に届いた」ことで、
                 // 「本を読み込んだ」ことではない（リモートが落ちていて 502 でも、終了後の孤児の鍵で 401 でも記録される）。
                 if record.firstUsedAt == nil {

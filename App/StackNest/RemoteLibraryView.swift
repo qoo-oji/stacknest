@@ -286,6 +286,11 @@ struct RemoteLibraryView: View {
             if let err = state.errorText {
                 banner(err)
             }
+            // G60 v3: 外部ビューアが本を読み込まなかったときのお知らせ（従来の開き方のボタン付き）。
+            if let notice = state.viewerNotice.notice {
+                NoticeBanner(notice: notice) { state.viewerNotice.dismiss() }
+                    .padding(.vertical, 6)
+            }
             Divider()
             // Task 6 / B2 / 4.2c-4 / 4.2c-6a: 上ペイン切替。"browse"=ファセット / "stamp"=スタンプ
             // / "hidden"=非表示。

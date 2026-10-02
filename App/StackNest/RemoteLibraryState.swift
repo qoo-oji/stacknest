@@ -126,6 +126,8 @@ final class RemoteLibraryState {
     var isGrid = false
     var selection: Int? = nil
     var errorText: String? = nil
+    /// G60 v3: 外部ビューアが本を読み込まなかったときのお知らせ（従来の開き方のボタン付き）。
+    var viewerNotice = NoticeSlot()
     /// G12b-3b: 実行中メンテナンスジョブの進捗（nil = 実行中なし）。SSE `.maintenanceProgress` で更新。
     var maintenanceJob: MaintenanceUIState? = nil
     /// G12b-3b: メンテナンス完了メッセージ（アラート表示 → OK で nil に戻す想定）。
@@ -2200,7 +2202,13 @@ final class RemoteLibraryState {
         let failure = await viewerHandoff.openRemote(
             book: book, manifest: manifest, viewer: viewer, serverID: serverID, serverBase: client.baseURL,
             libraryUUID: libraryUUID, startPage: resumePage, settings: viewerSettings,
-            issue: { try await client.viewerToken(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken) })
+            issue: { try await client.viewerToken(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken) },
+            fetchStatus: { try await client.viewerTokenStatus(tokenID: $0) },
+            onNotUsed: { [weak self] name in
+                self?.presentViewerDidNotLoad(book: book, resumeDirect: resumeDirect, manifest: manifest, viewerName: name)
+            },
+            // 後の確認で使われたと分かったら、前の渡しで出した「読み込んでいません」を消す（この枠はそれ専用）。
+            onUsed: { [weak self] in self?.viewerNotice.dismiss() })
         if failure == .libraryLocked {
             // 施錠ゲートの 403。他のリモート呼び出しと同じく失効として拾い（解錠フォームへ戻す）、
             // 何も開かない（内蔵へ倒しても同じ拒否に当たるだけ）。
@@ -2222,6 +2230,17 @@ final class RemoteLibraryState {
             libraryUUID: libraryUUID, libraryName: libraryName,
             bookID: book.id, title: book.title, locked: locked))
         Task { try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: resumePage, libraryToken: libraryToken) }
+    }
+
+    /// G60 v3: 外部ビューアが本を読み込まなかった（spec §5.7）。お知らせに従来の開き方（内蔵ビューア）のボタンを付ける。
+    private func presentViewerDidNotLoad(book: BookListItemDTO, resumeDirect: Bool, manifest: ManifestDTO,
+                                         viewerName: String) {
+        viewerNotice.present(Notice(
+            kind: .warning,
+            text: String(localized: "\(viewerName) が本を読み込んでいません"),
+            action: NoticeAction(title: String(localized: "従来の開き方で開く")) { [weak self] in
+                self?.openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: manifest)
+            }))
     }
 
     /// G48-3: リモート書庫のテキスト EPUB。本体を /file から取ってキャッシュし、ローカルと同じ Washi の窓で開く。

@@ -1468,7 +1468,37 @@ final class AppState {
             verifiedLockHash: { [weak self] in self?.verifiedHash },
             startPage: startPage,
             direction: book.pageDirection ?? viewerSettings.pageDirection,
-            settings: viewerSettings)
+            settings: viewerSettings,
+            onNotUsed: { [weak self] name in self?.presentViewerDidNotLoad(book, viewerName: name) },
+            onUsed: { [weak self] in self?.dismissViewerDidNotLoad() })
+    }
+
+    /// G60 v3: 出している「読み込んでいません」のお知らせのボタンの id。`watchNotice` は監視フォルダなどと
+    /// 共用なので、後の確認で消すときはこの id と一致するお知らせだけを消す。
+    @ObservationIgnored private var viewerDidNotLoadNoticeID: UUID?
+
+    /// G60 v3: 外部ビューアが参照ファイルの本を読み込まなかった（spec §5.7）。お知らせに従来の開き方
+    /// （ファイルのまま外部ビューア）のボタンを付ける。トークンは取り消さない。
+    private func presentViewerDidNotLoad(_ book: BookRow, viewerName: String) {
+        let action = NoticeAction(title: String(localized: "従来の開き方で開く")) { [weak self] in
+            guard let self else { return }
+            if let err = HelperLauncher.open(book: book, settings: self.viewerSettings) {
+                self.error = err
+            }
+        }
+        viewerDidNotLoadNoticeID = action.id
+        watchNotice.present(Notice(
+            kind: .warning,
+            text: String(localized: "\(viewerName) が本を読み込んでいません"),
+            action: action))
+    }
+
+    /// G60 v3: 後の確認でビューアがトークンを使ったと分かった。出ている「読み込んでいません」だけを消す
+    /// （同じ枠の別のお知らせは消さない）。
+    private func dismissViewerDidNotLoad() {
+        guard let id = viewerDidNotLoadNoticeID, watchNotice.notice?.action?.id == id else { return }
+        watchNotice.dismiss()
+        viewerDidNotLoadNoticeID = nil
     }
 
     func selectAllInCurrentView() {

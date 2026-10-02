@@ -32,16 +32,22 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     /// G60 v3（spec §5.8・試用）: 中継の鍵なら、その中継の `relayID`（`ViewerRelayRegistry`）。本の鍵は nil。
     /// 中継の鍵は 127.0.0.1 の口の `/api/v1/relay/{relayID}/…` の 4 つの道だけを通る。
     /// v2・v3 で保存した記録にはこのキーが無い（合成のデコードは Optional を `decodeIfPresent` で読むので nil になる）。
-    /// 中継より前のビルドに戻すと、そのビルドは `relayID` を知らないので中継の鍵を**本の鍵**として扱い、
-    /// `libraryUUID`/`bookID`（リモートの書庫と本）の本の道に通す。同じ UUID の書庫を手元でも開いていれば、
-    /// 同じ `bookID` の手元の本が読める（開いていなければ読めない）。新しいビルドは起動時に孤児の中継の鍵を
-    /// 消す（`removeRelayTokens`）が、古いビルドは消さないので、この注意はダウングレードの間は残る。
+    /// 中継より前のビルドに戻すと、そのビルドは `relayID` を知らないので中継の鍵を本の鍵として扱うが、記録の
+    /// `libraryUUID`/`bookID` は見張り用の値（`relaySentinelLibraryUUID`・`relaySentinelBookID`）なので、
+    /// どの本の道にも通らない。新しいビルドは起動時に孤児の中継の鍵を消す（`removeRelayTokens`）。
     public let relayID: String?
     /// G60 v3: 初めて認証に通った日時（まだなら nil）。一度書いたら変えない（spec §5.7）。
     /// v2 で保存した記録にはこのキーが無いので、既定 nil の `var` にして合成のデコードで読めるようにする。
     public internal(set) var firstUsedAt: Date? = nil
     /// G60 v3: 初めて通った要求の名乗り（`X-StackNest-Viewer`・`ViewerIdentification.sanitize` 済み）。無ければ nil。
     public internal(set) var viewer: String? = nil
+
+    /// G60 v3（M-3）: 中継の鍵の記録の `libraryUUID`。本物の書庫の UUID（UUID 形式）には決して一致しない見張り用の値。
+    /// 中継の鍵の実際の書庫・本は `ViewerRelayTarget`（メモリ）にだけあり、この記録には持たない
+    /// （中継より前のビルドが本の鍵として解釈しても、本物の本の道に通らない）。
+    public static let relaySentinelLibraryUUID = "relay"
+    /// G60 v3（M-3）: 中継の鍵の記録の `bookID`。本の id は 1 から振られるので 0 は実在しない。
+    public static let relaySentinelBookID = 0
 }
 
 /// G60: 発行の結果。平文の `token` は呼び出し元へ 1 度だけ渡し、保存しない。

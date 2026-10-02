@@ -171,6 +171,23 @@ public final class ViewerSettings {
         didSet { defaults.set(syncsReadingPositionWithExternalViewer, forKey: syncsReadingPositionWithExternalViewerKey) }
     }
 
+    /// G60 v3: 参照ファイルを渡してから、ビューアが本専用トークンを使ったかを確かめるまでの秒数の隠しキー
+    /// （設定画面には出さない。`defaults write <bundle id> externalViewerUseCheckDelaySeconds -int 30` で変える）。
+    public static let viewerUseCheckDelayKey = "externalViewerUseCheckDelaySeconds"
+    /// G60 v3: その既定（spec §5.7）。
+    public static let defaultViewerUseCheckDelaySeconds: Double = 15
+
+    /// G60 v3: 確かめるまでの待ち。読むたびに defaults を見る（隠しキーなので観測しない）。
+    /// 1〜600 秒に収める。0 以下・数でない値は既定。
+    public var viewerUseCheckDelay: Duration {
+        guard defaults.object(forKey: Self.viewerUseCheckDelayKey) != nil else {
+            return .seconds(Self.defaultViewerUseCheckDelaySeconds)
+        }
+        let seconds = defaults.double(forKey: Self.viewerUseCheckDelayKey)
+        guard seconds.isFinite, seconds > 0 else { return .seconds(Self.defaultViewerUseCheckDelaySeconds) }
+        return .seconds(min(max(seconds, 1), 600))
+    }
+
     /// G40: ルーペの倍率。範囲 1.5...8.0、既定 2.0。setter で clamp する
     /// （`thickBookThreshold` と同じ「再代入して didSet を再発火させる」方式）。
     public var loupeMagnification: Double {

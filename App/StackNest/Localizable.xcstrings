@@ -33,6 +33,16 @@
         }
       }
     },
+    "%@ が本を読み込んでいません" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ hasn't loaded the book."
+          }
+        }
+      }
+    },
     "%@ のコピー" : {
       "localizations" : {
         "en" : {
@@ -706,6 +716,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A supported external viewer gets the book's pages from StackNest and writes the page you reach back to StackNest. This applies when images open in an external viewer, and remote books open there too. While this is on, StackNest listens on 127.0.0.1 (this Mac only) for per-book tokens, even if Local Control is off."
+          }
+        }
+      }
+    },
+    "従来の開き方で開く" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the Usual Way"
           }
         }
       }
