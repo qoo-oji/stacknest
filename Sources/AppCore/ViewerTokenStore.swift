@@ -29,6 +29,14 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     /// 今もあり、その書庫を scope に含むことを確かめる（グラントの削除・scope の縮小で即時に失効）。
     /// アプリが手元で出したもの（127.0.0.1 の口用）と固定トークンで出したものは nil（グラントに結び付かない）。
     public let issuedByGrantID: String?
+    /// G60 v3（spec §5.8・試用）: 中継の鍵なら、その中継の `relayID`（`ViewerRelayRegistry`）。本の鍵は nil。
+    /// 中継の鍵は 127.0.0.1 の口の `/api/v1/relay/{relayID}/…` の 4 つの道だけを通る。
+    /// v2・v3 で保存した記録にはこのキーが無い（合成のデコードは Optional を `decodeIfPresent` で読むので nil になる）。
+    /// 中継より前のビルドに戻すと、そのビルドは `relayID` を知らないので中継の鍵を**本の鍵**として扱い、
+    /// `libraryUUID`/`bookID`（リモートの書庫と本）の本の道に通す。同じ UUID の書庫を手元でも開いていれば、
+    /// 同じ `bookID` の手元の本が読める（開いていなければ読めない）。新しいビルドは起動時に孤児の中継の鍵を
+    /// 消す（`removeRelayTokens`）が、古いビルドは消さないので、この注意はダウングレードの間は残る。
+    public let relayID: String?
     /// G60 v3: 初めて認証に通った日時（まだなら nil）。一度書いたら変えない（spec §5.7）。
     /// v2 で保存した記録にはこのキーが無いので、既定 nil の `var` にして合成のデコードで読めるようにする。
     public internal(set) var firstUsedAt: Date? = nil
@@ -104,8 +112,10 @@ public final class ViewerTokenStore: @unchecked Sendable {
 
     /// 新しいトークンを出す。期限切れの記録はここでも掃除する。
     /// - Parameter issuedByGrantID: 発行した接続のグラントの id。グラントに結び付けないなら nil。
+    /// - Parameter relayID: 中継の鍵なら、その中継の id（`ViewerRelayRegistry.register` の戻り値）。本の鍵は nil。
     public func issue(libraryUUID: String, bookID: Int, issuer: ViewerTokenIssuer,
                       lockCredential: String?, issuedByGrantID: String? = nil,
+                      relayID: String? = nil,
                       now: Date = Date()) -> IssuedViewerToken {
         let token = ServerPreferences.generateToken()
         let record = ViewerTokenRecord(
@@ -117,7 +127,8 @@ public final class ViewerTokenStore: @unchecked Sendable {
             issuedAt: now,
             expiresAt: now.addingTimeInterval(Self.lifetime),
             lockFingerprint: Self.lockFingerprint(for: lockCredential),
-            issuedByGrantID: issuedByGrantID)
+            issuedByGrantID: issuedByGrantID,
+            relayID: relayID)
         lock.withLock {
             records.removeAll { $0.expiresAt <= now }
             records.append(record)
@@ -145,6 +156,25 @@ public final class ViewerTokenStore: @unchecked Sendable {
         lock.withLock {
             let before = records.count
             records.removeAll { $0.expiresAt <= now }
+            let removed = before - records.count
+            if removed > 0 { persistLocked() }
+            return removed
+        }
+    }
+
+    /// G60 v3（spec §5.8・試用）: 中継の鍵のうち、中継の記録（メモリ）がもう無いものを消す。消した件数を返す。
+    /// 起動時に呼ぶ（中継の記録は終了で消えるので、前回までの中継の鍵は使えない＝孤児。残すと保存先が太り、
+    /// 中継より前のビルドに戻したときに本の鍵として読まれうる）。
+    /// `isLive` は保存先の鍵を握ったまま呼ぶ。App は中継を登録してから鍵を出すので、起動の直後に開いた本の
+    /// 中継の鍵を消すことはない（`ViewerRelayRegistry` は保存先の鍵を取らないので、鍵の順序で詰まらない）。
+    @discardableResult
+    public func removeRelayTokens(keepingWhere isLive: (String) -> Bool) -> Int {
+        lock.withLock {
+            let before = records.count
+            records.removeAll { record in
+                guard let relayID = record.relayID else { return false }
+                return !isLive(relayID)
+            }
             let removed = before - records.count
             if removed > 0 { persistLocked() }
             return removed

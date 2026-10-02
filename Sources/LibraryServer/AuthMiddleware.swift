@@ -81,19 +81,29 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
                     }
                 }
                 // 道の検査はルートの解決結果ではなく実際のパスで行う（その本の 4 つの道だけ）。
-                guard ViewerTokenRoutes.allows(method: request.method, path: request.uri.path,
-                                               libraryUUID: record.libraryUUID, bookID: record.bookID) else {
-                    throw HTTPError(.forbidden)
+                // G60 v3（spec §5.8）: 中継の鍵は、その relayID の中継の 4 つの道だけ（本の道は通さない）。
+                let allowed: Bool
+                if let relayID = record.relayID {
+                    allowed = ViewerTokenRoutes.allowsRelay(method: request.method, path: request.uri.path,
+                                                            relayID: relayID)
+                } else {
+                    allowed = ViewerTokenRoutes.allows(method: request.method, path: request.uri.path,
+                                                       libraryUUID: record.libraryUUID, bookID: record.bookID)
                 }
+                guard allowed else { throw HTTPError(.forbidden) }
                 ctx.role = .read
                 ctx.tier = .read
-                ctx.scope = .libraries([record.libraryUUID])
+                // 中継の鍵は手元のどの書庫も読めない（scope は空）。
+                ctx.scope = .libraries(record.relayID == nil ? [record.libraryUUID] : [])
                 ctx.grantID = "viewer-token:\(record.id)"
                 ctx.viewerBook = ViewerBookAccess(libraryUUID: record.libraryUUID, bookID: record.bookID,
-                                                  lockFingerprint: record.lockFingerprint)
+                                                  lockFingerprint: record.lockFingerprint, relayID: record.relayID)
                 // G60 v3: 初めて通ったときに一度だけ、使われた日時と名乗りを記録する（spec §5.7）。
                 // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ。この中間処理が返す 401・403 は数えない（下流の施錠の 403 は数える）。
                 // 以後は照合の結果を見るだけで書かない（ページを取るたびに保存しない）。
+                // 中継の鍵（spec §5.8）では、記録は中継の記録の照合（401）と取り次ぎ（502）より前に書く。
+                // つまり中継の鍵の「初回使用」は「ビューアが有効な中継の鍵で 127.0.0.1 の口に届いた」ことで、
+                // 「本を読み込んだ」ことではない（リモートが落ちていて 502 でも、終了後の孤児の鍵で 401 でも記録される）。
                 if record.firstUsedAt == nil {
                     viewerTokens.recordFirstUse(
                         id: record.id, viewer: request.headers[ViewerTokenRoutes.identificationHeader])
@@ -150,10 +160,14 @@ public struct ViewerBookAccess: Sendable, Equatable {
     /// 発行時に解錠していたロックの世代（`ViewerTokenStore.lockFingerprint(for:)`）。未施錠で発行したら nil。
     public let lockFingerprint: String?
 
-    public init(libraryUUID: String, bookID: Int, lockFingerprint: String?) {
+    /// G60 v3（spec §5.8）: 中継の鍵なら、その中継の id（中継のルートが照らす）。本の鍵は nil。
+    public let relayID: String?
+
+    public init(libraryUUID: String, bookID: Int, lockFingerprint: String?, relayID: String? = nil) {
         self.libraryUUID = libraryUUID
         self.bookID = bookID
         self.lockFingerprint = lockFingerprint
+        self.relayID = relayID
     }
 }
 
@@ -164,7 +178,16 @@ enum ViewerTokenRoutes {
     static let identificationHeader = HTTPField.Name(ViewerIdentification.headerName)!
 
     static func allows(method: HTTPRequest.Method, path: String, libraryUUID: String, bookID: Int) -> Bool {
-        let prefix = "/api/v1/libraries/\(libraryUUID)/books/\(bookID)/"
+        allowsBookRequest(method: method, path: path, prefix: "/api/v1/libraries/\(libraryUUID)/books/\(bookID)/")
+    }
+
+    /// G60 v3（spec §5.8）: 中継の鍵が通れる道。その relayID の manifest・pages/{n}・cover（GET）と progress（POST）だけ。
+    static func allowsRelay(method: HTTPRequest.Method, path: String, relayID: String) -> Bool {
+        allowsBookRequest(method: method, path: path, prefix: "/api/v1/relay/\(relayID)/")
+    }
+
+    /// `prefix` の後ろが本の 4 つの道のどれかか。
+    private static func allowsBookRequest(method: HTTPRequest.Method, path: String, prefix: String) -> Bool {
         guard path.hasPrefix(prefix) else { return false }
         let rest = path.dropFirst(prefix.count)
         switch method {

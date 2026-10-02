@@ -99,6 +99,17 @@ public struct LibraryServerConfig: Sendable {
     /// G60: false のとき grant・R/RW トークンを一切受け付けない（本専用トークンだけの口）。
     /// 「ローカルコントロールを許可」が OFF で「読書位置を同期する」が ON の 127.0.0.1 の口で使う。
     public var acceptsPrincipalTokens: Bool
+    /// G60 v3（spec §5.8・試用）: リモートの本の中継。127.0.0.1 の口だけに付ける（nil なら中継のルートを生やさない）。
+    /// 付けるなら `viewerTokenIssuer` は `.localEndpoint` でなければならない（`relayConfigurationIsValid`。
+    /// `LibraryServerCore.init` が precondition で確かめ、ルートの登録も同じ条件で絞る）。
+    public var viewerRelay: ViewerRelayConfig?
+
+    /// G60 v3: 中継を付けてよい形か（中継は 127.0.0.1 の口だけ＝発行先 `.localEndpoint` の口だけ）。
+    /// 共有サーバ（`.sharedServer`）に誤って中継を渡すと、ネットワークの向こうからリモートのサーバへ
+    /// 取り次ぐ口になってしまうので、組み立ての時点で止める。
+    static func relayConfigurationIsValid(viewerRelay: ViewerRelayConfig?, issuer: ViewerTokenIssuer) -> Bool {
+        viewerRelay == nil || issuer == .localEndpoint
+    }
     // dual-stack 化は呼び出し側が host: "::" を明示注入する
     // （Linux は v6only sysctl 依存のため既定は互換性優先の 0.0.0.0）。
     public init(host: String = "0.0.0.0", port: Int, token: String,
@@ -124,7 +135,8 @@ public struct LibraryServerConfig: Sendable {
                 renameFiles: (@Sendable (String, RenameFilesRequest) async -> RenameFilesReply?)? = nil,
                 viewerTokens: ViewerTokenStore? = nil,
                 viewerTokenIssuer: ViewerTokenIssuer = .sharedServer,
-                acceptsPrincipalTokens: Bool = true) {
+                acceptsPrincipalTokens: Bool = true,
+                viewerRelay: ViewerRelayConfig? = nil) {
         self.host = host
         self.port = port
         self.token = token
@@ -151,6 +163,7 @@ public struct LibraryServerConfig: Sendable {
         self.viewerTokens = viewerTokens
         self.viewerTokenIssuer = viewerTokenIssuer
         self.acceptsPrincipalTokens = acceptsPrincipalTokens
+        self.viewerRelay = viewerRelay
     }
 }
 
@@ -319,6 +332,10 @@ public struct LibraryServerCore: Sendable {
     public init(config: LibraryServerConfig, dataSource: any LibraryServerDataSource,
                 maintenanceRegistry: MaintenanceJobRegistry? = nil,
                 maintenanceEventFanout: MaintenanceEventFanout? = nil) {
+        // G60 v3（spec §5.8）: 中継は 127.0.0.1 の口（発行先 `.localEndpoint`）だけ。共有サーバに付けたら組み立てない。
+        precondition(LibraryServerConfig.relayConfigurationIsValid(viewerRelay: config.viewerRelay,
+                                                                  issuer: config.viewerTokenIssuer),
+                     "viewerRelay requires viewerTokenIssuer == .localEndpoint")
         self.config = config
         self.dataSource = dataSource
         // G23 (#15): 施錠庫の bookChanged は bookID を落として配信する（蔵書数の概算が漏れるため）。
@@ -2061,6 +2078,24 @@ public struct LibraryServerCore: Sendable {
             return EditedResponse(
                 headers: [.cacheControl: "no-store"],
                 response: ViewerTokenStatusReply(firstUsedAt: record.firstUsedAt, viewer: record.viewer))
+        }
+        // G60 v3（spec §5.8・試用）: リモートの本の中継（127.0.0.1 の口だけ）。中継の鍵（その relayID のもの）で来た
+        // 要求を、リモートの鍵を付けてリモートのサーバへ取り次ぐ。BearerAuthMiddleware が中継の鍵を中継の道だけに通す。
+        // 多層防御: init の precondition に加えて、ここでも発行先が `.localEndpoint` のときだけ生やす。
+        if let relay = config.viewerRelay, config.viewerTokenIssuer == .localEndpoint {
+            api.get("relay/:relayID/manifest") { request, context in
+                try await ViewerRelayForwarder.handle(request, context, remotePath: "manifest", relay: relay)
+            }
+            api.get("relay/:relayID/cover") { request, context in
+                try await ViewerRelayForwarder.handle(request, context, remotePath: "cover", relay: relay)
+            }
+            api.get("relay/:relayID/pages/:n") { request, context in
+                let n = try context.parameters.require("n", as: Int.self)
+                return try await ViewerRelayForwarder.handle(request, context, remotePath: "pages/\(n)", relay: relay)
+            }
+            api.post("relay/:relayID/progress") { request, context in
+                try await ViewerRelayForwarder.handle(request, context, remotePath: "progress", relay: relay)
+            }
         }
         // G48-2: EPUB の読書位置。画像本の /progress と同じく後勝ちで保存し既読化する。
         api.post("libraries/:lib/books/:id/epub-progress") { [config] request, context in

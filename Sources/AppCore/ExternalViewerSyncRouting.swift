@@ -4,6 +4,11 @@ import LibraryServerAPI
 
 /// G60: 本を参照ファイル（`.stacknestbook`）で外部ビューアへ渡すかの判断（spec §5.5）。
 public enum ExternalViewerSyncRouting {
+    /// G60 v3（spec §5.8・試用）: リモートの本を手元の 127.0.0.1 の口で中継するか。**判断はここ 1 か所**。
+    /// サンドボックスのビューアは Tailscale や公開の IP へ平文の HTTP でつなげないため、試用では中継する。
+    /// false に戻すと §5.6 の直接つなぐ形（参照ファイルにリモートのサーバの URL と鍵を書く）になる。
+    public static let relaysRemoteBooks = true
+
     /// ローカルの書庫の本。今の `ViewerChoice` で画像側に従う本（アーカイブ・画像・フォルダ・PDF）を、
     /// 画像を外部ビューアで開く設定かつ同期 ON のときだけ参照ファイルにする。EPUB は EPUB 側の設定に
     /// 従うので対象外（ローカルの EPUB は今までどおり）。

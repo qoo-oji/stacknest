@@ -54,6 +54,12 @@ public struct BookReference: Codable, Equatable, Sendable, CustomStringConvertib
         serverBase.appendingPathComponent("api/v1/libraries/\(libraryUUID)/books/\(bookID)").absoluteString
     }
 
+    /// G60 v3（spec §5.8・試用）: リモートの本を中継する 127.0.0.1 の口の基点（`…/api/v1/relay/<relayID>`）。
+    /// ビューアから見た形（`manifest`・`pages/{n}`・`cover`・`progress`）はローカルの本と同じ。
+    public static func relayURL(localBase: URL, relayID: String) -> String {
+        localBase.appendingPathComponent("api/v1/relay/\(relayID)").absoluteString
+    }
+
     /// サーバの manifest と同じ書き方（"rtl"/"ltr"）。
     public static func directionString(_ direction: PageDirection) -> String {
         direction == .leftToRight ? "ltr" : "rtl"
