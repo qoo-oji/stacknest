@@ -83,6 +83,13 @@ struct ExternalViewerSyncWiringTests {
             .write(to: contents.appendingPathComponent("Info.plist"))
     }
 
+    /// 参照ファイルの型を宣言していない（zip だけの）Info.plist に差し替える。
+    static func writeUndeclaredInfoPlist(_ app: URL) throws {
+        let plist: [String: Any] = ["CFBundleDocumentTypes": [["CFBundleTypeExtensions": ["zip", "cbz"]]]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+    }
+
     func makeEnv(sync: Bool) throws -> Env {
         let name = "g60-wiring-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: name)!
@@ -294,7 +301,7 @@ struct ExternalViewerSyncWiringTests {
     /// G60 前と同じにファイルそのものを渡す。
     @Test func localViewerWithoutDeclarationGetsTheFileSilently() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
-        try FileManager.default.removeItem(at: env.viewerApp.appendingPathComponent("Contents"))
+        try Self.writeUndeclaredInfoPlist(env.viewerApp)
         let launches = Launches()
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }
@@ -531,7 +538,7 @@ struct ExternalViewerSyncWiringTests {
     /// G60 v2: 宣言の無い外部ビューアには、トークンを要求せずに黙って内蔵で開く。
     @Test func remoteViewerWithoutDeclarationSkipsTheTokenRequest() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
-        try FileManager.default.removeItem(at: env.viewerApp.appendingPathComponent("Contents"))
+        try Self.writeUndeclaredInfoPlist(env.viewerApp)
         let launches = Launches()
         let original = HelperLauncher.launch
         defer { HelperLauncher.launch = original }

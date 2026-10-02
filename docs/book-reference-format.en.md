@@ -7,7 +7,7 @@ This document is for authors of external viewers. It describes the reference fil
 ## How it works
 
 1. The user turns on "Sync Reading Position with StackNest (Supported Apps Only)" in StackNest and sets images to open in an external viewer.
-2. Instead of the book's file, StackNest writes a **reference file** (extension `.stacknestbook`) and opens it in the external viewer. The viewer used is the one set for the book's own type for archives, folders and images, and the one set for archives for PDFs (local or remote) and image-only EPUBs from a remote library. A local EPUB isn't handed off by reference; it opens as a file as before.
+2. Only when that viewer declares the type (see "This declaration is required" under [Type](#type)), StackNest writes a **reference file** (extension `.stacknestbook`) instead of the book's file and opens it in the external viewer. The viewer used is the one set for the book's own type for archives, folders and images, and the one set for archives for PDFs (local or remote) and image-only EPUBs from a remote library. A local EPUB isn't handed off by reference; it opens as a file as before.
 3. The viewer fetches pages one at a time from the API named in the reference file, and writes back the page the reader reaches.
 
 ## Type
