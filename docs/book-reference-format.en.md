@@ -19,6 +19,8 @@ This document is for authors of external viewers. It describes the reference fil
 
 A supporting viewer should import this type with `UTImportedTypeDeclarations` in its `Info.plist` and accept it as a document type with `CFBundleDocumentTypes` (it arrives in `application(_:open:)`).
 
+**This declaration is required.** Before handing over a reference file, StackNest reads the viewer's `Info.plist` directly and checks that some entry in `CFBundleDocumentTypes` has the UTType (`app.shelfsmith.stacknest.book-reference`) in `LSItemContentTypes`, or the extension (`stacknestbook`, compared case-insensitively) in `CFBundleTypeExtensions`. An app without the declaration doesn't get a reference file; it gets the book as before (a local book as the file, a remote book in StackNest's built-in viewer).
+
 ## Contents (UTF-8 JSON)
 
 ```json

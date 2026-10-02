@@ -19,6 +19,8 @@
 
 対応するビューアは、この型を `Info.plist` の `UTImportedTypeDeclarations` で取り込み宣言し、`CFBundleDocumentTypes` で書類の種類として受け付けてください（`application(_:open:)` に届きます）。
 
+**この宣言は必須です。** StackNest は参照ファイルを渡す前に、そのビューアの `Info.plist` を直接読み、`CFBundleDocumentTypes` のいずれかの項目が `LSItemContentTypes` に UTType（`app.shelfsmith.stacknest.book-reference`）を持つか、`CFBundleTypeExtensions` に拡張子（`stacknestbook`。大文字小文字は区別しない）を持つかを確かめます。宣言が無いアプリには参照ファイルを渡さず、従来どおり本を渡します（ローカルの本はファイルのまま、リモートの本は StackNest の内蔵ビューアで開きます）。
+
 ## 中身（UTF-8 の JSON）
 
 ```json

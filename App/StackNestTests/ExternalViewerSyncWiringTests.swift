@@ -74,6 +74,15 @@ struct ExternalViewerSyncWiringTests {
         }
     }
 
+    /// G60 v2: 参照ファイルの型を宣言した Info.plist を偽アプリに足す（宣言の無いアプリには参照ファイルを渡さない）。
+    static func declareReferenceSupport(_ app: URL) throws {
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["CFBundleDocumentTypes": [["LSItemContentTypes": [BookReference.typeIdentifier]]]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+    }
+
     func makeEnv(sync: Bool) throws -> Env {
         let name = "g60-wiring-\(UUID().uuidString)"
         let suite = UserDefaults(suiteName: name)!
@@ -81,6 +90,7 @@ struct ExternalViewerSyncWiringTests {
             .appendingPathComponent("g60-wiring-\(UUID().uuidString)", isDirectory: true)
         let viewerApp = base.appendingPathComponent("FakeViewer.app", isDirectory: true)
         try FileManager.default.createDirectory(at: viewerApp, withIntermediateDirectories: true)
+        try Self.declareReferenceSupport(viewerApp)
         let settings = ViewerSettings(defaults: suite)
         settings.useBuiltInImageViewer = false
         settings.externalViewerAppPath = viewerApp.path
@@ -280,6 +290,30 @@ struct ExternalViewerSyncWiringTests {
     }
 
 
+    /// G60 v2: 実在するが参照ファイルの型を宣言していないビューアには、トークンも参照ファイルもお知らせも出さず、
+    /// G60 前と同じにファイルそのものを渡す。
+    @Test func localViewerWithoutDeclarationGetsTheFileSilently() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        try FileManager.default.removeItem(at: env.viewerApp.appendingPathComponent("Contents"))
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (state, row, dir) = try makeLocalState(env, handoff: handoff(env))
+
+        state.openBooks([row])
+        try await waitUntil { !launches.entries.isEmpty }
+        try await Task.sleep(for: .milliseconds(50))   // 余計な起動があれば、ここで届く
+
+        #expect(launches.entries.count == 1)
+        #expect(launches.entries.first?.file.path == dir.path, "参照ファイルではなく本そのもの")
+        #expect(launches.entries.first?.viewer.path == env.viewerApp.path)
+        #expect(env.tokens.allRecords().isEmpty)
+        #expect(referenceFiles(env).isEmpty)
+        #expect(state.watchNotice.notice == nil)
+        #expect(state.error == nil)
+    }
+
     // MARK: - リモート
 
     /// 内蔵ビューアで開く本体は差し替える（`builtInOpenOverride`）。本物の窓・`LastReadTracker.shared` に触れず、
@@ -362,6 +396,7 @@ struct ExternalViewerSyncWiringTests {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
         let folderViewer = env.base.appendingPathComponent("FolderViewer.app", isDirectory: true)
         try FileManager.default.createDirectory(at: folderViewer, withIntermediateDirectories: true)
+        try Self.declareReferenceSupport(folderViewer)
         env.settings.categoryViewerPaths[.folder] = folderViewer.path
         let launches = Launches()
         let original = HelperLauncher.launch
@@ -490,6 +525,28 @@ struct ExternalViewerSyncWiringTests {
 
         #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
         #expect(launches.entries.isEmpty)
+        #expect(s.errorText == nil)
+    }
+
+    /// G60 v2: 宣言の無い外部ビューアには、トークンを要求せずに黙って内蔵で開く。
+    @Test func remoteViewerWithoutDeclarationSkipsTheTokenRequest() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        try FileManager.default.removeItem(at: env.viewerApp.appendingPathComponent("Contents"))
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200)
+        s.testPutManifestHandoff(bookID: 52, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 52, filename: "a.zip", lastPage: 0))
+        try await waitUntil { !fallbacks.entries.isEmpty }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(fallbacks.entries.count == 1, "内蔵ビューアで開く")
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+        #expect(launches.entries.isEmpty)
+        #expect(referenceFiles(env).isEmpty)
         #expect(s.errorText == nil)
     }
 

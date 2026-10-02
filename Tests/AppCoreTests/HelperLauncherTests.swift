@@ -314,6 +314,15 @@ struct HelperLauncherTests {
         return url
     }
 
+    /// G60 v2: 偽アプリに「参照ファイルの型を宣言した Info.plist」を足す。
+    private func declareReferenceSupport(_ app: URL) throws {
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["CFBundleDocumentTypes": [["LSItemContentTypes": [BookReference.typeIdentifier]]]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+    }
+
     @Test @MainActor
     func openReferenceUsesTheBooksViewer() throws {
         let suiteName = "test-\(UUID().uuidString)"
@@ -441,6 +450,7 @@ struct HelperLauncherTests {
         settings.categoryViewerPaths[.archive] = archiveViewer.path
         settings.categoryViewerPaths[.folder] = folderViewer.path
         let category = HelperLauncher.referenceCategory(manifestFormat: "folder")
+        try declareReferenceSupport(folderViewer)
 
         #expect(HelperLauncher.hasUsableReferenceViewer(category: category, settings: settings))
         #expect(HelperLauncher.openReference(URL(fileURLWithPath: "/tmp/x.stacknestbook"),
@@ -463,6 +473,8 @@ struct HelperLauncherTests {
         let folderViewer = try makeFakeViewer("FolderViewer")
         defer { try? FileManager.default.removeItem(at: folderViewer) }
         settings.categoryViewerPaths[.folder] = folderViewer.path
+        #expect(!HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings), "実在するが対応の宣言が無い")
+        try declareReferenceSupport(folderViewer)
         #expect(HelperLauncher.hasUsableReferenceViewer(category: .folder, settings: settings))
     }
 }
