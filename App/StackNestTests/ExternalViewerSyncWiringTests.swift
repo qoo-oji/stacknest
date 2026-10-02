@@ -68,6 +68,7 @@ struct ExternalViewerSyncWiringTests {
         let viewerApp: URL
         let settings: ViewerSettings
         let tokens: ViewerTokenStore
+        let relays: ViewerRelayRegistry
         func cleanup() {
             suite.removePersistentDomain(forName: suiteName)
             try? FileManager.default.removeItem(at: base)
@@ -115,20 +116,25 @@ struct ExternalViewerSyncWiringTests {
         settings.externalViewerAppPath = viewerApp.path
         settings.syncsReadingPositionWithExternalViewer = sync
         return Env(suiteName: name, suite: suite, base: base, viewerApp: viewerApp,
-                   settings: settings, tokens: ViewerTokenStore(defaults: suite))
+                   settings: settings, tokens: ViewerTokenStore(defaults: suite),
+                   relays: ViewerRelayRegistry())
     }
 
     final class LastReads { var items: [LastReadBook] = [] }
     final class Fallbacks { var entries: [(bookID: Int, manifest: ManifestDTO?)] = [] }
 
-    func handoff(_ env: Env, endpointRunning: Bool = true, lastReads: LastReads? = nil) -> ExternalViewerHandoff {
+    /// - Parameter relay: リモートの本を中継するか（本番の判断は `ExternalViewerSyncRouting.relaysRemoteBooks`）。
+    func handoff(_ env: Env, endpointRunning: Bool = true, lastReads: LastReads? = nil,
+                 relay: Bool = true) -> ExternalViewerHandoff {
         ExternalViewerHandoff(
             tokens: env.tokens,
             references: BookReferenceStore(baseDirectory: env.base.appendingPathComponent("AppSupport")),
             localPort: { 4321 },
             isLocalEndpointRunning: { endpointRunning },
             recordLastRead: { lastReads?.items.append($0) },
-            now: { Date() })
+            now: { Date() },
+            relays: env.relays,
+            relaysRemoteBooks: relay)
     }
 
     func recording(_ launches: Launches) -> (URL, URL) -> Void {
@@ -377,16 +383,19 @@ struct ExternalViewerSyncWiringTests {
 
     /// 内蔵ビューアで開く本体は差し替える（`builtInOpenOverride`）。本物の窓・`LastReadTracker.shared` に触れず、
     /// 「内蔵へ倒した」を陽性の合図として待てる。ダウンロード済みコピーの問い合わせも差し替える（実 `~/Library` を読まない）。
+    /// - Parameter issueExpiresAt: リモートが返す鍵の期限（既定は中継の鍵より遠い 2033 年）。
     private func makeRemoteState(_ env: Env, issueStatus: Int, libraryToken: String? = nil,
                                  issueHeaders: [String: String] = [:], lastReads: LastReads? = nil,
-                                 offlineLastPage: Int? = nil) throws -> (RemoteLibraryState, Fallbacks) {
+                                 offlineLastPage: Int? = nil,
+                                 relay: Bool = true, endpointRunning: Bool = true,
+                                 issueExpiresAt: Date = Date(timeIntervalSince1970: 2_000_000_000)) throws -> (RemoteLibraryState, Fallbacks) {
         G60ViewerTokenStub.paths = []
         G60ViewerTokenStub.issueStatus = issueStatus
         G60ViewerTokenStub.issueHeaders = issueHeaders
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         G60ViewerTokenStub.issueBody = try encoder.encode(
-            ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000), tokenID: "TID-1"))
+            ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: issueExpiresAt, tokenID: "TID-1"))
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [G60ViewerTokenStub.self]
         let client = RemoteLibraryClient(baseURL: URL(string: "http://127.0.0.1:1/")!, deviceToken: "device",
@@ -396,7 +405,7 @@ struct ExternalViewerSyncWiringTests {
             libraryName: "テスト", locked: false, libraryToken: libraryToken,
             coverCache: RemoteCoverCache(cache: nil, serverID: nil, libraryUUID: nil))
         s.viewerSettings = env.settings
-        s.viewerHandoff = handoff(env, lastReads: lastReads)
+        s.viewerHandoff = handoff(env, endpointRunning: endpointRunning, lastReads: lastReads, relay: relay)
         s.offlineLastPageOverride = { _ in offlineLastPage }
         let fallbacks = Fallbacks()
         s.builtInOpenOverride = { book, manifest in fallbacks.entries.append((book.id, manifest)) }
@@ -430,9 +439,29 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: book)
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
-        #expect(ref.book == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/42")
-        #expect(ref.token == "VIEWER-TOKEN")
+        let file = try #require(launches.entries.first).file
+        let ref = try BookReference.decode(Data(contentsOf: file))
+        // G60 v3（spec §5.8・試用）: リモートの本も手元の 127.0.0.1 の口で中継する。
+        let relayPrefix = "http://127.0.0.1:4321/api/v1/relay/"
+        #expect(ref.book.hasPrefix(relayPrefix))
+        let relayID = String(ref.book.dropFirst(relayPrefix.count))
+        let target = try #require(env.relays.target(for: relayID))
+        #expect(target.remoteToken == "VIEWER-TOKEN")
+        #expect(target.remoteBookURL == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/42")
+        #expect(ref.token != "VIEWER-TOKEN", "リモートの鍵は参照ファイルに書かない")
+        let raw = try String(contentsOf: file, encoding: .utf8)
+        #expect(!raw.contains("VIEWER-TOKEN"))
+        guard case .valid(let relayRecord) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
+            Issue.record("参照ファイルの鍵が 127.0.0.1 の口の中継の鍵になっていない"); return
+        }
+        #expect(relayRecord.relayID == relayID)
+        // レビュー I-4: リモートの鍵（2033 年）の方が遅いので、参照ファイルの期限は中継の鍵の期限と同じ
+        // （参照ファイルの日時は秒までなので 1 秒未満の差は許す）。
+        #expect(abs(ref.expiresAt.timeIntervalSince(relayRecord.expiresAt)) < 1)
+        #expect(relayRecord.expiresAt < Date(timeIntervalSince1970: 2_000_000_000))
+        // 中継の記録も同じ期限で切れる（その時刻を過ぎたら 401）。
+        #expect(env.relays.target(for: relayID, now: relayRecord.expiresAt.addingTimeInterval(-1)) != nil)
+        #expect(env.relays.target(for: relayID, now: relayRecord.expiresAt) == nil)
         #expect(ref.pageCount == 20)
         #expect(ref.direction == "ltr")
         #expect(ref.startPage == 5)
@@ -656,5 +685,79 @@ struct ExternalViewerSyncWiringTests {
         #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
         #expect(launches.entries.isEmpty)
         #expect(fallbacks.entries.isEmpty)
+    }
+
+    // MARK: - G60 v3: 中継（spec §5.8・試用）
+
+    /// 中継を切ると（§5.6 の直接つなぐ形）、参照ファイルにはサーバの URL とリモートの鍵を書く。
+    @Test func remoteDirectModePointsAtTheServer() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, relay: false)
+        s.testPutManifestHandoff(bookID: 61, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 61, filename: "a.zip", lastPage: 0))
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(ref.book == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/61")
+        #expect(ref.token == "VIEWER-TOKEN")
+        #expect(ref.expiresAt == Date(timeIntervalSince1970: 2_000_000_000))
+        #expect(env.relays.count == 0)
+        #expect(env.tokens.allRecords().isEmpty, "直接つなぐ形では手元の鍵を出さない")
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/61/progress") } }
+    }
+
+    /// 中継には 127.0.0.1 の口が要る。動いていなければ、リモートの鍵も出してもらわずに内蔵で開き、理由を出す。
+    @Test func remoteRelayNeedsTheLocalEndpoint() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, fallbacks) = try makeRemoteState(env, issueStatus: 200, endpointRunning: false)
+        s.testPutManifestHandoff(bookID: 60, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 60, filename: "a.zip", lastPage: 0))
+        try await waitUntil { !fallbacks.entries.isEmpty }
+
+        #expect(launches.entries.isEmpty)
+        #expect(!G60ViewerTokenStub.paths.contains { $0.hasSuffix("/viewer-token") })
+        #expect(env.relays.count == 0)
+        #expect(env.tokens.allRecords().isEmpty)
+        #expect(s.errorText?.contains("内蔵ビューアで開きました") == true)
+        #expect(s.errorText?.contains("127.0.0.1") == true)
+    }
+
+    /// レビュー I-4: リモートの鍵が先に切れる（今から 1 時間）なら、参照ファイルと中継の記録はその時刻で切れる
+    /// （中継の鍵は 30 日あっても、リモートの鍵が切れたら中継しても 401 になるため）。
+    @Test func remoteRelayExpiresWithTheRemoteTokenWhenItIsSooner() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        // JSON の ISO 8601 は秒までなので、比べる値も秒に丸めておく。
+        let remoteExpiry = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 + 3600).rounded(.down))
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, issueExpiresAt: remoteExpiry)
+        s.testPutManifestHandoff(bookID: 62, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 62, filename: "a.zip", lastPage: 0))
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(abs(ref.expiresAt.timeIntervalSince(remoteExpiry)) < 1, "リモートの鍵の期限に合わせる")
+        guard case .valid(let relayRecord) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
+            Issue.record("参照ファイルの鍵が中継の鍵になっていない"); return
+        }
+        #expect(relayRecord.expiresAt > remoteExpiry, "中継の鍵そのものは 30 日")
+        #expect(abs(ref.expiresAt.timeIntervalSince(min(relayRecord.expiresAt, remoteExpiry))) < 1)
+        let relayID = try #require(relayRecord.relayID)
+        #expect(env.relays.target(for: relayID, now: remoteExpiry.addingTimeInterval(-1)) != nil)
+        #expect(env.relays.target(for: relayID, now: remoteExpiry) == nil, "中継の記録もリモートの鍵と一緒に切れる")
+        try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/62/progress") } }
     }
 }

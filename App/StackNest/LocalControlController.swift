@@ -43,6 +43,11 @@ final class LocalControlController {
     /// ことで、実サーバを起動しないテストからも「fanout が本当に注入されているか」を検証できる。
     var maintenanceEventFanout: MaintenanceEventFanout { SharedMaintenanceRegistry.fanout }
 
+    /// G60 v3（spec §5.8・試用）: リモートの本の中継。記録は `ViewerRelayRegistry.shared`（App の受け渡しと同じ
+    /// インスタンス）。口を起動し直すたび（設定の切り替え・ポートの取り直し）に作らず、プロセスで 1 つだけ持つ
+    /// （取り次ぎの URLSession は invalidate しないので、作るたびに残ってしまう）。
+    @ObservationIgnored let viewerRelay = ViewerRelayConfig(registry: .shared)
+
     // MARK: - テスト用の継ぎ目（本番は既定のまま）
 
     /// 口の動き方（nil なら起動しない）。テストは UserDefaults.standard を読まずに差し替える。
@@ -70,7 +75,7 @@ final class LocalControlController {
             run = { try await runner(usedPort, mode) }
         } else {
             run = Self.makeServer(port: usedPort, mode: mode, maintenanceRegistry: maintenanceRegistry,
-                                  maintenanceEventFanout: maintenanceEventFanout)
+                                  maintenanceEventFanout: maintenanceEventFanout, viewerRelay: viewerRelay)
         }
         isRunning = true
         serverTask = Task {
@@ -102,7 +107,8 @@ final class LocalControlController {
     /// 本物のローカル制御サーバを組み、走らせる処理を返す。
     private static func makeServer(port usedPort: Int, mode: LocalEndpointMode,
                                    maintenanceRegistry: MaintenanceJobRegistry,
-                                   maintenanceEventFanout: MaintenanceEventFanout) -> () async throws -> Void {
+                                   maintenanceEventFanout: MaintenanceEventFanout,
+                                   viewerRelay: ViewerRelayConfig) -> () async throws -> Void {
         let config = LibraryServerConfig(
             host: "127.0.0.1",
             port: usedPort,
@@ -172,7 +178,9 @@ final class LocalControlController {
             // G60: ローカルの書庫の本の参照ファイルはこの口を指す（アプリが直接発行したトークン）。
             viewerTokens: ViewerTokenStore.shared,
             viewerTokenIssuer: .localEndpoint,
-            acceptsPrincipalTokens: mode.acceptsPrincipalTokens
+            acceptsPrincipalTokens: mode.acceptsPrincipalTokens,
+            // G60 v3（spec §5.8・試用）: リモートの本を中継する（本専用トークンだけの形でも、全権の形でも）。
+            viewerRelay: viewerRelay
         )
         // 外部レビュー Low 指摘の是正: `SharedMaintenanceRegistry` のコメントは以前から
         // 「`ServerController`／`LocalControlController` はどちらも `maintenanceRegistry:` と

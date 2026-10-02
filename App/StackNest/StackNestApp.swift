@@ -1407,6 +1407,10 @@ final class StackNestAppDelegate: NSObject, NSApplicationDelegate {
                 // G60: 期限の切れた本専用トークンと参照ファイルを掃除する。
                 ViewerTokenStore.shared.pruneExpired()
                 BookReferenceStore().pruneExpired()
+                // G60 v3（spec §5.8・試用）: 前回までの中継の鍵は、中継の記録（メモリ）が終了で消えたので使えない。
+                // 残すと保存先が太るので消す。今の中継の記録にあるもの（起動の直後に開いた本）は残す
+                // （中継は登録してから鍵を出すので、照らす時点で登録が済んでいる）。
+                ViewerTokenStore.shared.removeRelayTokens(keepingWhere: { ViewerRelayRegistry.shared.isLive($0) })
             }
         }
     }

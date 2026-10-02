@@ -21,6 +21,10 @@ struct ExternalViewerHandoff {
     var isLocalEndpointRunning: () -> Bool
     var recordLastRead: (LastReadBook) -> Void
     var now: () -> Date
+    /// G60 v3（spec §5.8・試用）: リモートの本の中継の記録（メモリだけ）。127.0.0.1 の口と同じインスタンス。
+    var relays: ViewerRelayRegistry
+    /// G60 v3: リモートの本を中継するか。本番は `ExternalViewerSyncRouting.relaysRemoteBooks`（判断は 1 か所）。
+    var relaysRemoteBooks: Bool
 
     static var live: ExternalViewerHandoff {
         ExternalViewerHandoff(
@@ -29,7 +33,9 @@ struct ExternalViewerHandoff {
             localPort: { ServerPreferences.localControlPort() },
             isLocalEndpointRunning: { LocalControlController.shared.isRunning },
             recordLastRead: { LastReadTracker.shared.record($0) },
-            now: { Date() })
+            now: { Date() },
+            relays: .shared,
+            relaysRemoteBooks: ExternalViewerSyncRouting.relaysRemoteBooks)
     }
 
     enum Failure: Error, Equatable {
@@ -102,11 +108,15 @@ struct ExternalViewerHandoff {
     }
 
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
-    /// 基点は、このクライアントがサーバへ繋いでいる URL（ビューアは同じ Mac で動くので同じ道で届く）。
+    /// G60 v3（spec §5.8・試用）: `relaysRemoteBooks` なら、ビューアには手元の 127.0.0.1 の口の中継
+    /// （`…/api/v1/relay/<relayID>`）と中継の鍵を渡し、リモートの鍵は中継の記録（メモリ）にだけ置く。
+    /// そうでなければ（直接つなぐ形）基点はこのクライアントがサーバへ繋いでいる URL で、鍵はリモートの鍵。
     /// `startPage` は呼び出し側が解決した続きのページ（内蔵と同じ `resolveResumePage`）。ここで範囲に収める。
     func openRemote(book: BookListItemDTO, manifest: ManifestDTO, viewer: ReferenceViewer, serverID: UUID,
                     serverBase: URL, libraryUUID: String, startPage: Int, settings: ViewerSettings,
                     issue: () async throws -> ViewerTokenReply) async -> Failure? {
+        // 中継には 127.0.0.1 の口が要る。動いていなければリモートの鍵も出してもらわない。
+        if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
         let reply: ViewerTokenReply
         do {
             reply = try await issue()
@@ -120,12 +130,36 @@ struct ExternalViewerHandoff {
         } catch {
             return .tokenUnavailable
         }
+        let bookURL: String
+        let token: String
+        let expiresAt: Date
+        if relaysRemoteBooks {
+            // 中継の記録の期限・中継の鍵の期限・参照ファイルの期限を同じ時刻から決める。
+            let issuedAt = now()
+            // 先に切れる方に合わせる（リモートの鍵が切れたら、中継しても 401）。中継の記録もこの時刻で消える。
+            let relayExpiry = min(issuedAt.addingTimeInterval(ViewerTokenStore.lifetime), reply.expiresAt)
+            // 中継の記録を先に登録してから鍵を出す（起動時の孤児の掃除が、出したばかりの鍵を消さないように）。
+            let relayID = relays.register(ViewerRelayTarget(
+                serverID: serverID, serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id,
+                remoteToken: reply.token), expiresAt: relayExpiry, now: issuedAt)
+            let local = tokens.issue(libraryUUID: libraryUUID, bookID: book.id, issuer: .localEndpoint,
+                                     lockCredential: nil, relayID: relayID, now: issuedAt)
+            // ポートは参照ファイルを組む直前に読む（ローカルの本と同じ）。
+            guard let base = URL(string: "http://127.0.0.1:\(localPort())/") else { return .referenceNotWritten }
+            bookURL = BookReference.relayURL(localBase: base, relayID: relayID)
+            token = local.token
+            expiresAt = min(local.record.expiresAt, reply.expiresAt)
+        } else {
+            bookURL = BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id)
+            token = reply.token
+            expiresAt = reply.expiresAt
+        }
         let reference = BookReference(
             version: viewer.formatVersion,
             title: book.title,
-            book: BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id),
-            token: reply.token,
-            expiresAt: reply.expiresAt,
+            book: bookURL,
+            token: token,
+            expiresAt: expiresAt,
             pageCount: manifest.pageCount,
             direction: manifest.direction,
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
