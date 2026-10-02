@@ -147,4 +147,78 @@ struct ViewerTokenStoreTests {
             .issue(libraryUUID: "LIB-1", bookID: 7, issuer: .sharedServer, lockCredential: "hash-1", now: t0)
         #expect(issued.record.lockFingerprint == a)
     }
+
+    // MARK: - G60 v3: 初めて使われたことの記録
+
+    private final class Wins: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func add() { lock.withLock { n += 1 } }
+        var value: Int { lock.withLock { n } }
+    }
+
+    @Test func firstUseIsWrittenOnce() {
+        let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
+        let store = ViewerTokenStore(defaults: d)
+        let issued = store.issue(libraryUUID: "LIB-1", bookID: 7, issuer: .sharedServer, lockCredential: nil, now: t0)
+        #expect(store.record(id: issued.record.id)?.firstUsedAt == nil, "発行しただけでは使っていない")
+        #expect(store.recordFirstUse(id: issued.record.id, viewer: "com.example.viewer/1.0; format=1",
+                                     now: t0.addingTimeInterval(5)))
+        #expect(!store.recordFirstUse(id: issued.record.id, viewer: "com.example.other/2", now: t0.addingTimeInterval(9)),
+                "2 回目は書かない")
+        let r = store.record(id: issued.record.id)
+        #expect(r?.firstUsedAt == t0.addingTimeInterval(5))
+        #expect(r?.viewer == "com.example.viewer/1.0; format=1")
+        #expect(!store.recordFirstUse(id: "no-such-id", viewer: nil))
+        #expect(store.record(id: "no-such-id") == nil)
+        // 保存され、読み直しても残る（Date の往復誤差に左右されないよう秒で比べる）。
+        let reloaded = ViewerTokenStore(defaults: d).record(id: issued.record.id)
+        #expect(abs((reloaded?.firstUsedAt?.timeIntervalSince1970 ?? 0) - t0.addingTimeInterval(5).timeIntervalSince1970) < 0.001)
+        #expect(reloaded?.viewer == "com.example.viewer/1.0; format=1")
+    }
+
+    @Test func firstUseIsWrittenOnceUnderConcurrency() {
+        let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
+        let store = ViewerTokenStore(defaults: d)
+        let issued = store.issue(libraryUUID: "LIB-1", bookID: 7, issuer: .sharedServer, lockCredential: nil, now: t0)
+        let wins = Wins()
+        let id = issued.record.id
+        DispatchQueue.concurrentPerform(iterations: 64) { i in
+            if store.recordFirstUse(id: id, viewer: "com.example.viewer/\(i)") { wins.add() }
+        }
+        #expect(wins.value == 1)
+        #expect(store.record(id: id)?.viewer?.hasPrefix("com.example.viewer/") == true)
+    }
+
+    @Test func storeKeepsOnlyTheSanitizedViewer() {
+        let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
+        let store = ViewerTokenStore(defaults: d)
+        let issued = store.issue(libraryUUID: "LIB-1", bookID: 7, issuer: .sharedServer, lockCredential: nil, now: t0)
+        store.recordFirstUse(id: issued.record.id, viewer: "com.example.viewer/1.0\u{7}\n; format=1 ", now: t0)
+        #expect(store.record(id: issued.record.id)?.viewer == "com.example.viewer/1.0; format=1")
+        let other = store.issue(libraryUUID: "LIB-1", bookID: 8, issuer: .sharedServer, lockCredential: nil, now: t0)
+        store.recordFirstUse(id: other.record.id, viewer: "  ", now: t0)
+        #expect(store.record(id: other.record.id)?.firstUsedAt == t0, "名乗りが空でも使ったことは記録する")
+        #expect(store.record(id: other.record.id)?.viewer == nil)
+    }
+
+    /// v2 のビルドが保存した記録（`firstUsedAt`・`viewer` が無い JSON）も読める。
+    /// 読めないと `init` が記録を空にし、配った参照ファイルのトークンが全部 401 になる。
+    @Test func recordsSavedByV2StillDecode() throws {
+        let (d, n) = freshDefaults(); defer { d.removePersistentDomain(forName: n) }
+        let v2 = """
+        [{"id":"R1","tokenHash":"\(ViewerTokenStore.hash("T"))","libraryUUID":"LIB-1","bookID":7,\
+        "issuer":"sharedServer","issuedAt":0,"expiresAt":2000000000,"issuedByGrantID":"g"}]
+        """
+        d.set(Data(v2.utf8), forKey: ViewerTokenStore.defaultsKey)
+        let store = ViewerTokenStore(defaults: d)
+        let r = try #require(store.record(id: "R1"))
+        #expect(r.firstUsedAt == nil)
+        #expect(r.viewer == nil)
+        #expect(r.issuedByGrantID == "g")
+        #expect(r.lockFingerprint == nil)
+        guard case .valid = store.lookup(token: "T", issuer: .sharedServer) else {
+            Issue.record("v2 の記録のトークンが通らない"); return
+        }
+    }
 }

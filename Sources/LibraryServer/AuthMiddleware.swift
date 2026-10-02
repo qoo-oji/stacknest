@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import Foundation
 import AppCore
+import HTTPTypes
 import Hummingbird
 import LibraryServerAPI
 
@@ -90,6 +91,13 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
                 ctx.grantID = "viewer-token:\(record.id)"
                 ctx.viewerBook = ViewerBookAccess(libraryUUID: record.libraryUUID, bookID: record.bookID,
                                                   lockFingerprint: record.lockFingerprint)
+                // G60 v3: 初めて通ったときに一度だけ、使われた日時と名乗りを記録する（spec §5.7）。
+                // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ（401・403 は「使った」に数えない）。
+                // 以後は照合の結果を見るだけで書かない（ページを取るたびに保存しない）。
+                if record.firstUsedAt == nil {
+                    viewerTokens.recordFirstUse(
+                        id: record.id, viewer: request.headers[ViewerTokenRoutes.identificationHeader])
+                }
                 return try await next(request, ctx)
             case .expired:
                 throw HTTPError(.unauthorized)
@@ -152,6 +160,9 @@ public struct ViewerBookAccess: Sendable, Equatable {
 /// G60: 本専用トークンが通れる道。その本の manifest・pages/{n}・cover（GET）と progress（POST）だけ。
 /// 末尾のスラッシュ・大文字違い・余計な階層は通さない（安全側に倒す）。
 enum ViewerTokenRoutes {
+    /// G60 v3: 対応ビューアの名乗り（`X-StackNest-Viewer`）。値は `ViewerTokenStore.recordFirstUse` が整える。
+    static let identificationHeader = HTTPField.Name(ViewerIdentification.headerName)!
+
     static func allows(method: HTTPRequest.Method, path: String, libraryUUID: String, bookID: Int) -> Bool {
         let prefix = "/api/v1/libraries/\(libraryUUID)/books/\(bookID)/"
         guard path.hasPrefix(prefix) else { return false }

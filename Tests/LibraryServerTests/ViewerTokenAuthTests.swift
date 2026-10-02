@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import Testing
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import LibraryServerAPI
@@ -341,5 +342,143 @@ struct ViewerTokenAuthTests {
                 #expect(r.status == .ok)
             }
         }
+    }
+
+    // MARK: - G60 v3: 初めて使われたことの記録
+
+    private static let viewerHeader = HTTPField.Name("X-StackNest-Viewer")!
+
+    @Test func firstSuccessfulUseIsRecordedOnceWithTheHeader() async throws {
+        let fx = try TestLibraryFixture(name: "U1", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 2)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let base = "/api/v1/libraries/\(lib.uuid)/books/\(id)"
+        try await makeApp([lib], store: store).test(.router) { client in
+            try await client.execute(uri: "\(base)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)",
+                                               Self.viewerHeader: "com.example.viewer/1.80; format=1"]) { r in
+                #expect(r.status == .ok)
+            }
+            let first = try #require(store.record(id: issued.record.id))
+            let usedAt = try #require(first.firstUsedAt)
+            #expect(first.viewer == "com.example.viewer/1.80; format=1")
+            try await client.execute(uri: "\(base)/pages/0", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)",
+                                               Self.viewerHeader: "com.example.other/9; format=1"]) { r in
+                #expect(r.status == .ok)
+            }
+            let second = try #require(store.record(id: issued.record.id))
+            #expect(second.firstUsedAt == usedAt, "2 回目以降は書かない")
+            #expect(second.viewer == "com.example.viewer/1.80; format=1")
+        }
+    }
+
+    /// 403 になった要求は「使った」に数えない（許可された道を通った要求だけ）。
+    @Test func refusedRequestsDoNotCountAsUse() async throws {
+        let fx = try TestLibraryFixture(name: "U2", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 1)
+        let (other, _) = try fx.addFolderBook(imageCount: 1)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let cases: [(HTTPRequest.Method, String)] = [
+            (.get, "/api/v1/libraries/\(lib.uuid)/books/\(id)/detail"),
+            (.post, "/api/v1/session"),
+            (.get, "/api/v1/libraries/\(lib.uuid)/books/\(other)/manifest"),
+        ]
+        try await makeApp([lib], store: store).test(.router) { client in
+            for (method, uri) in cases {
+                try await client.execute(uri: uri, method: method,
+                                         headers: [.authorization: "Bearer \(issued.token)",
+                                                   Self.viewerHeader: "com.example.viewer/1.0; format=1"],
+                                         body: .init(string: "{}")) { r in
+                    #expect(r.status == .forbidden, "\(method) \(uri)")
+                }
+            }
+        }
+        #expect(store.record(id: issued.record.id)?.firstUsedAt == nil)
+        #expect(store.record(id: issued.record.id)?.viewer == nil)
+    }
+
+    @Test func missingHeaderRecordsUseWithoutAViewer() async throws {
+        let fx = try TestLibraryFixture(name: "U3", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 1)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        try await makeApp([lib], store: store).test(.router) { client in
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        #expect(store.record(id: issued.record.id)?.firstUsedAt != nil, "名乗りが無くても拒まず、使ったことは記録する")
+        #expect(store.record(id: issued.record.id)?.viewer == nil)
+    }
+
+    @Test func longHeaderIsCutTo200Characters() async throws {
+        let fx = try TestLibraryFixture(name: "U4", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 1)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let long = "com.example.viewer/1.0; format=1; " + String(repeating: "x", count: 500)
+        try await makeApp([lib], store: store).test(.router) { client in
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)", Self.viewerHeader: long]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        let viewer = try #require(store.record(id: issued.record.id)?.viewer)
+        #expect(viewer.count == ViewerIdentification.maxLength)
+        #expect(viewer.hasPrefix("com.example.viewer/1.0; format=1"))
+    }
+
+    /// 127.0.0.1 の口（本専用トークンだけの形）でも同じに記録する。
+    @Test func localEndpointRecordsFirstUseToo() async throws {
+        let fx = try TestLibraryFixture(name: "U5", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 1)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .localEndpoint, lockCredential: nil)
+        let app = LibraryServerCore(
+            config: .init(host: "127.0.0.1", port: 0, token: "unused-read", editToken: "cli-token",
+                          apiOnly: true, adminTier: true,
+                          viewerTokens: store, viewerTokenIssuer: .localEndpoint,
+                          acceptsPrincipalTokens: false),
+            dataSource: StaticLibraryDataSource(libraries: [lib])
+        ).buildApplication()
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)",
+                                               Self.viewerHeader: "com.example.viewer/1.80; format=1"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        #expect(store.record(id: issued.record.id)?.firstUsedAt != nil)
+        #expect(store.record(id: issued.record.id)?.viewer == "com.example.viewer/1.80; format=1")
+    }
+
+    /// 中間処理を通った後で施錠の 403 になった要求は「使った」に数える（裁定。ビューアはトークンで本に届いている。
+    /// `refusedRequestsDoNotCountAsUse` の裏側）。施錠庫で発行 → パスワードの世代を変える → manifest は 403。
+    @Test func lockGate403AfterTheMiddlewareStillCountsAsUse() async throws {
+        let fx = try TestLibraryFixture(name: "U6", bookCount: 0, locked: true, password: "pw"); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 1)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+                                 lockCredential: lib.currentLockCredential())
+        try fx.db.setLibrarySetting(key: "lock_password_hash", value: "rotated-hash")
+        try await makeApp([lib], store: store).test(.router) { client in
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(issued.token)",
+                                               Self.viewerHeader: "com.example.viewer/1.80; format=1"]) { r in
+                #expect(r.status == .forbidden)
+            }
+        }
+        #expect(store.record(id: issued.record.id)?.firstUsedAt != nil)
+        #expect(store.record(id: issued.record.id)?.viewer == "com.example.viewer/1.80; format=1")
     }
 }

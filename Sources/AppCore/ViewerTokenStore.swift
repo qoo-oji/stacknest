@@ -29,6 +29,11 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     /// 今もあり、その書庫を scope に含むことを確かめる（グラントの削除・scope の縮小で即時に失効）。
     /// アプリが手元で出したもの（127.0.0.1 の口用）と固定トークンで出したものは nil（グラントに結び付かない）。
     public let issuedByGrantID: String?
+    /// G60 v3: 初めて認証に通った日時（まだなら nil）。一度書いたら変えない（spec §5.7）。
+    /// v2 で保存した記録にはこのキーが無いので、既定 nil の `var` にして合成のデコードで読めるようにする。
+    public internal(set) var firstUsedAt: Date? = nil
+    /// G60 v3: 初めて通った要求の名乗り（`X-StackNest-Viewer`・`ViewerIdentification.sanitize` 済み）。無ければ nil。
+    public internal(set) var viewer: String? = nil
 }
 
 /// G60: 発行の結果。平文の `token` は呼び出し元へ 1 度だけ渡し、保存しない。
@@ -143,6 +148,28 @@ public final class ViewerTokenStore: @unchecked Sendable {
             let removed = before - records.count
             if removed > 0 { persistLocked() }
             return removed
+        }
+    }
+
+    /// G60 v3: id で記録を引く（使用の照会と、App がローカルの本の確認に使う）。
+    public func record(id: String) -> ViewerTokenRecord? {
+        lock.withLock { records.first { $0.id == id } }
+    }
+
+    /// G60 v3: 初めて認証に通ったことを一度だけ記録する。書いたら true、既に書いてある・知らない id なら false。
+    /// 確かめと書き込みを同じ鍵の中で行うので、同時に何本来ても書くのは 1 回。
+    /// `viewer` はここでも `ViewerIdentification.sanitize` を通す（保存するのは整えた文字列だけ）。
+    @discardableResult
+    public func recordFirstUse(id: String, viewer: String?, now: Date = Date()) -> Bool {
+        let cleaned = ViewerIdentification.sanitize(viewer)
+        return lock.withLock {
+            guard let i = records.firstIndex(where: { $0.id == id }), records[i].firstUsedAt == nil else {
+                return false
+            }
+            records[i].firstUsedAt = now
+            records[i].viewer = cleaned
+            persistLocked()
+            return true
         }
     }
 
