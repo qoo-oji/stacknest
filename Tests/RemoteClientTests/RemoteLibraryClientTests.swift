@@ -115,17 +115,47 @@ struct StubBackedRemoteClientTests {
             #expect(StubURLProtocol.lastRequest?.httpMethod == "POST")
         }
 
-        /// G60: 本専用トークンの発行は POST・書庫のトークンを付ける・応答の日時は ISO 8601。
+        /// G60: 本専用トークンの発行は POST・書庫のトークンを付ける・応答の日時は ISO 8601（v3 で tokenID）。
         @Test func viewerTokenPostsAndDecodes() async throws {
             let expires = Date(timeIntervalSince1970: 1_900_000_000)
             StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"],
-                                         body: try enc().encode(ViewerTokenReply(token: "VT", expiresAt: expires)))
+                                         body: try enc().encode(ViewerTokenReply(token: "VT", expiresAt: expires, tokenID: "TID")))
             let client = makeClient()
             let reply = try await client.viewerToken(libraryUUID: "u1", bookID: 9, libraryToken: "LTOK")
-            #expect(reply == ViewerTokenReply(token: "VT", expiresAt: expires))
+            #expect(reply == ViewerTokenReply(token: "VT", expiresAt: expires, tokenID: "TID"))
             #expect(StubURLProtocol.lastRequest?.httpMethod == "POST")
             #expect(StubURLProtocol.lastRequest?.url?.path == "/api/v1/libraries/u1/books/9/viewer-token")
             #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Library-Token") == "LTOK")
+        }
+
+        /// G60 v3: v2 のサーバ（`tokenID` の無い応答）にも繋がる。`tokenID` は nil（呼び出し側は確認を走らせない）。
+        @Test func viewerTokenFromAV2ServerHasNoTokenID() async throws {
+            StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"],
+                                         body: Data(#"{"token":"VT","expiresAt":"2030-03-17T17:46:40Z"}"#.utf8))
+            let client = makeClient()
+            let reply = try await client.viewerToken(libraryUUID: "u1", bookID: 9, libraryToken: nil)
+            #expect(reply.token == "VT")
+            #expect(reply.tokenID == nil)
+        }
+
+        /// G60 v3: 使用の照会は GET・書庫のトークンは付けない・null も値もキーの無い形も読める。
+        @Test func viewerTokenStatusGetsAndDecodes() async throws {
+            let client = makeClient()
+            StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"],
+                                         body: Data(#"{"firstUsedAt":null,"viewer":null}"#.utf8))
+            let unused = try await client.viewerTokenStatus(tokenID: "T-1")
+            #expect(unused == ViewerTokenStatusReply(firstUsedAt: nil, viewer: nil))
+            #expect(StubURLProtocol.lastRequest?.httpMethod == "GET")
+            #expect(StubURLProtocol.lastRequest?.url?.path == "/api/v1/viewer-tokens/T-1")
+            #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Library-Token") == nil)
+            StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"],
+                                         body: Data(#"{"firstUsedAt":"2026-10-02T00:00:00Z","viewer":"com.example.viewer/1.80; format=1"}"#.utf8))
+            let used = try await client.viewerTokenStatus(tokenID: "T-1")
+            #expect(used.firstUsedAt == ISO8601DateFormatter().date(from: "2026-10-02T00:00:00Z"))
+            #expect(used.viewer == "com.example.viewer/1.80; format=1")
+            StubURLProtocol.stub = .init(status: 200, headers: ["Content-Type": "application/json"], body: Data("{}".utf8))
+            let omitted = try await client.viewerTokenStatus(tokenID: "T-1")
+            #expect(omitted == ViewerTokenStatusReply(firstUsedAt: nil, viewer: nil))
         }
 
         @Test func forbiddenMapsTo403Error() async throws {

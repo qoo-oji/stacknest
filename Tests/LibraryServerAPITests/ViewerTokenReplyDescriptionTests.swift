@@ -8,7 +8,7 @@ import LibraryServerAPI
 @Suite("ViewerTokenReply の表示はトークンを伏せる")
 struct ViewerTokenReplyDescriptionTests {
     private func sample() -> ViewerTokenReply {
-        ViewerTokenReply(token: "SECRET-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
+        ViewerTokenReply(token: "SECRET-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000), tokenID: "TID-1")
     }
 
     @Test func descriptionsNeverShowTheToken() {
@@ -16,6 +16,7 @@ struct ViewerTokenReplyDescriptionTests {
         #expect(!String(reflecting: sample()).contains("SECRET-TOKEN"))
         #expect(!"\(sample())".contains("SECRET-TOKEN"))
         #expect(String(describing: sample()).contains("<redacted>"))
+        #expect(String(describing: sample()).contains("TID-1"), "tokenID は秘密ではない")
     }
 
     /// 伏せるのは表示だけ。JSON（ワイヤ形式）にはトークンが載る。

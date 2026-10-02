@@ -2041,7 +2041,26 @@ public struct LibraryServerCore: Sendable {
             // 発行したトークンは共有キャッシュ・ブラウザに残さない。
             return EditedResponse(
                 headers: [.cacheControl: "no-store"],
-                response: ViewerTokenReply(token: issued.token, expiresAt: issued.record.expiresAt))
+                response: ViewerTokenReply(token: issued.token, expiresAt: issued.record.expiresAt,
+                                           tokenID: issued.record.id))
+        }
+        // G60 v3: 本専用トークンが使われたか（spec §5.7）。読めるのは発行した主体だけ（同じグラント、
+        // 固定トークンの経路なら "legacy" 同士）で、その書庫が今の scope に入っていること。
+        // 応答に本の中身は無いので、施錠庫でも書庫のトークンは求めない。
+        api.get("viewer-tokens/:tokenID") { [viewerTokens = config.viewerTokens, issuer = config.viewerTokenIssuer] _, context in
+            guard let viewerTokens else { throw HTTPError(.notImplemented) }
+            // 多層防御: 本専用トークンの接続は、許可リスト（ViewerTokenRoutes）に加えてここでも断る。
+            guard context.viewerBook == nil else { throw HTTPError(.forbidden) }
+            let tokenID = try context.parameters.require("tokenID")
+            // 別の口で発行したものは、この口では「知らない」（発行先の区別と同じ扱い）。
+            guard let record = viewerTokens.record(id: tokenID), record.issuer == issuer else {
+                throw HTTPError(.notFound)
+            }
+            guard (record.issuedByGrantID ?? "legacy") == context.grantID else { throw HTTPError(.forbidden) }
+            guard context.scope.allows(record.libraryUUID) else { throw HTTPError(.forbidden) }
+            return EditedResponse(
+                headers: [.cacheControl: "no-store"],
+                response: ViewerTokenStatusReply(firstUsedAt: record.firstUsedAt, viewer: record.viewer))
         }
         // G48-2: EPUB の読書位置。画像本の /progress と同じく後勝ちで保存し既読化する。
         api.post("libraries/:lib/books/:id/epub-progress") { [config] request, context in

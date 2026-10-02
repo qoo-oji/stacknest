@@ -325,17 +325,44 @@ public struct ViewerTokenReply: Codable, Sendable, Equatable {
     public let token: String
     /// 有効期限（ISO 8601）。
     public let expiresAt: Date
+    /// G60 v3: 秘密でないトークンの ID。`GET /viewer-tokens/{tokenID}` で使われたかを確かめるのに使う。
+    /// サーバは必ず埋める（OpenAPI でも required）。読む側は任意にして、v2 のサーバ（このキーを返さない）にも繋がるようにする。
+    /// nil なら App は参照ファイルで渡すが、使われたかの確認は走らせない（v2 と同じ振る舞い）。
+    public let tokenID: String?
 
-    public init(token: String, expiresAt: Date) {
+    public init(token: String, expiresAt: Date, tokenID: String?) {
         self.token = token
         self.expiresAt = expiresAt
+        self.tokenID = tokenID
     }
 }
 
 /// 平文のトークンを print・dump・失敗メッセージ・ログへ出さない（`IssuedViewerToken`・`BookReference` と同じ）。
 extension ViewerTokenReply: CustomStringConvertible, CustomDebugStringConvertible {
-    public var description: String { "ViewerTokenReply(expiresAt: \(expiresAt), token: <redacted>)" }
+    public var description: String { "ViewerTokenReply(tokenID: \(tokenID ?? "-"), expiresAt: \(expiresAt), token: <redacted>)" }
     public var debugDescription: String { description }
+}
+
+/// G60 v3: 本専用トークンが使われたか（`GET /viewer-tokens/{tokenID}` の応答）。まだ使われていなければ両方 null。
+/// spec §5.7 の形のとおり、null のキーも省かずに書く（読むときはキーが無くても nil）。
+public struct ViewerTokenStatusReply: Codable, Sendable, Equatable {
+    /// 初めて認証に通った日時。
+    public let firstUsedAt: Date?
+    /// 初めて通った要求の `X-StackNest-Viewer`（整えた値）。ヘッダが無ければ nil。
+    public let viewer: String?
+
+    public init(firstUsedAt: Date?, viewer: String?) {
+        self.firstUsedAt = firstUsedAt
+        self.viewer = viewer
+    }
+
+    private enum CodingKeys: String, CodingKey { case firstUsedAt, viewer }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if let firstUsedAt { try c.encode(firstUsedAt, forKey: .firstUsedAt) } else { try c.encodeNil(forKey: .firstUsedAt) }
+        if let viewer { try c.encode(viewer, forKey: .viewer) } else { try c.encodeNil(forKey: .viewer) }
+    }
 }
 
 /// 棚（ユーザー定義棚 / スマート棚）の一覧 DTO（spec §3.3 /shelves）。

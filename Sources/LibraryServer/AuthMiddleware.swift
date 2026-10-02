@@ -92,7 +92,7 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
                 ctx.viewerBook = ViewerBookAccess(libraryUUID: record.libraryUUID, bookID: record.bookID,
                                                   lockFingerprint: record.lockFingerprint)
                 // G60 v3: 初めて通ったときに一度だけ、使われた日時と名乗りを記録する（spec §5.7）。
-                // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ（401・403 は「使った」に数えない）。
+                // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ。この中間処理が返す 401・403 は数えない（下流の施錠の 403 は数える）。
                 // 以後は照合の結果を見るだけで書かない（ページを取るたびに保存しない）。
                 if record.firstUsedAt == nil {
                     viewerTokens.recordFirstUse(

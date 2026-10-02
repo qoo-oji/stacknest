@@ -111,7 +111,7 @@ components:
     ViewerTokenReply:
       type: object
       description: 本専用の読み取りトークン（G60）。その本の manifest・pages・cover の取得と progress の書き込みだけができる
-      required: [token, expiresAt]
+      required: [token, expiresAt, tokenID]
       properties:
         token:
           type: string
@@ -120,6 +120,24 @@ components:
           type: string
           format: date-time
           description: 有効期限（発行から 30 日）。過ぎると 401
+        tokenID:
+          type: string
+          description: 秘密でないトークンの ID（G60 v3）。`GET /viewer-tokens/{tokenID}` で使われたかを確かめる
+
+    ViewerTokenStatusReply:
+      type: object
+      description: 本専用トークンが使われたか（G60 v3）。まだ使われていなければ両方 null（キーは省かない）
+      required: [firstUsedAt, viewer]
+      properties:
+        firstUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 初めて認証に通った日時（許可された道を通った要求だけを数える）
+        viewer:
+          type: string
+          nullable: true
+          description: 初めて通った要求の `X-StackNest-Viewer`（印字できる ASCII だけ・最長 200 文字）。ヘッダが無ければ null
 
     BookListItemDTO:
       type: object
@@ -1528,6 +1546,9 @@ paths:
         **認証ロールは R でも可。** ロック庫は解錠済み（`X-Library-Token`）でなければ発行できない。
         発行したトークンは、その本に限ってライブラリトークンなしで読める（解錠に使ったパスワードの世代に結び付き、
         パスワードが変わると読めなくなる）。
+        応答の `tokenID`（秘密ではない）で、発行した主体が `GET /viewer-tokens/{tokenID}` から使われたかを確かめられる。
+        対応ビューアは、このトークンで呼ぶ要求すべてに `X-StackNest-Viewer: <bundle id>/<版>; format=<版>` を付ける
+        （無くても拒まない。初めて通った要求の日時と値を一度だけ記録する）。
         参照ファイル（`.stacknestbook`）の形式はリポジトリの `docs/book-reference-format.md` を参照。
       tags: [Viewer]
       security:
@@ -1555,11 +1576,45 @@ paths:
         '401':
           description: 未認証
         '403':
-          description: ロック庫で未解錠（`X-Library-Locked: 1`）、または本専用トークンでの呼び出し
+          description: ロック庫で未解錠（`X-Library-Locked` が 1）、または本専用トークンでの呼び出し
         '404':
           description: ライブラリ（スコープ外を含む）または書籍不在
         '501':
           description: このサーバでは発行できない
+
+  /viewer-tokens/{tokenID}:
+    get:
+      summary: 本専用トークンが使われたかの照会（G60 v3）
+      description: |
+        `POST /libraries/{lib}/books/{id}/viewer-token` で発行したトークンが、対応ビューアに使われたかを返す。
+        読めるのは発行した主体だけ（同じグラント。固定トークンで発行したものは固定トークンで）で、その書庫が今の scope に入っていること。
+        本専用トークン自身では呼べない（403）。応答に本の中身は無いので、ロック庫でも `X-Library-Token` は要らない。
+        固定トークン（グラント無し）で動かしているサーバでは主体が区別できないので、同じトークンを持つ接続はどれも、
+        そのトークンで発行した本専用トークンの使用の状況（日時と名乗りだけ）を読める。
+      tags: [Viewer]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tokenID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 照会した（Cache-Control は no-store）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ViewerTokenStatusReply'
+        '401':
+          description: 未認証
+        '403':
+          description: 発行した主体でない・その書庫が scope の外・本専用トークンでの呼び出し
+        '404':
+          description: その ID のトークンが無い（期限切れで消えた・別の口で発行した）
+        '501':
+          description: このサーバでは発行していない
 
   /libraries/{lib}/books/{id}/epub-progress:
     post:

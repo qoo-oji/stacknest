@@ -154,8 +154,9 @@ struct ViewerTokenAuthTests {
         let grant = Grant(id: "g-share", label: "share", token: "SHARE", tier: .read, scope: .all,
                           createdAt: Date(timeIntervalSince1970: 0))
         let repo = InMemoryGrantRepository(initial: [grant])
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
-                                lockCredential: nil, issuedByGrantID: "g-share").token
+        let issuedVG = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+                                   lockCredential: nil, issuedByGrantID: "g-share")
+        let token = issuedVG.token
         let app = LibraryServerCore(
             config: .init(port: 0, token: "unused", grantRepository: repo, viewerTokens: store),
             dataSource: StaticLibraryDataSource(libraries: [lib])
@@ -165,12 +166,14 @@ struct ViewerTokenAuthTests {
             try await client.execute(uri: uri, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .ok)
             }
+            let usedAfterFirst = try #require(store.record(id: issuedVG.record.id)?.firstUsedAt)
             var narrowed = grant
             narrowed.scope = .libraries(["OTHER-LIBRARY"])
             repo.upsert(narrowed)
             try await client.execute(uri: uri, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .unauthorized, "scope から外したら読めない")
             }
+            #expect(store.record(id: issuedVG.record.id)?.firstUsedAt == usedAfterFirst, "scope 外の 401 は記録を動かさない")
             repo.upsert(grant)
             try await client.execute(uri: uri, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .ok)
@@ -237,14 +240,16 @@ struct ViewerTokenAuthTests {
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
         let longAgo = Date().addingTimeInterval(-31 * 24 * 60 * 60)
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
-                                lockCredential: nil, now: longAgo).token
+        let issuedOld = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+                                    lockCredential: nil, now: longAgo)
+        let token = issuedOld.token
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .unauthorized)
             }
         }
+        #expect(store.record(id: issuedOld.record.id)?.firstUsedAt == nil, "期限切れの 401 は使用に数えない")
     }
 
     @Test func tokenFromTheOtherEndpointIs401() async throws {

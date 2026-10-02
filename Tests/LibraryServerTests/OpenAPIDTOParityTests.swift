@@ -85,11 +85,18 @@ struct OpenAPIDTOParityTests {
         expectKeys(try object(fullDetail()).keys, in: "BookDetailDTO", spec: spec)
     }
 
-    /// G60: 本専用トークンの発行の応答。
+    /// G60: 本専用トークンの発行の応答（v3 で tokenID を足した）。
     @Test func viewerTokenReplyKeysAreInTheSpec() throws {
         let spec = try specText()
-        expectKeys(try object(ViewerTokenReply(token: "t", expiresAt: Date(timeIntervalSince1970: 0))).keys,
+        expectKeys(try object(ViewerTokenReply(token: "t", expiresAt: Date(timeIntervalSince1970: 0), tokenID: "id")).keys,
                    in: "ViewerTokenReply", spec: spec)
+    }
+
+    /// G60 v3: 本専用トークンの使用の照会の応答。
+    @Test func viewerTokenStatusReplyKeysAreInTheSpec() throws {
+        let spec = try specText()
+        expectKeys(try object(ViewerTokenStatusReply(firstUsedAt: Date(timeIntervalSince1970: 0), viewer: "v")).keys,
+                   in: "ViewerTokenStatusReply", spec: spec)
     }
 
     @Test func bookPageKeysAreInTheSpec() throws {

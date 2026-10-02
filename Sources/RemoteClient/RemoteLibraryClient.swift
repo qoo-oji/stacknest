@@ -440,6 +440,14 @@ public struct RemoteLibraryClient: Sendable {
         return try decode(ViewerTokenReply.self, data)
     }
 
+    /// G60 v3: 発行してもらった本専用トークンが使われたか（`GET /viewer-tokens/{tokenID}`）。
+    /// 発行した接続と同じ主体（このクライアントの端末トークン）で呼ぶ。書庫のトークンは要らない。
+    public func viewerTokenStatus(tokenID: String) async throws -> ViewerTokenStatusReply {
+        let url = makeURL("viewer-tokens/\(tokenID)")
+        let data = try await send(request(url, cachePolicy: .reloadIgnoringLocalCacheData))
+        return try decode(ViewerTokenStatusReply.self, data)
+    }
+
     /// G48-3: テキスト EPUB の読書位置（spine＋進行率＋cfi）。サーバ側で既読化もする。
     public func postEPUBProgress(libraryUUID: String, bookID: Int, locator: EPUBLocatorDTO, libraryToken: String?) async throws {
         let body = try JSONEncoder().encode(locator)

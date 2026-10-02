@@ -386,7 +386,7 @@ struct ExternalViewerSyncWiringTests {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         G60ViewerTokenStub.issueBody = try encoder.encode(
-            ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000)))
+            ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000), tokenID: "TID-1"))
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [G60ViewerTokenStub.self]
         let client = RemoteLibraryClient(baseURL: URL(string: "http://127.0.0.1:1/")!, deviceToken: "device",

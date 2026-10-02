@@ -131,16 +131,22 @@ struct ViewerTokenEndpointTests {
         ).buildApplication()
         try await app.test(.router) { client in
             var token = ""
+            var tokenID: String?
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/viewer-token", method: .post,
                                      headers: [.authorization: "Bearer READ"]) { r in
                 #expect(r.status == .ok)
-                token = try decodeReply(r.body).token
+                let reply = try decodeReply(r.body)
+                token = reply.token
+                tokenID = reply.tokenID
             }
             repo.delete(id: "r")
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .unauthorized)
             }
+            let issuedID = try #require(tokenID)
+            let record = try #require(store.record(id: issuedID))
+            #expect(record.firstUsedAt == nil, "失効したグラントの 401 は使用に数えない")
         }
         // 固定トークンの経路（グラント無し）。
         let legacyApp = LibraryServerCore(
