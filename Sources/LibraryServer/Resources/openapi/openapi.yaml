@@ -36,6 +36,8 @@ components:
         本専用の読み取りトークン（`POST /libraries/{lib}/books/{id}/viewer-token` で発行）は
         **`Authorization: Bearer` のヘッダでだけ**受け付ける（`?token=` のクエリでは 401）。
         本専用トークンで使えるのは、その本の `GET manifest`・`GET pages/{n}`・`GET cover`・`POST progress` だけ。
+        127.0.0.1 の口がリモートの本の中継のために出す本専用トークン（中継のトークン）は、
+        その中継の `/relay/{relayID}/` の同じ 4 つだけ（G60 v3 試用）。
     libraryToken:
       type: apiKey
       in: header
@@ -1615,6 +1617,179 @@ paths:
           description: その ID のトークンが無い（期限切れで消えた・別の口で発行した）
         '501':
           description: このサーバでは発行していない
+
+  /relay/{relayID}/manifest:
+    get:
+      summary: リモートの本の中継（manifest・G60 v3）
+      description: |
+        **127.0.0.1 の口（ローカルコントロールの受け口）だけ**にあるルート（共有サーバには無い・G60 v3 試用）。
+        リモートの本を参照ファイルで外部ビューアへ渡すとき、`book` は `http://127.0.0.1:<port>/api/v1/relay/<relayID>` になり、
+        StackNest がリモートのサーバへ取り次ぐ（リモートの本専用トークンを付ける。それはビューアに渡らない）。
+        使えるのは、その中継のために出した本専用トークン（中継のトークン）だけで、`Authorization: Bearer` のヘッダでだけ受け付ける。
+        ほかのトークン・別の中継のトークンは 403。StackNest を終了した後や期限の後は中継の記録が無いので 401。
+        リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        リモートに届かない・リダイレクト・本文が上限（64 MiB）を超えた場合は 502。
+        リモートの `GET /libraries/{lib}/books/{id}/manifest` を取り次ぐ。
+      tags: [Viewer]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: relayID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 中継の ID（参照ファイルの `book` の最後の階層）
+      responses:
+        '200':
+          description: リモートの書籍マニフェスト
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestDTO'
+        '401':
+          description: 未認証・中継の記録が無い（StackNest を終了した後など）・リモートが 401 を返した
+        '403':
+          description: 中継のトークンでない・別の中継のトークン・リモートが 403 を返した（施錠なら `X-Library-Locked` が 1）
+        '502':
+          description: リモートに届かない・リダイレクト・本文が上限を超えた
+
+  /relay/{relayID}/pages/{n}:
+    get:
+      summary: リモートの本の中継（ページ画像・G60 v3）
+      description: |
+        **127.0.0.1 の口（ローカルコントロールの受け口）だけ**にあるルート（共有サーバには無い・G60 v3 試用）。
+        リモートの本を参照ファイルで外部ビューアへ渡すとき、`book` は `http://127.0.0.1:<port>/api/v1/relay/<relayID>` になり、
+        StackNest がリモートのサーバへ取り次ぐ（リモートの本専用トークンを付ける。それはビューアに渡らない）。
+        使えるのは、その中継のために出した本専用トークン（中継のトークン）だけで、`Authorization: Bearer` のヘッダでだけ受け付ける。
+        ほかのトークン・別の中継のトークンは 403。StackNest を終了した後や期限の後は中継の記録が無いので 401。
+        リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        リモートに届かない・リダイレクト・本文が上限（64 MiB）を超えた場合は 502。
+        リモートの `GET /libraries/{lib}/books/{id}/pages/{n}` を取り次ぐ。`If-None-Match` を渡し、304 もそのまま返す。
+        クエリは正の整数の `maxw` だけを渡す（ほかのクエリと、数でない・0 以下の `maxw` は落とす）。
+      tags: [Viewer]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: relayID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 中継の ID（参照ファイルの `book` の最後の階層）
+        - name: 'n'
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ページインデックス（0 始まり）
+        - name: maxw
+          in: query
+          schema:
+            type: integer
+          description: 最大幅（px・正の整数のときだけリモートへ渡す）
+      responses:
+        '200':
+          description: ページ画像バイナリ
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: 変更なし（If-None-Match 一致）
+        '401':
+          description: 未認証・中継の記録が無い・リモートが 401 を返した
+        '403':
+          description: 中継のトークンでない・別の中継のトークン・リモートが 403 を返した
+        '404':
+          description: リモートでページ範囲外
+        '502':
+          description: リモートに届かない・リダイレクト・本文が上限を超えた
+
+  /relay/{relayID}/cover:
+    get:
+      summary: リモートの本の中継（表紙・G60 v3）
+      description: |
+        **127.0.0.1 の口（ローカルコントロールの受け口）だけ**にあるルート（共有サーバには無い・G60 v3 試用）。
+        リモートの本を参照ファイルで外部ビューアへ渡すとき、`book` は `http://127.0.0.1:<port>/api/v1/relay/<relayID>` になり、
+        StackNest がリモートのサーバへ取り次ぐ（リモートの本専用トークンを付ける。それはビューアに渡らない）。
+        使えるのは、その中継のために出した本専用トークン（中継のトークン）だけで、`Authorization: Bearer` のヘッダでだけ受け付ける。
+        ほかのトークン・別の中継のトークンは 403。StackNest を終了した後や期限の後は中継の記録が無いので 401。
+        リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        リモートに届かない・リダイレクト・本文が上限（64 MiB）を超えた場合は 502。
+        リモートの `GET /libraries/{lib}/books/{id}/cover` を取り次ぐ。
+      tags: [Viewer]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: relayID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 中継の ID（参照ファイルの `book` の最後の階層）
+      responses:
+        '200':
+          description: 表紙画像
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: 未認証・中継の記録が無い・リモートが 401 を返した
+        '403':
+          description: 中継のトークンでない・別の中継のトークン・リモートが 403 を返した
+        '502':
+          description: リモートに届かない・リダイレクト・本文が上限を超えた
+
+  /relay/{relayID}/progress:
+    post:
+      summary: リモートの本の中継（読書位置の書き込み・G60 v3）
+      description: |
+        **127.0.0.1 の口（ローカルコントロールの受け口）だけ**にあるルート（共有サーバには無い・G60 v3 試用）。
+        リモートの本を参照ファイルで外部ビューアへ渡すとき、`book` は `http://127.0.0.1:<port>/api/v1/relay/<relayID>` になり、
+        StackNest がリモートのサーバへ取り次ぐ（リモートの本専用トークンを付ける。それはビューアに渡らない）。
+        使えるのは、その中継のために出した本専用トークン（中継のトークン）だけで、`Authorization: Bearer` のヘッダでだけ受け付ける。
+        ほかのトークン・別の中継のトークンは 403。StackNest を終了した後や期限の後は中継の記録が無いので 401。
+        リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        リモートに届かない・リダイレクト・本文が上限（64 MiB）を超えた場合は 502。
+        リモートの `POST /libraries/{lib}/books/{id}/progress` を取り次ぐ（本文はそのまま渡す）。
+        本文が 64 KiB を超えたら 413 で、リモートへは送らない。
+      tags: [Viewer]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: relayID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 中継の ID（参照ファイルの `book` の最後の階層）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [page]
+              properties:
+                page:
+                  type: integer
+                  minimum: 0
+                  description: 最終閲覧ページ（0 始まり）
+      responses:
+        '200':
+          description: 書き込み成功（リモートの応答）
+        '401':
+          description: 未認証・中継の記録が無い・リモートが 401 を返した
+        '403':
+          description: 中継のトークンでない・別の中継のトークン・リモートが 403 を返した
+        '413':
+          description: 本文が 64 KiB を超えた
+        '502':
+          description: リモートに届かない・リダイレクト
 
   /libraries/{lib}/books/{id}/epub-progress:
     post:

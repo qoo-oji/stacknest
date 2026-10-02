@@ -167,13 +167,24 @@ struct ViewerTokenAuthTests {
                 #expect(r.status == .ok)
             }
             let usedAfterFirst = try #require(store.record(id: issuedVG.record.id)?.firstUsedAt)
+            // Task 3 レビュー M-1: まだ使っていない 2 本目を同じグラントで出しておき、scope を縮めた後の 401 で
+            // 初回使用が書かれないことを確かめる（1 本目は既に使ったので、一度だけの守りが誤りを隠してしまう）。
+            let fresh = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+                                    lockCredential: nil, issuedByGrantID: "g-share")
             var narrowed = grant
             narrowed.scope = .libraries(["OTHER-LIBRARY"])
             repo.upsert(narrowed)
             try await client.execute(uri: uri, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .unauthorized, "scope から外したら読めない")
             }
+            try await client.execute(uri: uri, method: .get,
+                                     headers: [.authorization: "Bearer \(fresh.token)",
+                                               HTTPField.Name("X-StackNest-Viewer")!: "com.example.viewer/1.0; format=1"]) { r in
+                #expect(r.status == .unauthorized, "scope から外したら、まだ使っていないトークンも読めない")
+            }
             #expect(store.record(id: issuedVG.record.id)?.firstUsedAt == usedAfterFirst, "scope 外の 401 は記録を動かさない")
+            #expect(store.record(id: fresh.record.id)?.firstUsedAt == nil, "scope 外の 401 は「使った」に数えない")
+            #expect(store.record(id: fresh.record.id)?.viewer == nil)
             repo.upsert(grant)
             try await client.execute(uri: uri, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .ok)

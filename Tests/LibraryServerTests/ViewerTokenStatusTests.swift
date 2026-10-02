@@ -54,6 +54,10 @@ struct ViewerTokenStatusTests {
             #expect(store.record(id: tokenID) != nil, "tokenID は保存先の記録の id")
             #expect(tokenID != issued.token)
             let statusURI = "/api/v1/viewer-tokens/\(tokenID)"
+            // Task 3 レビュー M-2: 認証の無い照会は 401（ルートは認証の中間処理の内側にある）。
+            try await client.execute(uri: statusURI, method: .get) { r in
+                #expect(r.status == .unauthorized)
+            }
             try await client.execute(uri: statusURI, method: .get, headers: [.authorization: "Bearer READ"]) { r in
                 #expect(r.status == .ok)
                 #expect(r.headers[.cacheControl] == "no-store")
