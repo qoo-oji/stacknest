@@ -164,7 +164,7 @@ App の文字列カタログは **1 つの日本語キーに 1 つの英訳**し
 | ローカルコントロールの受け口（127.0.0.1） | Local Control endpoint (127.0.0.1) | G60。エラーの理由の中では小文字始まり（the Local Control endpoint …） |
 | この Mac の中だけの受け口 | 127.0.0.1 (this Mac only) | G60。設定とヘルプの説明文 |
 | 対応アプリ | supported app | G60 v3。Info.plist の `StackNestViewerSupport` で対応を宣言したアプリ。文中は小文字 |
-| 〈アプリ名〉が本を読み込んでいません | 〈app〉 hasn't loaded the book. | G60 v3。参照ファイルを渡してから一定時間後のお知らせ |
+| 〈アプリ名〉 が本を読み込んでいません | 〈app〉 hasn't loaded the book. | G60 v3。参照ファイルを渡してから一定時間後のお知らせ |
 | 従来の開き方で開く | Open the Usual Way | G60 v3。そのお知らせのボタン（ローカル＝ファイルのまま、リモート＝内蔵ビューア） |
 | 〈アプリ名〉：未対応（今までどおり開きます） | 〈app〉: Not supported (opens the usual way) | G60 v3。設定 ▸ 表示 ▸ 外部ビューアの状態の行 |
 | 〈アプリ名〉：対応を宣言（未確認） | 〈app〉: Declares support (not yet confirmed) | G60 v3。同上 |
