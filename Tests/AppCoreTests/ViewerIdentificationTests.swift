@@ -110,6 +110,18 @@ struct ViewerIdentificationTests {
         }
     }
 
+    /// 往復の期待値を製品側の `isComponentCharacter` に頼らず、文字列そのもので固定する。
+    @Test func senderHeaderLiteralExpectations() throws {
+        let header = Self.senderHeader(bundle: "jp.example.ビューア", version: "2.0 (beta)", format: 1, kit: "1")
+        #expect(header == "jp.example.____/2.0__beta_; format=1; kit=1")
+        let parsed = try #require(ViewerIdentification.parse(header))
+        #expect(parsed.bundleIdentifier == "jp.example.____")
+        #expect(parsed.version == "2.0__beta_")
+        #expect(ViewerIdentification.parse("a.b/2.0 (beta); format=1; kit=1")?.version == "2.0 (beta)",
+                "kit= があっても版は変わらない")
+        #expect(ViewerIdentification.parse("a.b/2.0 (beta); format=1")?.version == "2.0 (beta)")
+    }
+
     /// 知らない引数・`=` の無い断片は読み飛ばす。キーの大文字・小文字は区別しない。`kit=` は 16 文字で切り、
     /// 文字種の外・空なら nil（ほかは変わらない）。
     @Test func unknownParametersAreIgnoredAndKitIsChecked() {

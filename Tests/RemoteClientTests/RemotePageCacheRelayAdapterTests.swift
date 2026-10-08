@@ -31,6 +31,17 @@ final class RelaySharingStub: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// 差し替えられる時計（`RemotePageCache` の `now:` に渡す）。
+private final class ClockBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var t: Int64
+    init(_ t: Int64) { self.t = t }
+    var value: Int64 {
+        get { lock.withLock { t } }
+        set { lock.withLock { t = newValue } }
+    }
+}
+
 /// 呼ばれた回数を数える箱（`@Sendable` の閉包から触る）。
 private final class CallCount: @unchecked Sendable {
     private let lock = NSLock()
@@ -45,10 +56,26 @@ private final class CallCount: @unchecked Sendable {
 struct RemotePageCacheRelayAdapterTests {
     private let serverID = UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!
 
-    private func tempCache(limit: Int64 = 0) -> RemotePageCache {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rpc-relay-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return RemotePageCache(baseDirectory: dir, limitBytes: limit, maxAgeSeconds: 0)
+    /// 一時ディレクトリに作ったキャッシュ。呼んだテストの `defer { cleanup() }` で消す。
+    private final class Temp: @unchecked Sendable {
+        private let lock = NSLock()
+        private var dirs: [URL] = []
+        func make() -> URL {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rpc-relay-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            lock.withLock { dirs.append(dir) }
+            return dir
+        }
+        func cleanup() {
+            let all = lock.withLock { let d = dirs; dirs = []; return d }
+            for dir in all { try? FileManager.default.removeItem(at: dir) }
+        }
+    }
+    private let temp = Temp()
+
+    private func tempCache(limit: Int64 = 0, maxAgeSeconds: Int64 = 0,
+                           now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970) }) -> RemotePageCache {
+        RemotePageCache(baseDirectory: temp.make(), limitBytes: limit, maxAgeSeconds: maxAgeSeconds, now: now)
     }
 
     private func client() -> RemoteLibraryClient {
@@ -74,6 +101,7 @@ struct RemotePageCacheRelayAdapterTests {
 
     @Test func relayStoredPageIsABuiltInHit() async throws {
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         let bytes = Data([0xFF, 0xD8, 0x01])
         await adapter.storePage(bytes, for: ViewerRelayPageKey(target: target(), page: 3))
@@ -85,6 +113,7 @@ struct RemotePageCacheRelayAdapterTests {
 
     @Test func builtInStoredPageIsARelayHit() async throws {
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         let bytes = Data([0xFF, 0xD8, 0x02])
         RelaySharingStub.reset(body: bytes)
@@ -97,6 +126,7 @@ struct RemotePageCacheRelayAdapterTests {
     /// 版（manifest の etag）が違えば当たらない（差し替えた本の古いページを出さない）。
     @Test func aDifferentVersionMisses() async throws {
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         await adapter.storePage(Data([1]), for: ViewerRelayPageKey(target: target(etag: "\"e1\""), page: 3))
         RelaySharingStub.reset(body: Data([2]))
@@ -109,6 +139,7 @@ struct RemotePageCacheRelayAdapterTests {
 
     /// 版の剥がし方は内蔵ビューアと中継で 1 つ（`RemoteBookContent.normalizeVersion` は AppCore に任せる）。
     @Test func builtInVersionUsesTheSharedNormalizer() {
+        defer { temp.cleanup() }
         for raw in ["\"e1\"", "e1", "\"", "\"\"", "\"e1"] {
             #expect(RemoteBookContent.normalizeVersion(raw) == RemoteViewerPage.version(fromManifestETag: raw))
         }
@@ -118,6 +149,7 @@ struct RemotePageCacheRelayAdapterTests {
     /// 先読みが取らずに済ませるページ（その本・その版・内蔵の幅）。どちらが入れた分も数える。
     @Test func cachedPageIndicesCountBothViewers() async throws {
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         await adapter.storePage(Data([1]), for: ViewerRelayPageKey(target: target(), page: 1))
         RelaySharingStub.reset()
@@ -129,16 +161,34 @@ struct RemotePageCacheRelayAdapterTests {
     /// 中継が入れても、上限の退避は内蔵と同じに走る（1 冊ごとの上限は無く、1 冊が上限を超えても古い順に消えるだけ）。
     @Test func storingEvictsToTheLimitLikeTheBuiltIn() async {
         let cache = tempCache(limit: 250)
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         for page in 0..<3 {
             await adapter.storePage(Data(count: 100), for: ViewerRelayPageKey(target: target(), page: page))
         }
-        #expect(await cache.totalBytes() <= 250)
+        #expect(await cache.totalBytes() == 200, "300 バイトが上限 250 を超えた分、古い 1 枚だけが消える")
+    }
+
+    /// 中継が入れるときも、保持期間を過ぎた古い行は `insert` の中で消える（内蔵の `data(for:fetch:)` と同じ退避）。
+    @Test func insertingEvictsExpiredRows() async {
+        let clock = ClockBox(1_000)
+        let cache = tempCache(maxAgeSeconds: 100, now: { clock.value })
+        defer { temp.cleanup() }
+        let adapter = RemotePageCacheRelayAdapter { cache }
+        let old = ViewerRelayPageKey(target: target(), page: 1)
+        await adapter.storePage(Data([1]), for: old)
+        #expect(await adapter.cachedPage(old) != nil)
+        clock.value = 1_000 + 101
+        let fresh = ViewerRelayPageKey(target: target(), page: 2)
+        await adapter.storePage(Data([2]), for: fresh)
+        #expect(await adapter.cachedPage(old) == nil, "保持期間を過ぎた行は insert で消える")
+        #expect(await adapter.cachedPage(fresh) != nil)
     }
 
     /// 消し方は内蔵と同じ: 本を消したとき（`deleteBook`）と「今すぐ空にする」（`clearAll`）で中継が入れた分も消える。
     @Test func deletingTheBookOrClearingSweepsRelayPages() async {
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { cache }
         let key = ViewerRelayPageKey(target: target(), page: 5)
         await adapter.storePage(Data([5]), for: key)
@@ -153,6 +203,7 @@ struct RemotePageCacheRelayAdapterTests {
     @Test func theCacheIsResolvedOnlyWhenUsed() async {
         let calls = CallCount()
         let cache = tempCache()
+        defer { temp.cleanup() }
         let adapter = RemotePageCacheRelayAdapter { calls.bump(); return cache }
         #expect(calls.value == 0)
         _ = await adapter.cachedPage(ViewerRelayPageKey(target: target(), page: 0))

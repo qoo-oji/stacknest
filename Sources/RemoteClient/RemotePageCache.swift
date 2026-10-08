@@ -18,8 +18,8 @@ public actor RemotePageCache {
         public let kind: Kind
         public let page: Int
         public let maxw: Int?
-        /// 表紙の版トークン（cover のみ・thumbnail の mtime+size 由来）。
-        /// page は nil ＝キー文字列は現行維持（既存ディスクキャッシュ後方互換）。
+        /// 版トークン。cover は thumbnail の mtime+size 由来、page は G4d 以降 manifest の etag（前後の `"` を剥がしたもの）。
+        /// nil ＝キー文字列は版なしのまま（既存ディスクキャッシュ後方互換）。中継（G60）も page をこの版で引く。
         public let version: String?
         public init(serverID: UUID, libraryUUID: String, bookID: Int, kind: Kind, page: Int, maxw: Int?, version: String? = nil) {
             self.serverID = serverID; self.libraryUUID = libraryUUID; self.bookID = bookID
