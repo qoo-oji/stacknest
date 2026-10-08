@@ -109,4 +109,17 @@ struct ConfirmedViewerStoreTests {
         store.record(appBundleIdentifier: "com.example.fakeviewer", viewer: nil, at: t0.addingTimeInterval(60))
         #expect(count.value == 2)
     }
+
+    /// G60 §5.9 の作業で直した不具合: 送る側が `_`・`+` を含む bundle id と `kit=` を付けた名乗りでも、版と format を記録する。
+    @Test func recordsTheVersionFromAKitStyleHeader() {
+        let (d, done) = freshDefaults(); defer { done() }
+        let store = ConfirmedViewerStore(defaults: d)
+        let saved = store.record(appBundleIdentifier: "com.example.my_viewer",
+                                 viewer: "com.example.my_viewer/1.2.3; format=1; kit=0.1.0", at: t0)
+        #expect(saved?.viewerVersion == "1.2.3")
+        #expect(saved?.formatVersion == 1)
+        // 渡した先のアプリの bundle id が無くても、名乗りの bundle id で記録する。
+        let byHeader = store.record(appBundleIdentifier: nil, viewer: "com.example.other+viewer/2.0; format=1", at: t0)
+        #expect(byHeader?.bundleIdentifier == "com.example.other+viewer")
+    }
 }
