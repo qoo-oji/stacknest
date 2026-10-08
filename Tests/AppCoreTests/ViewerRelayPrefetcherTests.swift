@@ -332,7 +332,7 @@ struct ViewerRelayPrefetcherTests {
         #expect(log.pages.isEmpty)
     }
 
-    /// 通信の失敗は同じページを 1・2・4・8・16 秒あけて取り直し、6 回目の失敗で諦める。
+    /// 通信の失敗は同じページを 1・2・4・8・16 秒あけて取り直し、6 回目の失敗でそのページを外す（続けて 2 ページ外すと諦める）。
     @Test func backsOffThenGivesUp() async {
         let log = PrefetchLog()
         let p = make(pageCount: 3, wholeBook: WholeBookSwitch(true), log: log) { relay, page in
@@ -704,7 +704,6 @@ struct ViewerRelayPrefetcherTests {
         #expect(await p.stopReason(for: "R") == nil)
         #expect(await p.activeRelayID == nil)
         #expect(await p.droppedPagesForTesting("R") == [3])
-        #expect(await p.exhaustedStreakForTesting("R") == 1)
     }
 
     /// 全ページの先読み（ON）: 取り終えた後に 1 枚だけ残った壊れたページは、使い切って外すだけで止まらず、
@@ -787,9 +786,43 @@ struct ViewerRelayPrefetcherTests {
         }
         await p.start(relayID: "R", focus: 0)
         await p.waitUntilIdle()
-        #expect(log.pages.filter { $0 == 1 }.count == 6)
-        #expect(log.pages.filter { $0 == 3 }.count == 6)
+        #expect(log.pages == [1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 3, 3, 3], "キャッシュにあった 2 では数え直さず、3 を使い切ったところで諦める（4 は取らない）")
         #expect(await p.stopReason(for: "R") == .gaveUp)
+    }
+
+    /// 取れたページ（`.fetched`）を挟めば連続数は戻る: 離れた 2 枚の壊れたページでは諦めない（どちらも外す）。
+    @Test(.timeLimit(.minutes(1))) func aFetchedPageBetweenTwoBrokenPagesResetsTheStreak() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 6, wholeBook: WholeBookSwitch(true), concurrency: 1, log: log) { relay, page in
+            if page == 1 || page == 3 { log.fetched(relay, page, stored: false); return .failed }
+            log.fetched(relay, page)
+            return .fetched
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages == [1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 3, 3, 3, 4, 5, 0])
+        #expect(await p.stopReason(for: "R") == nil)
+        #expect(await p.droppedPagesForTesting("R") == [1, 3])
+    }
+
+    /// 連続数は仕事をまたぐ: OFF で読み進めるあいだに通信が落ち、仕事ごとに 1 枚ずつ使い切っても、2 枚目で諦める。
+    @Test(.timeLimit(.minutes(1))) func theExhaustedStreakSpansJobs() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 8, cached: Set(0..<6), cachedFromLog: true, wholeBook: WholeBookSwitch(false),
+                     concurrency: 1, log: log) { relay, page in
+            log.fetched(relay, page, stored: false)
+            return .failed
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages == [6, 6, 6, 6, 6, 6])
+        #expect(await p.stopReason(for: "R") == nil, "1 枚目では諦めない")
+        log.viewerRead(1)
+        await p.liveRequestBegan(relayID: "R", page: 1)
+        await p.liveRequestEnded(relayID: "R")
+        await p.waitUntilIdle()
+        #expect(log.pages == [6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7])
+        #expect(await p.stopReason(for: "R") == .gaveUp, "次の仕事で 2 枚目を使い切ったら諦める")
     }
 
     /// ビューアの要求が待ちの最中に始まったら、取り直しは要求が終わるまで待つ。

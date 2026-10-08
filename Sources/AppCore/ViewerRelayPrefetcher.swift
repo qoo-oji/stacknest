@@ -36,7 +36,7 @@ public actor ViewerRelayPrefetcher {
     public struct Tuning: Sendable {
         /// 同時に取る枚数。
         public var concurrency: Int
-        /// 通信の失敗が続いたときに、次を取るまで待つ時間（使い切ったら諦める）。
+        /// 通信の失敗が続いたときに、次を取るまで待つ時間。使い切ったページは外し、続けて 2 ページ使い切ったら仕事を止める（`StopReason.gaveUp`）。
         public var backoff: [Duration]
         /// ビューアの要求が終わるのを見る間隔。
         public var livePollInterval: Duration
@@ -58,7 +58,7 @@ public actor ViewerRelayPrefetcher {
         case refused
         /// リモートが `no-store` で返した（中継の版が古い）。
         case stale
-        /// 通信の失敗が続き、間をあけた取り直しを使い切った。
+        /// 取り直しを使い切ったページが、取れたページを挟まずに 2 ページ続いた（通信が落ちているとみなす）。
         case gaveUp
     }
 
