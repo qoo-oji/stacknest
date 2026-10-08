@@ -58,17 +58,21 @@ extension ViewerRelayForwarder {
     static func handlePage(_ request: Request, _ context: some RequestContext & RoleHoldingContext, page: Int,
                            relay: ViewerRelayConfig) async throws -> Response {
         let (relayID, target) = try authorize(context, relay: relay)
-        guard let cache = relay.pageCache, usesSharedVariant(request) else {
-            return await forward(target, remotePath: "pages/\(page)", request: request, body: nil, relay: relay)
-        }
-        let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader])
         // ビューアの要求のあいだ、先読みは新しく取りに行かず、中心をこのページへ移す（先読みが終わっていれば、
-        // このページのまわりで始め直す）。間に投げる処理は置かない（`loadSharedPage` は投げない）ので、終わりの知らせは必ず届く。
+        // このページのまわりで始め直す）。キャッシュの道でなく素通しする要求（ほかの `maxw`）も数える。
+        // 間に早い戻りは置かない（終わりの知らせは必ず届く）。キャッシュを渡さない形は先読み係が無く、何も呼ばない。
         await relay.prefetcher?.liveRequestBegan(relayID: relayID, page: page)
-        let outcome = await loadSharedPage(target, page: page, viewer: viewer, cache: cache, loader: relay.loader,
-                                           session: relay.session, limit: relay.maxResponseBytes)
+        let response: Response
+        if let cache = relay.pageCache, usesSharedVariant(request) {
+            let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader])
+            let outcome = await loadSharedPage(target, page: page, viewer: viewer, cache: cache, loader: relay.loader,
+                                               session: relay.session, limit: relay.maxResponseBytes)
+            response = sharedPageResponse(outcome)
+        } else {
+            response = await forward(target, remotePath: "pages/\(page)", request: request, body: nil, relay: relay)
+        }
         await relay.prefetcher?.liveRequestEnded(relayID: relayID)
-        return sharedPageResponse(outcome)
+        return response
     }
 
     /// キャッシュにあれば返す。無ければ内蔵ビューアと同じ形（`maxw`＝内蔵の幅・`v`＝版）でリモートから取り、
@@ -159,7 +163,9 @@ extension ViewerRelayForwarder {
                                                         session: session, limit: limit)
                 return Self.prefetchOutcome(outcome)
             },
-            wholeBook: wholeBook)
+            wholeBook: wholeBook,
+            // 待ちの閉包は LibraryServer の中で書く（既定値にしない理由は `ViewerRelayPrefetcher.init` を参照）。
+            sleep: { try await Task.sleep(for: $0) })
     }
 
     /// キャッシュの道の結果 → 先読みの結果。

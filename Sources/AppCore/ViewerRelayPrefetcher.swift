@@ -75,7 +75,10 @@ public actor ViewerRelayPrefetcher {
         let generation: Int
         var pageCount = 0
         var remaining: Set<Int> = []
-        var failures = 0
+        /// この仕事で取れたページの数（`.fetched`）。ページごとの取り直しの「取れたものがあるか」の判定に使う。
+        var successes = 0
+        /// 仕事の始めの `plan` を待っているあいだにビューアが頼んだページ（`remaining` を組むときに除く）。
+        var skip: Set<Int> = []
         var task: Task<Void, Never>?
     }
 
@@ -101,8 +104,12 @@ public actor ViewerRelayPrefetcher {
     /// テスト用: `run` が `finish` を呼ぶ直前に呼ぶ（仕事の終わり際を作る）。
     private var beforeFinish: (@Sendable () async -> Void)?
 
+    /// - Parameter sleep: 待ち。**既定値は持たない**: async の閉包リテラルを引数の既定値にすると、使う側のモジュールごとに
+    ///   その閉包が出力され、-Onone ではコピー同士で async フレームの大きさが食い違い、リンクで本体と違う大きさの記録が
+    ///   組み合わさると、最初の本物の待ちで "freed pointer was not the last allocation" で異常終了する。
+    ///   呼ぶ側のモジュールが自分の閉包（`{ try await Task.sleep(for: $0) }`）を渡す。
     public init(tuning: Tuning = Tuning(), plan: @escaping Plan, fetch: @escaping Fetch,
-                wholeBook: @escaping WholeBook, sleep: @escaping Sleep = { try await Task.sleep(for: $0) }) {
+                wholeBook: @escaping WholeBook, sleep: @escaping Sleep) {
         self.tuning = tuning
         self.plan = plan
         self.fetch = fetch
@@ -118,6 +125,9 @@ public actor ViewerRelayPrefetcher {
 
     /// テスト用: 仕事の終わり際（最後の 1 枚を選び終えた後・`finish` の前）に呼ぶ処理を差し込む。
     func setBeforeFinishForTesting(_ hook: (@Sendable () async -> Void)?) { beforeFinish = hook }
+
+    /// テスト用: 今の仕事で取れたページの数。
+    func successesForTesting() -> Int { job?.successes ?? 0 }
 
     /// 渡した本の先読みを始める。前の仕事（別の本・同じ本）は止める。`focus` は開くページ。
     public func start(relayID: String, focus: Int) {
@@ -175,6 +185,7 @@ public actor ViewerRelayPrefetcher {
         latestFocus = max(0, page)
         if job != nil {
             job?.remaining.remove(page)
+            job?.skip.insert(page)
             pendingRestart = true
         } else if stopReasons[relayID] == nil {
             startJob(for: relayID)
@@ -215,7 +226,8 @@ public actor ViewerRelayPrefetcher {
             return
         }
         job?.pageCount = snapshot.pageCount
-        job?.remaining = Set(0..<snapshot.pageCount).subtracting(snapshot.cached)
+        let skipped = job?.skip ?? []
+        job?.remaining = Set(0..<snapshot.pageCount).subtracting(snapshot.cached).subtracting(skipped)
         let workers = max(1, tuning.concurrency)
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<workers {
@@ -238,20 +250,59 @@ public actor ViewerRelayPrefetcher {
         }
     }
 
+    /// 1 本の worker。ページを 1 枚選んだら、そのページは取れる・諦める・仕事が止まるまで**この worker が持つ**
+    /// （失敗の取り直しは、そのページ自身の回数で 1・2・4・8・16 秒あける。ほかの worker は別のページを取り続ける）。
     private func work(_ gen: Int) async {
         while !Task.isCancelled {
-            // ビューアの要求が取り中のあいだは、新しく取りに行かない（取り消されたら待ちをやめる。
-            // テストの `sleep` は取り消しで投げないので、条件でも見る）。
-            while isLive(gen), !Task.isCancelled {
-                do { try await sleep(tuning.livePollInterval) } catch { return }
-            }
+            guard await waitForViewer(gen) else { return }
             guard let pick = next(gen) else { return }
-            let outcome = await fetch(pick.relayID, pick.page)
-            guard let pause = record(outcome, page: pick.page, gen: gen) else { return }
-            if pause > .zero {
-                do { try await sleep(pause) } catch { return }
+            var failures = 0
+            var successesAtFirstFailure = 0
+            attempts: while true {
+                let outcome = await fetch(pick.relayID, pick.page)
+                guard job?.generation == gen else { return }
+                switch outcome {
+                case .fetched:
+                    job?.successes += 1
+                    break attempts
+                case .alreadyCached:
+                    break attempts
+                case .failed:
+                    if failures == 0 { successesAtFirstFailure = job?.successes ?? 0 }
+                    failures += 1
+                    if failures > tuning.backoff.count {
+                        // 最初の失敗から 1 枚も取れていない＝通信が落ちている → 仕事を止める。取れているなら
+                        // このページだけが取れない → このページだけ諦めて続ける（ビューアが頼めば別の道で取る）。
+                        if (job?.successes ?? 0) == successesAtFirstFailure {
+                            stopJob(gen, reason: .gaveUp)
+                            return
+                        }
+                        break attempts
+                    }
+                    do { try await sleep(tuning.backoff[failures - 1]) } catch { return }
+                    guard !Task.isCancelled, job?.generation == gen else { return }
+                    guard await waitForViewer(gen) else { return }
+                case .stale:
+                    stopJob(gen, reason: .stale)
+                    return
+                case .refused:
+                    stopJob(gen, reason: .refused)
+                    return
+                case .relayGone:
+                    stopJob(gen, reason: nil)
+                    return
+                }
             }
         }
+    }
+
+    /// ビューアの要求が取り中のあいだ待つ（取り消されたら待ちをやめる。テストの `sleep` は取り消しで投げないので、
+    /// 条件でも見る）。続けてよければ true。
+    private func waitForViewer(_ gen: Int) async -> Bool {
+        while isLive(gen), !Task.isCancelled {
+            do { try await sleep(tuning.livePollInterval) } catch { return false }
+        }
+        return !Task.isCancelled
     }
 
     private func isLive(_ gen: Int) -> Bool {
@@ -269,36 +320,6 @@ public actor ViewerRelayPrefetcher {
         current.remaining.remove(page)
         job = current
         return (current.relayID, page)
-    }
-
-    /// 結果を反映し、次を取る前に待つ時間を返す（nil なら仕事を止める）。
-    private func record(_ outcome: Outcome, page: Int, gen: Int) -> Duration? {
-        guard job?.generation == gen else { return nil }
-        switch outcome {
-        case .fetched:
-            job?.failures = 0
-            return .zero
-        case .alreadyCached:
-            return .zero
-        case .failed:
-            job?.remaining.insert(page)
-            let failures = (job?.failures ?? 0) + 1
-            job?.failures = failures
-            guard failures <= tuning.backoff.count else {
-                stopJob(gen, reason: .gaveUp)
-                return nil
-            }
-            return tuning.backoff[failures - 1]
-        case .stale:
-            stopJob(gen, reason: .stale)
-            return nil
-        case .refused:
-            stopJob(gen, reason: .refused)
-            return nil
-        case .relayGone:
-            stopJob(gen, reason: nil)
-            return nil
-        }
     }
 
     /// 仕事を取り消す（記録は `run` の終わりの `finish` で消える）。理由があれば中継ごとに覚える

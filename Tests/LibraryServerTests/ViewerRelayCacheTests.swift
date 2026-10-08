@@ -106,7 +106,7 @@ actor RelayCallCounter {
 
 /// G60 §5.9（2026-10-08 作者の決定）: 中継の `pages/{n}` を、内蔵ビューアと分け合うキャッシュから返す。
 /// スタブの記録を共有するので直列に走らせる。
-@Suite("G60 §5.9: 中継のページのキャッシュ", .serialized)
+@Suite("G60 §5.9: 中継のページのキャッシュ", .serialized, .timeLimit(.minutes(1)))
 struct ViewerRelayCacheTests {
     private static let viewerHeader = HTTPField.Name("X-StackNest-Viewer")!
     private static let lockedHeader = HTTPField.Name("X-Library-Locked")!
@@ -561,6 +561,69 @@ struct ViewerRelayCacheTests {
         #expect(await cache.pages[ViewerRelayPageKey(target: t, page: 1)] == Data([1]))
     }
 
+    /// 401・404・410 も、先読みは断られたものとして止まり、取り直さない（403 は上の `prefetchStopsWhenTheRemoteRefuses`）。
+    @Test(arguments: [401, 404, 410])
+    func prefetchStopsOnTerminalStatuses(_ status: Int) async throws {
+        let fx = makeFixture(pageCount: 6); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<6 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        responses["\(remoteBook)/pages/1"] = .init(status: status)
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache, tuning: .init(concurrency: 1))
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+        #expect(RelayCacheRemoteStub.seen.map(\.url.path) == ["\(remoteBook)/pages/1"], "取り直さない")
+        #expect(await relay.prefetcher?.stopReason(for: fx.relayID) == .refused)
+        #expect(await cache.stores == 0)
+    }
+
+    /// ビューアが `maxw` のほかの幅で頼んだ（素通しする）ページも、先読みの中心を移し、先読みを止める対象に数える。
+    @Test func aPassThroughPageRequestStillMovesThePrefetchCentre() async throws {
+        let fx = makeFixture(pageCount: 40); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<40 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache, wholeBook: false)
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+        let before = RelayCacheRemoteStub.seen.count
+        try await makeApp(fx, relay: relay).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/20?maxw=800", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        await relay.prefetcher?.waitUntilIdle()
+        let after = RelayCacheRemoteStub.seen.dropFirst(before)
+        let cachedPathPages = Set(after.filter { $0.url.query == "maxw=1600&v=e1" }.compactMap { Int($0.url.lastPathComponent) })
+        #expect(cachedPathPages == [21, 22, 23, 24, 25, 26, 19, 18, 29, 30, 31], "20 のまわり（素通しした 20 自身は先読みしない）")
+        #expect(!cachedPathPages.contains(20))
+    }
+
+    /// カナリア: 先読みの本物の `sleep`（`makePrefetcher` が渡す閉包）を、ビューアの要求の待ちで実際に通す。
+    /// async の既定引数の閉包がモジュールごとに食い違うと、最初の本物の待ちでプロセスごと異常終了する。
+    /// つなぎが悪ければ落ち、良ければ落ちようがない（結果は変わらない）。
+    @Test(.timeLimit(.minutes(1))) func canaryProductionSleepOnTheLiveRequestWait() async throws {
+        let fx = makeFixture(pageCount: 4); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<4 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache)
+        let prefetcher = try #require(relay.prefetcher)
+        await prefetcher.liveRequestBegan(relayID: "ANOTHER", page: 0)   // ビューアの要求を ~250 ms 保つ
+        let ender = Task.detached {
+            try? await Task.sleep(for: .milliseconds(250))
+            await prefetcher.liveRequestEnded(relayID: "ANOTHER")
+        }
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await prefetcher.waitUntilIdle()
+        await ender.value
+        for n in 0..<4 { #expect(await cache.pages[key(fx, n)] != nil, "pages/\(n)") }
+    }
+
     // MARK: - 補強（Task 2 のレビュー）
 
     /// 最初に頼んだ側が取り消されても、取りに行く作業は最後まで走り、相乗りした側も同じ結果を受け取る
@@ -608,6 +671,8 @@ struct ViewerRelayCacheTests {
             }
         }
         #expect(await cache.stores == 0)
+        #expect(RelayCacheRemoteStub.seen.count == 1)
+        #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
     }
 
     /// キャッシュの道でも、届かないリモートは 502 で入れない。
@@ -624,6 +689,7 @@ struct ViewerRelayCacheTests {
             }
         }
         #expect(RelayCacheRemoteStub.seen.count == 1, "取りには行った")
+        #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
         #expect(await cache.stores == 0)
     }
 
