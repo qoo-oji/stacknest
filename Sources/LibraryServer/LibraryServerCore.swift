@@ -2091,7 +2091,8 @@ public struct LibraryServerCore: Sendable {
             }
             api.get("relay/:relayID/pages/:n") { request, context in
                 let n = try context.parameters.require("n", as: Int.self)
-                return try await ViewerRelayForwarder.handle(request, context, remotePath: "pages/\(n)", relay: relay)
+                // G60 §5.9: maxw の無い（内蔵の幅の）ページは、内蔵ビューアと分け合うキャッシュから返す。
+                return try await ViewerRelayForwarder.handlePage(request, context, page: n, relay: relay)
             }
             api.post("relay/:relayID/progress") { request, context in
                 try await ViewerRelayForwarder.handle(request, context, remotePath: "progress", relay: relay)

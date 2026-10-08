@@ -23,14 +23,21 @@ public struct ViewerRelayConfig: Sendable {
     public let maxResponseBytes: Int
     /// ビューアから受ける POST の本文の上限（バイト）。超えたら 413。
     public let maxRequestBytes: Int
+    /// G60 §5.9: 内蔵ビューアと分け合うページのキャッシュ。nil なら `pages/{n}` も今までどおり素通し（§5.8 の形）。
+    public let pageCache: (any ViewerRelayPageCache)?
+    /// G60 §5.9: 同じページを同時に頼まれたら 1 回だけ取る。
+    let loader: ViewerRelayPageLoader
 
     public init(registry: ViewerRelayRegistry, session: URLSession = ViewerRelayConfig.defaultSession(),
                 maxResponseBytes: Int = ViewerRelayConfig.defaultMaxResponseBytes,
-                maxRequestBytes: Int = ViewerRelayConfig.defaultMaxRequestBytes) {
+                maxRequestBytes: Int = ViewerRelayConfig.defaultMaxRequestBytes,
+                pageCache: (any ViewerRelayPageCache)? = nil) {
         self.registry = registry
         self.session = session
         self.maxResponseBytes = maxResponseBytes
         self.maxRequestBytes = maxRequestBytes
+        self.pageCache = pageCache
+        self.loader = ViewerRelayPageLoader()
     }
 
     /// キャッシュ・Cookie を持たない session（ETag と 304 はビューアとリモートの間でそのまま通す）。
@@ -158,21 +165,35 @@ enum ViewerRelayForwarder {
         }
     }
 
-    /// 中継のルートの本体。中継の鍵（その relayID のもの）だけを通す。中継の記録が無ければ 401。
-    static func handle(_ request: Request, _ context: some RequestContext & RoleHoldingContext, remotePath: String,
-                       relay: ViewerRelayConfig) async throws -> Response {
+    /// 中継の鍵（その relayID のもの）と中継の記録を確かめる。CLI・MCP のトークン（viewerBook が無い）・本の鍵
+    /// （relayID が無い）・別の中継の鍵は 403、記録が無い（StackNest を終了した後）・期限切れは 401。
+    /// G60 §5.9: **キャッシュはこれを通った後でだけ引く**（`handlePage`）。
+    static func authorize(_ context: some RequestContext & RoleHoldingContext,
+                          relay: ViewerRelayConfig) throws -> (relayID: String, target: ViewerRelayTarget) {
         let relayID = try context.parameters.require("relayID")
         // 多層防御: 道の許可リスト（ViewerTokenRoutes.allowsRelay）に加えて、ここでも鍵の中継を照らす。
-        // CLI・MCP のトークン（viewerBook が無い）と本の鍵（relayID が無い）は 403。
         guard let access = context.viewerBook, access.relayID == relayID else { throw HTTPError(.forbidden) }
         // 中継の記録が無い（StackNest を終了した後）・期限が切れた → 401（「StackNest から開き直して」）。
         guard let target = relay.registry.target(for: relayID) else { throw HTTPError(.unauthorized) }
+        return (relayID, target)
+    }
+
+    /// 中継のルートの本体（`manifest`・`cover`・`progress`。`pages/{n}` は `handlePage`）。
+    static func handle(_ request: Request, _ context: some RequestContext & RoleHoldingContext, remotePath: String,
+                       relay: ViewerRelayConfig) async throws -> Response {
+        let (relayID, target) = try authorize(context, relay: relay)
         var body: ByteBuffer?
         if request.method == .post {
             // 上限を超えたら 413（NIOTooManyBytesError）。リモートへは何も送らない。
             body = try await request.body.collect(upTo: relay.maxRequestBytes)
         }
-        return await forward(target, remotePath: remotePath, request: request, body: body, relay: relay)
+        // G60 §5.9: 素通しした manifest に、中継の記録のページ数と版を合わせる（キャッシュを使う形だけ）。
+        var onSuccess: (@Sendable (Data) async -> Void)?
+        if remotePath == "manifest" && relay.pageCache != nil {
+            onSuccess = { @Sendable data in await ViewerRelayForwarder.noteManifest(data, relayID: relayID, relay: relay) }
+        }
+        return await forward(target, remotePath: remotePath, request: request, body: body, relay: relay,
+                             onSuccess: onSuccess)
     }
 
     /// 取り次ぐ URL と要求を部品から組み直す（ビューアの要求をそのまま流さない）。
@@ -208,8 +229,10 @@ enum ViewerRelayForwarder {
         return outgoing
     }
 
+    /// - Parameter onSuccess: リモートが 200 を返したとき、応答を組む前に本文で呼ぶ（G60 §5.9: manifest の追従）。
     static func forward(_ target: ViewerRelayTarget, remotePath: String, request: Request,
-                        body: ByteBuffer?, relay: ViewerRelayConfig) async -> Response {
+                        body: ByteBuffer?, relay: ViewerRelayConfig,
+                        onSuccess: (@Sendable (Data) async -> Void)? = nil) async -> Response {
         guard let outgoing = makeRemoteRequest(target, remotePath: remotePath, request: request, body: body) else {
             return Response(status: .badGateway)
         }
@@ -225,13 +248,19 @@ enum ViewerRelayForwarder {
         }
         // リダイレクトは取り次がない（304 は ETag の再検証なのでそのまま返す）。
         if (300...399).contains(http.statusCode), http.statusCode != 304 { return Response(status: .badGateway) }
+        if http.statusCode == 200, let onSuccess { await onSuccess(data) }
+        return Response(status: HTTPResponse.Status(code: http.statusCode), headers: copiedHeaders(http),
+                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+    }
+
+    /// ビューアへ写し返すヘッダ（許可リスト `copiedResponseHeaders` だけ）。
+    static func copiedHeaders(_ http: HTTPURLResponse) -> HTTPFields {
         var headers = HTTPFields()
         for name in copiedResponseHeaders {
             if let value = http.value(forHTTPHeaderField: name), let field = HTTPField.Name(name) {
                 headers[field] = value
             }
         }
-        return Response(status: HTTPResponse.Status(code: http.statusCode), headers: headers,
-                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+        return headers
     }
 }

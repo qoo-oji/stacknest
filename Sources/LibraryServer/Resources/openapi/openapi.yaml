@@ -1663,10 +1663,13 @@ paths:
         StackNest がリモートのサーバへ取り次ぐ（リモートの本専用トークンを付ける。それはビューアに渡らない）。
         使えるのは、その中継のために出した本専用トークン（中継のトークン）だけで、`Authorization: Bearer` のヘッダでだけ受け付ける。
         ほかのトークン・別の中継のトークンは 403。StackNest を終了した後や期限の後は中継の記録が無いので 401。
-        リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        `maxw` が無い（または 1600 の）要求は、StackNest の内蔵ビューアと分け合うページのキャッシュから返す（G60 §5.9）。
+        キャッシュに無ければ、内蔵ビューアと同じ形（`maxw=1600` と版の `v`）でリモートから取って入れる（リモートが `no-store` を返したら入れない）。
+        このときの応答は画像と `Content-Type` だけで `ETag` は付けず、`If-None-Match` はリモートへ渡さない。幅が 1600 ピクセルを超えるページは、内蔵ビューアと同じく長い辺が 1600 ピクセル以内になるように縮み、JPEG に変換されて届く（PNG・WebP も）。
+        リモートが 200 以外を返したら、状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返す。
+        ほかの正の整数の `maxw` は今までどおり取り次ぐ（キャッシュしない）。リモートの応答の状態コードと本文、`Content-Type`・`ETag`・`X-Library-Locked` をそのまま返し、`If-None-Match` を渡して 304 もそのまま返す。
         リモートに届かない・リダイレクト・本文が上限（64 MiB）を超えた場合は 502。
-        リモートの `GET /libraries/{lib}/books/{id}/pages/{n}` を取り次ぐ。`If-None-Match` を渡し、304 もそのまま返す。
-        クエリは正の整数の `maxw` だけを渡す（ほかのクエリと、数でない・0 以下の `maxw` は落とす）。
+        リモートの `GET /libraries/{lib}/books/{id}/pages/{n}` を取り次ぐ。
       tags: [Viewer]
       security:
         - bearerAuth: []
@@ -1687,7 +1690,7 @@ paths:
           in: query
           schema:
             type: integer
-          description: 最大幅（px・正の整数のときだけリモートへ渡す）
+          description: 最大幅（px）。無い・1600・正の整数でない値は、内蔵ビューアと同じ幅でキャッシュから返す。ほかの正の整数はリモートへ渡す（キャッシュしない）
       responses:
         '200':
           description: ページ画像バイナリ
@@ -1697,7 +1700,7 @@ paths:
                 type: string
                 format: binary
         '304':
-          description: 変更なし（If-None-Match 一致）
+          description: 変更なし（1600 以外の maxw を付けて取り次いだ要求で、If-None-Match が一致）
         '401':
           description: 未認証・中継の記録が無い・リモートが 401 を返した
         '403':
