@@ -27,17 +27,45 @@ public struct ViewerRelayConfig: Sendable {
     public let pageCache: (any ViewerRelayPageCache)?
     /// G60 §5.9: 同じページを同時に頼まれたら 1 回だけ取る。
     let loader: ViewerRelayPageLoader
+    /// G60 §5.9: 渡した本の先読み（キャッシュを使う形だけ。1 冊ずつ。範囲は `wholeBookPrefetch` に従う）。
+    public let prefetcher: ViewerRelayPrefetcher?
 
+    /// - Parameter wholeBookPrefetch: 内蔵ビューアと同じ設定「開いた本を全ページ先読みする」が今 ON か
+    ///   （先読み係が取るページを選ぶたびに読む。App は `RemoteCacheSettings.wholeBookPrefetch()` を渡す。既定は OFF）。
     public init(registry: ViewerRelayRegistry, session: URLSession = ViewerRelayConfig.defaultSession(),
                 maxResponseBytes: Int = ViewerRelayConfig.defaultMaxResponseBytes,
                 maxRequestBytes: Int = ViewerRelayConfig.defaultMaxRequestBytes,
-                pageCache: (any ViewerRelayPageCache)? = nil) {
+                pageCache: (any ViewerRelayPageCache)? = nil,
+                prefetchTuning: ViewerRelayPrefetcher.Tuning = ViewerRelayPrefetcher.Tuning(),
+                wholeBookPrefetch: @escaping @Sendable () -> Bool = { false }) {
         self.registry = registry
         self.session = session
         self.maxResponseBytes = maxResponseBytes
         self.maxRequestBytes = maxRequestBytes
         self.pageCache = pageCache
-        self.loader = ViewerRelayPageLoader()
+        let loader = ViewerRelayPageLoader()
+        self.loader = loader
+        self.prefetcher = pageCache.map { cache in
+            ViewerRelayForwarder.makePrefetcher(registry: registry, session: session, limit: maxResponseBytes,
+                                                cache: cache, loader: loader, tuning: prefetchTuning,
+                                                wholeBook: wholeBookPrefetch)
+        }
+    }
+
+    /// G60 §5.9: 渡した本の先読みを始める（前に渡した本の先読みは止まる）。`focus` は開くページ。
+    /// 範囲は設定に従う（ON＝全ページ・OFF＝近傍だけ）。キャッシュを使わない形では何もしない。
+    public func startPrefetch(relayID: String, focus: Int) async {
+        await prefetcher?.start(relayID: relayID, focus: focus)
+    }
+
+    /// G60 §5.9: 先読みを止める（127.0.0.1 の口を止めたとき・StackNest の終了）。
+    public func stopPrefetch() async {
+        await prefetcher?.stop()
+    }
+
+    /// G60 §5.9: 「開いた本を全ページ先読みする」が切り替わった（App が設定の画面の知らせを受けて呼ぶ）。
+    public func wholeBookPrefetchSettingChanged() async {
+        await prefetcher?.wholeBookSettingChanged()
     }
 
     /// キャッシュ・Cookie を持たない session（ETag と 304 はビューアとリモートの間でそのまま通す）。

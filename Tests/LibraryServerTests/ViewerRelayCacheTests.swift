@@ -16,6 +16,8 @@ final class RelayCacheRemoteStub: URLProtocol, @unchecked Sendable {
         var status: Int
         var headers: [String: String] = [:]
         var body = Data()
+        /// この状態コードの応答は、通信の失敗（届かない）として返す。
+        static let unreachable = -1
     }
     struct Seen: Sendable {
         let url: URL
@@ -44,6 +46,10 @@ final class RelayCacheRemoteStub: URLProtocol, @unchecked Sendable {
         Self.lock.withLock { Self.storedSeen.append(seen) }
         let withQuery = url.path + (url.query.map { "?" + $0 } ?? "")
         let canned = Self.responses[withQuery] ?? Self.responses[url.path] ?? Canned(status: 404)
+        if canned.status == Canned.unreachable {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
         let resp = HTTPURLResponse(url: url, statusCode: canned.status, httpVersion: "HTTP/1.1",
                                    headerFields: canned.headers)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
@@ -145,8 +151,13 @@ struct ViewerRelayCacheTests {
         return URLSession(configuration: cfg)
     }
 
-    func makeRelay(_ fx: Fixture, cache: (any ViewerRelayPageCache)?) -> ViewerRelayConfig {
-        ViewerRelayConfig(registry: fx.registry, session: session(), pageCache: cache)
+    func makeRelay(_ fx: Fixture, cache: (any ViewerRelayPageCache)?,
+                   tuning: ViewerRelayPrefetcher.Tuning = ViewerRelayPrefetcher.Tuning(),
+                   wholeBook: Bool = true,
+                   maxResponseBytes: Int = ViewerRelayConfig.defaultMaxResponseBytes) -> ViewerRelayConfig {
+        ViewerRelayConfig(registry: fx.registry, session: session(), maxResponseBytes: maxResponseBytes,
+                          pageCache: cache, prefetchTuning: tuning,
+                          wholeBookPrefetch: { wholeBook })
     }
 
     func makeApp(_ fx: Fixture, relay: ViewerRelayConfig,
@@ -273,6 +284,7 @@ struct ViewerRelayCacheTests {
         }
         #expect(await cache.stores == 0)
         #expect(RelayCacheRemoteStub.seen.count == 2, "入れていないので 2 回目も取りに行く")
+        #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
     }
 
     /// キャッシュの道でも、リモートの 200 以外は状態コード・`X-Library-Locked` をそのまま返し、入れない。
@@ -282,7 +294,10 @@ struct ViewerRelayCacheTests {
         let cache = FakeRelayPageCache()
         RelayCacheRemoteStub.responses = [
             "\(remoteBook)/pages/1": .init(status: 401),
-            "\(remoteBook)/pages/2": .init(status: 403, headers: ["X-Library-Locked": "1"]),
+            "\(remoteBook)/pages/2": .init(status: 403,
+                                           headers: ["X-Library-Locked": "1", "Content-Type": "text/plain",
+                                                     "Set-Cookie": "sid=secret", "X-Other": "leak"],
+                                           body: Data("locked".utf8)),
             "\(remoteBook)/pages/3": .init(status: 500),
             "\(remoteBook)/pages/4": .init(status: 302, headers: ["Location": "http://evil.example/steal"]),
             // pages/9 は無い → 404
@@ -295,11 +310,18 @@ struct ViewerRelayCacheTests {
                 try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/\(n)", method: .get,
                                          headers: [.authorization: "Bearer \(fx.token)"]) { r in
                     #expect(r.status == status, "pages/\(n)")
-                    if n == 2 { #expect(r.headers[Self.lockedHeader] == "1") }
+                    if n == 2 {
+                        #expect(r.headers[Self.lockedHeader] == "1")
+                        #expect(r.headers[.contentType] == "text/plain", "許可リストの Content-Type は写す")
+                        #expect(String(decoding: Data(buffer: r.body), as: UTF8.self) == "locked", "本文はそのまま")
+                        #expect(r.headers[.setCookie] == nil, "許可リスト外のヘッダは写さない")
+                        #expect(r.headers[HTTPField.Name("X-Other")!] == nil, "許可リスト外のヘッダは写さない")
+                    }
                 }
             }
         }
         #expect(await cache.stores == 0)
+        #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
     }
 
     /// ほかの `maxw` は今までどおり取り次ぐ（`v` を付けない・`If-None-Match` を渡す・キャッシュを引かない）。
@@ -385,7 +407,7 @@ struct ViewerRelayCacheTests {
     }
 
     /// 同じページを同時に頼まれたら（ビューアと先読み）、リモートへは 1 回だけ取りに行き、両方が同じ結果を受け取る。
-    @Test func concurrentRequestsForOnePageFetchOnce() async {
+    @Test(.timeLimit(.minutes(1))) func concurrentRequestsForOnePageFetchOnce() async {
         let fx = makeFixture(); defer { fx.done() }
         let loader = ViewerRelayPageLoader()
         let pageKey = key(fx, 3)
@@ -413,5 +435,214 @@ struct ViewerRelayCacheTests {
         #expect(da == bytes)
         #expect(db == bytes)
         #expect(await loader.inFlightCount == 0)
+    }
+
+    // MARK: - 先読み（Task 3）
+
+    /// 設定が ON なら、先読みは中継自身の道（リモートの鍵・内蔵の幅と版）で全ページを取り、キャッシュに入れる。
+    /// 名乗りは付けない。キャッシュにあるページは取らない。入れた後のビューアの要求はリモートへ行かない。
+    @Test func prefetchFillsTheCacheThroughTheRelay() async throws {
+        let fx = makeFixture(pageCount: 4); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        await cache.put(Self.jpeg, for: key(fx, 2))   // 内蔵ビューアが読んだ分
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<4 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache)
+
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+
+        let seen = RelayCacheRemoteStub.seen
+        #expect(Set(seen.map(\.url.path)) == ["\(remoteBook)/pages/0", "\(remoteBook)/pages/1", "\(remoteBook)/pages/3"])
+        #expect(seen.count == 3, "1 枚 1 回・キャッシュにある 2 は取らない")
+        #expect(seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" })
+        #expect(seen.allSatisfy { $0.header("Authorization") == "Bearer REMOTE-SECRET" })
+        #expect(seen.allSatisfy { $0.header("X-StackNest-Viewer") == nil }, "先読みはビューアの要求ではない")
+        for n in 0..<4 { #expect(await cache.pages[key(fx, n)] != nil, "pages/\(n)") }
+
+        try await makeApp(fx, relay: relay).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/3", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(Data(buffer: r.body) == Data([3]))
+            }
+        }
+        #expect(RelayCacheRemoteStub.seen.count == 3, "先読みした後はリモートへ行かない")
+    }
+
+    /// 設定が OFF（既定）なら、中継の先読みは内蔵ビューアと同じ近傍だけ: 渡した時点は開くページのまわり、
+    /// ビューアがページを頼んだら、そのページのまわり。遠くのページは取らない。
+    @Test func withTheSettingOffTheRelayPrefetchesOnlyAroundTheViewer() async throws {
+        let fx = makeFixture(pageCount: 30); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<30 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache, wholeBook: false)
+        func fetchedPages() -> Set<Int> {
+            Set(RelayCacheRemoteStub.seen.compactMap { Int($0.url.lastPathComponent) })
+        }
+
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+        #expect(fetchedPages() == [1, 2, 3, 4, 5, 6, 9, 10, 11], "開くページ（0）のまわりだけ")
+
+        try await makeApp(fx, relay: relay).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/20", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        await relay.prefetcher?.waitUntilIdle()
+        // 20 はビューアの要求。そのまわり（21〜26・19・18・29。9〜11 は取ってある）を足す。15 などの遠くは取らない。
+        #expect(fetchedPages() == [1, 2, 3, 4, 5, 6, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 19, 18, 29])
+        #expect(RelayCacheRemoteStub.seen.count == 19, "1 枚 1 回")
+    }
+
+    /// リモートが断ったら（施錠の 403 など）先読みは止まり、理由を覚える。その後はビューアがページを頼んでも
+    /// 先読みは始め直さない（リモートへ行くのはビューアの要求の 1 回だけ）。
+    @Test func prefetchStopsWhenTheRemoteRefuses() async throws {
+        let fx = makeFixture(pageCount: 10); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        var responses: [String: RelayCacheRemoteStub.Canned] = [:]
+        for n in 0..<10 { responses["\(remoteBook)/pages/\(n)"] = .init(status: 200, body: Data([UInt8(n)])) }
+        responses["\(remoteBook)/pages/1"] = .init(status: 403, headers: ["X-Library-Locked": "1"])
+        RelayCacheRemoteStub.responses = responses
+        let relay = makeRelay(fx, cache: cache, tuning: .init(concurrency: 1))
+
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+
+        #expect(RelayCacheRemoteStub.seen.map(\.url.path) == ["\(remoteBook)/pages/1"])
+        #expect(await cache.stores == 0)
+        #expect(await relay.prefetcher?.stopReason(for: fx.relayID) == .refused)
+
+        try await makeApp(fx, relay: relay).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/5", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        await relay.prefetcher?.waitUntilIdle()
+        #expect(RelayCacheRemoteStub.seen.map(\.url.path) == ["\(remoteBook)/pages/1", "\(remoteBook)/pages/5"],
+                "ビューアの要求の 1 回だけ")
+        #expect(await relay.prefetcher?.stopReason(for: fx.relayID) == .refused)
+    }
+
+    /// ビューアが manifest を読み直して版が変わったら、最後に渡した本の先読みは新しい版でし直す。
+    @Test func aNewManifestVersionRestartsThePrefetch() async throws {
+        let fx = makeFixture(pageCount: 2); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        RelayCacheRemoteStub.responses = [
+            // 渡した時点の版（e1）は古い: サーバは今の版のバイトを no-store で返す → 先読みは止まる。
+            "\(remoteBook)/pages/1?maxw=1600&v=e1": .init(status: 200, headers: ["Cache-Control": "no-store"], body: Data([9])),
+            "\(remoteBook)/pages/0?maxw=1600&v=e1": .init(status: 200, headers: ["Cache-Control": "no-store"], body: Data([9])),
+            "\(remoteBook)/manifest": .init(
+                status: 200, headers: ["Content-Type": "application/json"],
+                body: Data(#"{"pageCount":2,"direction":"rtl","format":"archive","etag":"\"e2\""}"#.utf8)),
+            "\(remoteBook)/pages/0?maxw=1600&v=e2": .init(status: 200, body: Data([0])),
+            "\(remoteBook)/pages/1?maxw=1600&v=e2": .init(status: 200, body: Data([1])),
+        ]
+        let relay = makeRelay(fx, cache: cache, tuning: .init(concurrency: 1))
+        await relay.startPrefetch(relayID: fx.relayID, focus: 0)
+        await relay.prefetcher?.waitUntilIdle()
+        #expect(await cache.stores == 0, "古い版のバイトは入れない")
+        #expect(RelayCacheRemoteStub.seen.count == 1, "no-store を見たら止まる")
+
+        try await makeApp(fx, relay: relay).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        await relay.prefetcher?.waitUntilIdle()
+        let t = try #require(fx.registry.target(for: fx.relayID))
+        #expect(await cache.pages[ViewerRelayPageKey(target: t, page: 0)] == Data([0]))
+        #expect(await cache.pages[ViewerRelayPageKey(target: t, page: 1)] == Data([1]))
+    }
+
+    // MARK: - 補強（Task 2 のレビュー）
+
+    /// 最初に頼んだ側が取り消されても、取りに行く作業は最後まで走り、相乗りした側も同じ結果を受け取る
+    /// （先読みを止めても取り中の 1 枚は入る、の土台）。
+    @Test(.timeLimit(.minutes(1))) func loaderSurvivesCancellationOfTheFirstRequester() async {
+        let fx = makeFixture(); defer { fx.done() }
+        let loader = ViewerRelayPageLoader()
+        let pageKey = key(fx, 3)
+        let gate = RelayTestGate()
+        let sawCancellation = RelayCallCounter()
+        let bytes = Self.jpeg
+        let first = Task {
+            await loader.load(pageKey) {
+                await gate.wait()
+                if Task.isCancelled { await sawCancellation.bump() }
+                return .fetched(bytes, stored: true)
+            }
+        }
+        while await loader.inFlightCount == 0 { await Task.yield() }
+        let second = Task {
+            await loader.load(pageKey) { .fetched(Data([0]), stored: true) }
+        }
+        while await loader.joinedCount(for: pageKey) == 0 { await Task.yield() }
+        first.cancel()
+        await gate.open()
+        let (a, b) = await (first.value, second.value)
+        guard case .fetched(let da, let sa) = a, case .fetched(let db, let sb) = b else {
+            Issue.record("取れていない"); return
+        }
+        #expect(da == bytes && db == bytes)
+        #expect(sa && sb)
+        #expect(await sawCancellation.value == 0, "作業は取り消しを見ない")
+        #expect(await loader.inFlightCount == 0)
+    }
+
+    /// キャッシュの道でも、大きすぎる応答は 502 で入れない。
+    @Test func cachedPathEnforcesTheResponseSizeLimit() async throws {
+        let fx = makeFixture(); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        RelayCacheRemoteStub.responses = ["\(remoteBook)/pages/1": .init(status: 200, body: Self.jpeg)]
+        try await makeApp(fx, relay: makeRelay(fx, cache: cache, maxResponseBytes: 1)).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/1", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .badGateway)
+            }
+        }
+        #expect(await cache.stores == 0)
+    }
+
+    /// キャッシュの道でも、届かないリモートは 502 で入れない。
+    @Test func cachedPathUnreachableRemoteIs502() async throws {
+        let fx = makeFixture(); defer { fx.done() }
+        let cache = FakeRelayPageCache()
+        RelayCacheRemoteStub.responses = [
+            "\(remoteBook)/pages/1": .init(status: RelayCacheRemoteStub.Canned.unreachable),
+        ]
+        try await makeApp(fx, relay: makeRelay(fx, cache: cache)).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/1", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .badGateway)
+            }
+        }
+        #expect(RelayCacheRemoteStub.seen.count == 1, "取りには行った")
+        #expect(await cache.stores == 0)
+    }
+
+    /// キャッシュを渡さない形では、manifest を素通ししても中継の記録（ページ数・版）を変えない（§5.8 のまま）。
+    @Test func manifestPassThroughWithoutACacheLeavesTheRecordAlone() async throws {
+        let fx = makeFixture(); defer { fx.done() }
+        RelayCacheRemoteStub.responses = [
+            "\(remoteBook)/manifest": .init(
+                status: 200, headers: ["Content-Type": "application/json"],
+                body: Data(#"{"pageCount":25,"direction":"rtl","format":"archive","etag":"\"e2\""}"#.utf8)),
+        ]
+        try await makeApp(fx, relay: makeRelay(fx, cache: nil)).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        let t = try #require(fx.registry.target(for: fx.relayID))
+        #expect(t.pageCount == 20)
+        #expect(t.manifestETag == "\"e1\"")
     }
 }

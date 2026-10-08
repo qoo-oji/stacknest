@@ -57,13 +57,17 @@ extension ViewerRelayForwarder {
     /// ほかは今までどおり取り次ぐ。
     static func handlePage(_ request: Request, _ context: some RequestContext & RoleHoldingContext, page: Int,
                            relay: ViewerRelayConfig) async throws -> Response {
-        let (_, target) = try authorize(context, relay: relay)
+        let (relayID, target) = try authorize(context, relay: relay)
         guard let cache = relay.pageCache, usesSharedVariant(request) else {
             return await forward(target, remotePath: "pages/\(page)", request: request, body: nil, relay: relay)
         }
         let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader])
+        // ビューアの要求のあいだ、先読みは新しく取りに行かず、中心をこのページへ移す（先読みが終わっていれば、
+        // このページのまわりで始め直す）。間に投げる処理は置かない（`loadSharedPage` は投げない）ので、終わりの知らせは必ず届く。
+        await relay.prefetcher?.liveRequestBegan(relayID: relayID, page: page)
         let outcome = await loadSharedPage(target, page: page, viewer: viewer, cache: cache, loader: relay.loader,
                                            session: relay.session, limit: relay.maxResponseBytes)
+        await relay.prefetcher?.liveRequestEnded(relayID: relayID)
         return sharedPageResponse(outcome)
     }
 
@@ -128,9 +132,49 @@ extension ViewerRelayForwarder {
 
     /// G60 §5.9: 素通しした manifest（200）に、中継の記録のページ数と版を合わせる。内蔵ビューアが
     /// 「開いた時点の manifest」の版でページを引くのと同じで、ビューアに見せたページ数と、引く版を同じ manifest から取る。
-    /// 読めない本文なら何もしない。
+    /// 変わったら、最後に渡した本なら先読みし直す。読めない本文なら何もしない。
     static func noteManifest(_ data: Data, relayID: String, relay: ViewerRelayConfig) async {
         guard let manifest = try? JSONDecoder().decode(ManifestDTO.self, from: data) else { return }
-        relay.registry.updateBook(relayID, pageCount: manifest.pageCount, manifestETag: manifest.etag)
+        if relay.registry.updateBook(relayID, pageCount: manifest.pageCount, manifestETag: manifest.etag) {
+            await relay.prefetcher?.versionChanged(relayID: relayID)
+        }
+    }
+
+    /// G60 §5.9: 先読み係を組む。取るのは中継自身の道（リモートの鍵・内蔵の幅と版・名乗りなし）で、
+    /// ビューアの要求と同じ `loader` を通す（同じページは 1 回だけ取る）。1 枚ごとに中継の記録を引き直す
+    /// （終了・期限切れ・版の更新をここで拾う）。範囲の設定は `wholeBook` を先読み係がそのまま読む。
+    static func makePrefetcher(registry: ViewerRelayRegistry, session: URLSession, limit: Int,
+                               cache: any ViewerRelayPageCache, loader: ViewerRelayPageLoader,
+                               tuning: ViewerRelayPrefetcher.Tuning,
+                               wholeBook: @escaping @Sendable () -> Bool) -> ViewerRelayPrefetcher {
+        ViewerRelayPrefetcher(
+            tuning: tuning,
+            plan: { relayID in
+                guard let target = registry.target(for: relayID) else { return nil }
+                return (pageCount: target.pageCount, cached: await cache.cachedPageIndices(for: target))
+            },
+            fetch: { relayID, page in
+                guard let target = registry.target(for: relayID) else { return .relayGone }
+                let outcome = await Self.loadSharedPage(target, page: page, viewer: nil, cache: cache, loader: loader,
+                                                        session: session, limit: limit)
+                return Self.prefetchOutcome(outcome)
+            },
+            wholeBook: wholeBook)
+    }
+
+    /// キャッシュの道の結果 → 先読みの結果。
+    static func prefetchOutcome(_ outcome: SharedPageOutcome) -> ViewerRelayPrefetcher.Outcome {
+        switch outcome {
+        case .hit:
+            return .alreadyCached
+        case .fetched(_, let stored):
+            return stored ? .fetched : .stale
+        case .upstream(let status, _, _):
+            // 401（リモートの鍵の期限・取り消し）・403（施錠・範囲の外）・404（本が消えた・ページの範囲の外）・410 は
+            // 取り直しても同じ。ほか（5xx・429 など）は間をあけて取り直す。
+            return [401, 403, 404, 410].contains(status) ? .refused : .failed
+        case .failed:
+            return .failed
+        }
     }
 }
