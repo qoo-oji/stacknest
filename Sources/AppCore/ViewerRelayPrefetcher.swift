@@ -75,9 +75,7 @@ public actor ViewerRelayPrefetcher {
         let generation: Int
         var pageCount = 0
         var remaining: Set<Int> = []
-        /// この仕事で取れたページの数（`.fetched`）。ページごとの取り直しの「取れたものがあるか」の判定に使う。
-        var successes = 0
-        /// 仕事の始めの `plan` を待っているあいだにビューアが頼んだページ（`remaining` を組むときに除く）。
+        /// ビューアが頼んだページ（仕事の始めの `plan` を待っているあいだのものを含む。`remaining` を組むときに除く）。
         var skip: Set<Int> = []
         var task: Task<Void, Never>?
     }
@@ -99,6 +97,13 @@ public actor ViewerRelayPrefetcher {
     private var liveRequests = 0
     /// 止まった理由（中継ごと）。
     private var stopReasons: [String: StopReason] = [:]
+    /// 取り直しを使い切って外したページ（中継ごと）。**1 枚の壊れた画像で先読みを止めない**ため、後の仕事でも要求しない
+    /// （ビューア自身の要求は別の道で通る）。`start`・`versionChanged`・ON の知らせで止まった理由と一緒に解く。
+    private var droppedPages: [String: Set<Int>] = [:]
+    /// 取り直しを使い切ったページの連続数（中継ごと）。`.fetched` でだけ 0 に戻る（キャッシュにあっただけでは
+    /// 通信が生きている証拠にならない）。2 に達したら `.gaveUp` で止める: 本物の通信断なら 2 本の worker が
+    /// ほぼ同時に使い切るので約 31 秒で止まり、1 枚だけ壊れた画像なら次の `.fetched` で数え直す。
+    private var exhaustedStreak: [String: Int] = [:]
     /// 仕事が走っているあいだに届いた始め直しの頼み（ビューアの要求・ON の知らせ）。仕事の終わり（`finish`）で使う。
     private var pendingRestart = false
     /// テスト用: `run` が `finish` を呼ぶ直前に呼ぶ（仕事の終わり際を作る）。
@@ -126,8 +131,18 @@ public actor ViewerRelayPrefetcher {
     /// テスト用: 仕事の終わり際（最後の 1 枚を選び終えた後・`finish` の前）に呼ぶ処理を差し込む。
     func setBeforeFinishForTesting(_ hook: (@Sendable () async -> Void)?) { beforeFinish = hook }
 
-    /// テスト用: 今の仕事で取れたページの数。
-    func successesForTesting() -> Int { job?.successes ?? 0 }
+    /// テスト用: 取り直しを使い切って外したページ。
+    func droppedPagesForTesting(_ relayID: String) -> Set<Int> { droppedPages[relayID] ?? [] }
+
+    /// テスト用: 取り直しを使い切ったページの連続数。
+    func exhaustedStreakForTesting(_ relayID: String) -> Int { exhaustedStreak[relayID] ?? 0 }
+
+    /// 止まった理由・外したページ・連続数をまとめて解く。
+    private func clearStop(for relayID: String) {
+        stopReasons[relayID] = nil
+        droppedPages[relayID] = nil
+        exhaustedStreak[relayID] = nil
+    }
 
     /// 渡した本の先読みを始める。前の仕事（別の本・同じ本）は止める。`focus` は開くページ。
     public func start(relayID: String, focus: Int) {
@@ -136,6 +151,8 @@ public actor ViewerRelayPrefetcher {
         latestDirection = 1
         // 渡し直し: 前の止まった理由は持ち越さない（仕事を持つのは最後に渡した本だけ）。
         stopReasons.removeAll()
+        droppedPages.removeAll()
+        exhaustedStreak.removeAll()
         startJob(for: relayID)
     }
 
@@ -152,7 +169,7 @@ public actor ViewerRelayPrefetcher {
     /// 止まった理由（版が古い・断られた）があっても解く（新しい版なら取れるかもしれない）。
     public func versionChanged(relayID: String) {
         guard relayID == latestRelayID else { return }
-        stopReasons[relayID] = nil
+        clearStop(for: relayID)
         startJob(for: relayID)
     }
 
@@ -162,7 +179,7 @@ public actor ViewerRelayPrefetcher {
     /// OFF は何もしない（走っている仕事は次の 1 枚から近傍だけに戻り、取り中の分は最後まで取る）。
     public func wholeBookSettingChanged() {
         guard wholeBook(), let relayID = latestRelayID else { return }
-        stopReasons[relayID] = nil
+        clearStop(for: relayID)
         if job != nil {
             pendingRestart = true
         } else {
@@ -189,6 +206,7 @@ public actor ViewerRelayPrefetcher {
             pendingRestart = true
         } else if stopReasons[relayID] == nil {
             startJob(for: relayID)
+            job?.skip.insert(page)
         }
     }
 
@@ -200,8 +218,10 @@ public actor ViewerRelayPrefetcher {
     /// 今の仕事と、そのあいだに始まった仕事が終わるまで待つ（テスト用）。
     public func waitUntilIdle() async {
         while let task = job?.task {
-            await task.value
+            // 待っている側が取り消されたら仕事も取り消す（止まったテストが制限時間で終わる）。
+            await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             if job?.task == task { job = nil }
+            if Task.isCancelled { return }
         }
     }
 
@@ -226,7 +246,7 @@ public actor ViewerRelayPrefetcher {
             return
         }
         job?.pageCount = snapshot.pageCount
-        let skipped = job?.skip ?? []
+        let skipped = (job?.skip ?? []).union(droppedPages[relayID] ?? [])
         job?.remaining = Set(0..<snapshot.pageCount).subtracting(snapshot.cached).subtracting(skipped)
         let workers = max(1, tuning.concurrency)
         await withTaskGroup(of: Void.self) { group in
@@ -247,6 +267,7 @@ public actor ViewerRelayPrefetcher {
         pendingRestart = false
         if rerun, current.relayID == latestRelayID, stopReasons[current.relayID] == nil {
             startJob(for: current.relayID)
+            job?.skip = current.skip
         }
     }
 
@@ -257,23 +278,24 @@ public actor ViewerRelayPrefetcher {
             guard await waitForViewer(gen) else { return }
             guard let pick = next(gen) else { return }
             var failures = 0
-            var successesAtFirstFailure = 0
             attempts: while true {
                 let outcome = await fetch(pick.relayID, pick.page)
                 guard job?.generation == gen else { return }
                 switch outcome {
                 case .fetched:
-                    job?.successes += 1
+                    exhaustedStreak[pick.relayID] = 0
                     break attempts
                 case .alreadyCached:
                     break attempts
                 case .failed:
-                    if failures == 0 { successesAtFirstFailure = job?.successes ?? 0 }
                     failures += 1
                     if failures > tuning.backoff.count {
-                        // 最初の失敗から 1 枚も取れていない＝通信が落ちている → 仕事を止める。取れているなら
-                        // このページだけが取れない → このページだけ諦めて続ける（ビューアが頼めば別の道で取る）。
-                        if (job?.successes ?? 0) == successesAtFirstFailure {
+                        // 取り直しを使い切った: このページは外し、後の仕事でも要求しない。連続で 2 枚使い切ったら
+                        // 通信が落ちているとみなして止める（1 枚だけなら、壊れた画像として先読みを続ける）。
+                        droppedPages[pick.relayID, default: []].insert(pick.page)
+                        let streak = (exhaustedStreak[pick.relayID] ?? 0) + 1
+                        exhaustedStreak[pick.relayID] = streak
+                        if streak >= 2 {
                             stopJob(gen, reason: .gaveUp)
                             return
                         }

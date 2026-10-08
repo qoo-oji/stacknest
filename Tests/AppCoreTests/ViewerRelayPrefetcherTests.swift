@@ -341,12 +341,15 @@ struct ViewerRelayPrefetcherTests {
         }
         await p.start(relayID: "R", focus: 0)
         await p.waitUntilIdle()
-        #expect(log.pages == [1, 1, 1, 1, 1, 1])
-        #expect(log.sleeps == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16)])
+        // 1 本では、1 ページが 6 回で外れ、次のページも 6 回使い切って（連続 2 枚）初めて諦める。
+        #expect(log.pages == [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2])
+        let steps: [Duration] = [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16)]
+        #expect(log.sleeps == steps + steps)
     }
 
-    /// 取れたら数え直す（間に成功を挟んだ失敗は 1 秒から）。
-    @Test func aSuccessResetsTheBackoff() async {
+    /// 失敗の回数はページごと（取れたページの回数は消える）: 1 ページ目は 2 回失敗してから取れ（1・2 秒）、
+    /// 2 ページ目は 1 回失敗してから取れる（1 秒から）。
+    @Test func eachPageCountsItsOwnFailures() async {
         let log = PrefetchLog()
         let attempts = AttemptCounter()
         let p = make(pageCount: 3, wholeBook: WholeBookSwitch(true), log: log) { relay, page in
@@ -507,7 +510,7 @@ struct ViewerRelayPrefetcherTests {
         }
         #expect(await p.stopReason(for: "R") == expected)
         let attempts = log.pages.count
-        #expect(attempts == (cause == .gaveUp ? 6 : 1))
+        #expect(attempts == (cause == .gaveUp ? 12 : 1), "諦めるのは 2 ページ続けて使い切った後")
 
         // ビューアがページを頼んでも（何度でも）、先読みはリモートへ行かない。
         for page in [5, 6] {
@@ -559,20 +562,29 @@ struct ViewerRelayPrefetcherTests {
 
     // MARK: - 補強（レビュー）
 
-    /// 2 本のとき、断られたら両方の worker が止まる（取り中の分のほかは取らない）。
-    @Test func aRefusalStopsBothWorkers() async {
+    /// 2 本のとき、断られたら両方の worker が止まる。1 ページ目は、断りが記録された後でだけ取り終える
+    /// （取り中の分のほかは取らない＝ちょうど 2 枚）。
+    @Test(.timeLimit(.minutes(1))) func aRefusalStopsBothWorkers() async {
         let log = PrefetchLog()
+        let gate = TestGate()
         let p = make(pageCount: 30, wholeBook: WholeBookSwitch(true), concurrency: 2, log: log) { relay, page in
             log.fetched(relay, page)
             if page == 2 { return .refused }
-            try? await Task.sleep(for: .milliseconds(20))
+            await gate.wait()
             return .fetched
         }
         await p.start(relayID: "R", focus: 0)
-        await p.waitUntilIdle()
-        #expect(log.pages.count <= 3, "断られた後は、取り中の分のほかは取らない")
-        #expect(await p.activeRelayID == nil)
+        var spins = 0
+        while await p.stopReason(for: "R") == nil, spins < 100_000 {
+            spins += 1
+            await Task.yield()
+        }
         #expect(await p.stopReason(for: "R") == .refused)
+        await gate.open()
+        await p.waitUntilIdle()
+        #expect(Set(log.pages) == [1, 2])
+        #expect(log.pages.count == 2)
+        #expect(await p.activeRelayID == nil)
     }
 
     /// 仕事が走っているあいだにビューアが頼んでも、その仕事が断られて止まったなら、終わり際に始め直さない。
@@ -650,52 +662,234 @@ struct ViewerRelayPrefetcherTests {
 
     // MARK: - 失敗の取り直しはページごと
 
-    /// 1 枚だけ取れないページがあっても、ほかが取れているあいだは仕事を止めない。そのページは 1・2・4・8・16 秒あけて
-    /// 6 回取り、諦めて外す（ほかのページは 1 回ずつ取る）。待ちの前に、ほかの worker が取れたことを仕事の側の数で確かめる。
+    /// 1 枚だけ取れないページがあっても、仕事は止めない。そのページは持った worker が 1・2・4・8・16 秒あけて 6 回取り、
+    /// 諦めて外す（ほかの worker は待たずにほかのページを 1 回ずつ取る。外したページは覚える）。
+    /// 2 ページ目は最初の待ちが始まるまで止め、最初の待ちはほかのページが全部取れるまで止める。
     @Test(.timeLimit(.minutes(1))) func aSinglePageThatNeverFetchesIsDroppedNotTheJob() async {
         let log = PrefetchLog()
-        let ref = PrefetcherRef()
-        let broken = 3
-        let tries = AttemptCounter()
+        let backoffGate = TestGate()
+        let firstSleep = TestGate()
         let p = ViewerRelayPrefetcher(
             tuning: .init(concurrency: 2),
             plan: { _ in (pageCount: 6, cached: []) },
             fetch: { relay, page in
-                if page == broken {
-                    if tries.next(page) == 1 {
-                        // 最初の失敗の前に、ほかのページが 1 枚取れて仕事に数えられているのを待つ。
-                        var spins = 0
-                        while await ref.value?.successesForTesting() ?? 0 < 1, spins < 100_000 {
-                            spins += 1
-                            await Task.yield()
-                        }
-                    }
-                    log.fetched(relay, page, stored: false)
-                    return .failed
-                }
+                if page == 3 { log.fetched(relay, page, stored: false); return .failed }
+                if page == 2 { await firstSleep.wait() }
                 log.fetched(relay, page)
                 return .fetched
             },
             wholeBook: { true },
             sleep: { d in
                 log.slept(d)
-                // 最初の失敗の後に、ほかのページがもう 1 枚取れたと仕事に数えられるまで待つ。
-                var spins = 0
-                while await ref.value?.successesForTesting() ?? 0 < 2, spins < 100_000 {
-                    spins += 1
-                    await Task.yield()
+                if log.sleeps.count == 1 {
+                    await firstSleep.open()
+                    await backoffGate.wait()
                 }
             })
-        ref.value = p
         await p.start(relayID: "R", focus: 0)
+        var spins = 0
+        while !Set(log.pages).isSuperset(of: [0, 1, 2, 4, 5]), spins < 100_000 {
+            spins += 1
+            await Task.yield()
+        }
+        let duringBackoff = log.pages.filter { $0 == 3 }.count
+        await backoffGate.open()
         await p.waitUntilIdle()
-        #expect(log.pages.filter { $0 == broken }.count == 6)
+        #expect(duringBackoff == 1, "持った worker が待っているあいだは、ほかの worker は取り直さない")
+        #expect(log.pages.filter { $0 == 3 }.count == 6)
         #expect(log.sleeps == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16)])
         for page in [0, 1, 2, 4, 5] {
             #expect(log.pages.filter { $0 == page }.count == 1, "page \(page)")
         }
         #expect(await p.stopReason(for: "R") == nil)
         #expect(await p.activeRelayID == nil)
+        #expect(await p.droppedPagesForTesting("R") == [3])
+        #expect(await p.exhaustedStreakForTesting("R") == 1)
+    }
+
+    /// 全ページの先読み（ON）: 取り終えた後に 1 枚だけ残った壊れたページは、使い切って外すだけで止まらず、
+    /// その後の仕事（ビューアのページ送り）はそのページを要求しない。
+    @Test(.timeLimit(.minutes(1))) func aBrokenPageMetAloneIsDroppedAndNeverRequestedAgain() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 8, cachedFromLog: true, wholeBook: WholeBookSwitch(true), concurrency: 1, log: log) { relay, page in
+            if page == 3 { log.fetched(relay, page, stored: false); return .failed }
+            log.fetched(relay, page)
+            return .fetched
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages.filter { $0 == 3 }.count == 6)
+        #expect(await p.stopReason(for: "R") == nil)
+        let afterSweep = log.pages.count
+        for page in [5, 6, 7] {
+            log.viewerRead(page)
+            await p.liveRequestBegan(relayID: "R", page: page)
+            await p.liveRequestEnded(relayID: "R")
+            await p.waitUntilIdle()
+        }
+        #expect(log.pages.count == afterSweep, "外したページを後の仕事で要求しない")
+        #expect(await p.stopReason(for: "R") == nil)
+    }
+
+    /// 近傍だけの先読み（OFF）: 壊れたページがビューアの先読みの窓に入っても、先読みは死なない（`.gaveUp` にならず、
+    /// 後のページ送りでもほかのページを先読みする）。
+    @Test(.timeLimit(.minutes(1))) func aBrokenPageDoesNotKillTheLookaheadInOffMode() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 60, cachedFromLog: true, wholeBook: WholeBookSwitch(false), concurrency: 1, log: log) { relay, page in
+            if page == 13 { log.fetched(relay, page, stored: false); return .failed }
+            log.fetched(relay, page)
+            return .fetched
+        }
+        await p.start(relayID: "R", focus: 10)
+        await p.waitUntilIdle()
+        #expect(log.pages.filter { $0 == 13 }.count == 6)
+        #expect(await p.stopReason(for: "R") == nil)
+        for page in [11, 12, 11] {
+            log.viewerRead(page)
+            await p.liveRequestBegan(relayID: "R", page: page)
+            await p.liveRequestEnded(relayID: "R")
+            await p.waitUntilIdle()
+            #expect(await p.stopReason(for: "R") == nil, "turn \(page)")
+        }
+        let before = log.pages.count
+        log.viewerRead(30)
+        await p.liveRequestBegan(relayID: "R", page: 30)
+        await p.liveRequestEnded(relayID: "R")
+        await p.waitUntilIdle()
+        #expect(Array(log.pages.dropFirst(before)).contains(31), "先読みが続いている")
+        #expect(log.pages.filter { $0 == 13 }.count == 6, "外したページは取り直さない")
+    }
+
+    /// 通信が落ちている（取れた後に 2 枚続けて使い切る）: 6 回ずつ取って `.gaveUp`。その先のページは取らない。
+    @Test(.timeLimit(.minutes(1))) func anOutageAfterSuccessesGivesUpAfterTwoExhaustedPages() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 6, wholeBook: WholeBookSwitch(true), concurrency: 1, log: log) { relay, page in
+            if page == 2 || page == 3 { log.fetched(relay, page, stored: false); return .failed }
+            log.fetched(relay, page)
+            return .fetched
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages.filter { $0 == 2 }.count == 6)
+        #expect(log.pages.filter { $0 == 3 }.count == 6)
+        #expect(log.pages.filter { $0 == 1 }.count == 1)
+        #expect(!log.pages.contains(4))
+        #expect(await p.stopReason(for: "R") == .gaveUp)
+    }
+
+    /// キャッシュにあっただけ（`.alreadyCached`）では、使い切った連続数は戻らない。
+    @Test(.timeLimit(.minutes(1))) func aCacheHitDoesNotResetTheExhaustedStreak() async {
+        let log = PrefetchLog()
+        let p = make(pageCount: 6, wholeBook: WholeBookSwitch(true), concurrency: 1, log: log) { relay, page in
+            log.fetched(relay, page, stored: false)
+            if page == 2 { return .alreadyCached }
+            return .failed
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages.filter { $0 == 1 }.count == 6)
+        #expect(log.pages.filter { $0 == 3 }.count == 6)
+        #expect(await p.stopReason(for: "R") == .gaveUp)
+    }
+
+    /// ビューアの要求が待ちの最中に始まったら、取り直しは要求が終わるまで待つ。
+    @Test(.timeLimit(.minutes(1))) func aViewerRequestDuringABackoffHoldsTheRetry() async {
+        let log = PrefetchLog()
+        let attempts = AttemptCounter()
+        let backoffStarted = TestGate()
+        let backoffGate = TestGate()
+        let p = ViewerRelayPrefetcher(
+            tuning: .init(concurrency: 1),
+            plan: { _ in (pageCount: 2, cached: []) },
+            fetch: { relay, page in
+                log.fetched(relay, page)
+                return page == 1 && attempts.next(1) == 1 ? .failed : .fetched
+            },
+            wholeBook: { true },
+            sleep: { d in
+                log.slept(d)
+                if d == .seconds(1) {
+                    await backoffStarted.open()
+                    await backoffGate.wait()
+                } else {
+                    await Task.yield()   // ビューアの要求の待ち（100 ms）
+                }
+            })
+        await p.start(relayID: "R", focus: 0)
+        await backoffStarted.wait()
+        await p.liveRequestBegan(relayID: "OTHER", page: 0)
+        await backoffGate.open()
+        var spins = 0
+        while log.sleeps.count < 2, spins < 100_000 {
+            spins += 1
+            await Task.yield()
+        }
+        #expect(log.sleeps.count >= 2, "取り直しの前に、ビューアの要求の待ちに入った")
+        #expect(log.pages.filter { $0 == 1 }.count == 1, "要求が終わるまで取り直さない")
+        await p.liveRequestEnded(relayID: "OTHER")
+        await p.waitUntilIdle()
+        #expect(log.pages.filter { $0 == 1 }.count == 2)
+    }
+
+    enum Clearer: String, Sendable, CaseIterable {
+        case versionChanged, settingOn, newHandOff
+    }
+
+    /// `.gaveUp` で止まった後、版の変化・ON の知らせ・渡し直しは、止まった理由・外したページ・連続数をまとめて解き、
+    /// 外していたページを新しい仕事でまた要求する。
+    @Test(.timeLimit(.minutes(1)), arguments: Clearer.allCases)
+    func clearingTheStopClearsDroppedPagesAndTheStreak(_ clearer: Clearer) async {
+        let log = PrefetchLog()
+        let healthy = WholeBookSwitch(false)
+        let setting = WholeBookSwitch(false)
+        let p = make(pageCount: 3, cachedFromLog: true, wholeBook: setting, concurrency: 1, log: log) { relay, page in
+            log.fetched(relay, page, stored: healthy.on)
+            return healthy.on ? .fetched : .failed
+        }
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(await p.stopReason(for: "R") == .gaveUp)
+        #expect(await p.droppedPagesForTesting("R") == [1, 2])
+        #expect(await p.exhaustedStreakForTesting("R") == 2)
+        let before = log.pages.count
+
+        healthy.on = true
+        switch clearer {
+        case .versionChanged:
+            await p.versionChanged(relayID: "R")
+        case .settingOn:
+            setting.on = true
+            await p.wholeBookSettingChanged()
+        case .newHandOff:
+            await p.start(relayID: "R", focus: 0)
+        }
+        await p.waitUntilIdle()
+        #expect(await p.stopReason(for: "R") == nil)
+        #expect(await p.droppedPagesForTesting("R").isEmpty)
+        #expect(await p.exhaustedStreakForTesting("R") == 0)
+        #expect(Set(log.pages.dropFirst(before)).isSuperset(of: [1, 2]), "外していたページをまた要求する")
+    }
+
+    /// 仕事が休んでいるときにビューアが頼んだページも、その仕事の先読みから外す（始めの `plan` の答えは頼む前のキャッシュ）。
+    @Test(.timeLimit(.minutes(1))) func aViewerRequestStartingAnIdleJobKeepsThatPageOut() async {
+        let log = PrefetchLog()
+        let planCalls = AttemptCounter()
+        let p = ViewerRelayPrefetcher(
+            tuning: .init(concurrency: 1),
+            plan: { _ in
+                // 1 回目: 全部取ってある（仕事はすぐ終わる）。2 回目: ビューアが頼む前のキャッシュ（何も無い）。
+                (pageCount: 6, cached: planCalls.next(0) == 1 ? Set(0..<6) : log.cached)
+            },
+            fetch: { relay, page in log.fetched(relay, page); return .fetched },
+            wholeBook: { true }, sleep: { _ in })
+        await p.start(relayID: "R", focus: 0)
+        await p.waitUntilIdle()
+        #expect(log.pages.isEmpty)
+        await p.liveRequestBegan(relayID: "R", page: 3)
+        await p.liveRequestEnded(relayID: "R")
+        await p.waitUntilIdle()
+        #expect(!log.pages.contains(3))
+        #expect(Set(log.pages) == [0, 1, 2, 4, 5])
     }
 
     /// 2 本で全部が取れないなら（通信が落ちている）、諦めて止まる。1 ページが 6 回を超えて取られることはない。
@@ -711,8 +905,9 @@ struct ViewerRelayPrefetcherTests {
         for page in Set(log.pages) {
             #expect(log.pages.filter { $0 == page }.count <= 6, "page \(page)")
         }
-        #expect(log.pages.count <= 12)
-        #expect(log.pages.count >= 6)
+        // 使い切るのは 2 ページまで。先に進んだ側が 2 ページ目も使い切ると、もう一方は途中で止まる（12+最大 6）。
+        #expect(log.pages.count <= 18)
+        #expect(log.pages.count >= 12)
     }
 }
 

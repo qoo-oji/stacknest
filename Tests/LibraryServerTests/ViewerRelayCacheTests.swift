@@ -578,7 +578,7 @@ struct ViewerRelayCacheTests {
         #expect(await cache.stores == 0)
     }
 
-    /// ビューアが `maxw` のほかの幅で頼んだ（素通しする）ページも、先読みの中心を移し、先読みを止める対象に数える。
+    /// ビューアが `maxw` のほかの幅で頼んだ（素通しする）ページも、先読みの中心を移す（そのまわりを先読みする）。
     @Test func aPassThroughPageRequestStillMovesThePrefetchCentre() async throws {
         let fx = makeFixture(pageCount: 40); defer { fx.done() }
         let cache = FakeRelayPageCache()
@@ -598,8 +598,7 @@ struct ViewerRelayCacheTests {
         await relay.prefetcher?.waitUntilIdle()
         let after = RelayCacheRemoteStub.seen.dropFirst(before)
         let cachedPathPages = Set(after.filter { $0.url.query == "maxw=1600&v=e1" }.compactMap { Int($0.url.lastPathComponent) })
-        #expect(cachedPathPages == [21, 22, 23, 24, 25, 26, 19, 18, 29, 30, 31], "20 のまわり（素通しした 20 自身は先読みしない）")
-        #expect(!cachedPathPages.contains(20))
+        #expect(cachedPathPages == [21, 22, 23, 24, 25, 26, 19, 18, 29, 30, 31], "中心が 20 に移り、そのまわりを先読みした")
     }
 
     /// カナリア: 先読みの本物の `sleep`（`makePrefetcher` が渡す閉包）を、ビューアの要求の待ちで実際に通す。
