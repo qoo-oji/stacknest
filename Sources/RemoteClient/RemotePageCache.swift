@@ -141,6 +141,20 @@ public actor RemotePageCache {
     public func setLimit(_ bytes: Int64) { limitBytes = bytes; evictToLimit() }
     public func setMaxAge(_ seconds: Int64) { maxAgeSeconds = seconds; evictExpired() }
 
+    // MARK: - G60 §5.9: 中継（127.0.0.1 の口）が内蔵ビューアと同じキャッシュを使うための口
+
+    /// あれば返す（取りに行かない）。当たり方（L1→L2・atime の遅延書き込み・壊れていたら外す）は `data(for:fetch:)` と同じ。
+    public func cachedData(for key: Key) -> Data? {
+        readHit(key)
+    }
+
+    /// よそで取ったバイトを入れる。入れた後の退避（保持期間・上限）は `data(for:fetch:)` と同じ。
+    public func insert(_ data: Data, for key: Key) {
+        store(key: key, data: data)
+        evictExpired()
+        evictToLimit()
+    }
+
     public func totalBytes() -> Int64 {
         ((try? queue.read { db in try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(bytes),0) FROM entries") }) ?? nil) ?? 0
     }

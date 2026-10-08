@@ -125,4 +125,69 @@ struct ViewerRelayRegistryTests {
         #expect(store.record(id: kept.record.id) == nil)
         #expect(store.record(id: book.record.id) != nil, "本の鍵は残す")
     }
+
+    // MARK: - G60 §5.9: 中継のページのキャッシュ
+
+    /// 渡した時点の manifest のページ数と etag を中継の記録に持つ（既定は 0 と nil＝§5.8 の呼び出しのまま組める）。
+    /// 新しい項目を足しても、リモートの鍵は dump に出ない。
+    @Test func targetCarriesTheHandOffManifest() {
+        #expect(target().pageCount == 0)
+        #expect(target().manifestETag == nil)
+        let t = ViewerRelayTarget(serverID: UUID(), serverBase: URL(string: "http://100.64.0.5:51234/")!,
+                                  libraryUUID: "LIB-R", bookID: 42, remoteToken: "REMOTE-SECRET",
+                                  pageCount: 20, manifestETag: "\"e1\"")
+        #expect(t.pageCount == 20)
+        #expect(t.manifestETag == "\"e1\"")
+        var dumped = ""
+        dump(t, to: &dumped)
+        #expect(!dumped.contains("REMOTE-SECRET"))
+        #expect(dumped.contains("pageCount"))
+    }
+
+    /// ビューアが読み直した manifest に合わせる。リモートの鍵と期限はそのまま。変わったときだけ true。
+    @Test func updateBookKeepsTheTokenAndTheExpiry() throws {
+        let registry = ViewerRelayRegistry()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let expiry = now.addingTimeInterval(3600)
+        let id = registry.register(ViewerRelayTarget(
+            serverID: UUID(), serverBase: URL(string: "http://100.64.0.5:51234/")!,
+            libraryUUID: "LIB-R", bookID: 42, remoteToken: "REMOTE-SECRET",
+            pageCount: 20, manifestETag: "\"e1\""), expiresAt: expiry, now: now)
+        #expect(!registry.updateBook(id, pageCount: 20, manifestETag: "\"e1\"", now: now), "同じなら変えない")
+        #expect(registry.updateBook(id, pageCount: 25, manifestETag: "\"e2\"", now: now))
+        let t = try #require(registry.target(for: id, now: now))
+        #expect(t.pageCount == 25)
+        #expect(t.manifestETag == "\"e2\"")
+        #expect(t.remoteToken == "REMOTE-SECRET")
+        #expect(t.libraryUUID == "LIB-R" && t.bookID == 42)
+        #expect(!registry.updateBook("no-such-relay", pageCount: 1, manifestETag: nil, now: now))
+        #expect(registry.target(for: id, now: expiry.addingTimeInterval(-1)) != nil, "期限はそのまま")
+        #expect(!registry.updateBook(id, pageCount: 30, manifestETag: "\"e3\"", now: expiry), "期限の切れた中継は変えない")
+        #expect(registry.target(for: id, now: expiry) == nil)
+    }
+
+    /// 中継のキーは内蔵ビューアと同じ部品（幅は内蔵の幅・版は manifest の etag の前後の " を剥がしたもの）。
+    @Test func relayPageKeyUsesTheBuiltInWidthAndVersion() {
+        let sid = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let t = ViewerRelayTarget(serverID: sid, serverBase: URL(string: "http://100.64.0.5:51234/")!,
+                                  libraryUUID: "LIB-R", bookID: 42, remoteToken: "REMOTE-SECRET",
+                                  pageCount: 20, manifestETag: "\"5-1700000000-1234-abc\"")
+        let key = ViewerRelayPageKey(target: t, page: 3)
+        #expect(RemoteViewerPage.maxWidth == 1600)
+        #expect(key.maxw == RemoteViewerPage.maxWidth)
+        #expect(key.version == "5-1700000000-1234-abc")
+        #expect(key.serverID == sid && key.libraryUUID == "LIB-R" && key.bookID == 42 && key.page == 3)
+        // etag の無い記録（§5.8 の呼び出し）は版なし（内蔵の版なしキーと同じ）。
+        #expect(ViewerRelayPageKey(target: target(), page: 0).version == nil)
+    }
+
+    /// 版の剥がし方（内蔵ビューアの `RemoteBookContent.normalizeVersion` とサーバの `stripETagQuotes` と同じ規則）。
+    @Test func manifestETagNormalization() {
+        #expect(RemoteViewerPage.version(fromManifestETag: "\"abc\"") == "abc")
+        #expect(RemoteViewerPage.version(fromManifestETag: "abc") == "abc")
+        #expect(RemoteViewerPage.version(fromManifestETag: "\"") == "\"")
+        #expect(RemoteViewerPage.version(fromManifestETag: "\"\"") == "")
+        #expect(RemoteViewerPage.version(fromManifestETag: "\"abc") == "\"abc")
+        #expect(RemoteViewerPage.version(fromManifestETag: nil) == nil)
+    }
 }

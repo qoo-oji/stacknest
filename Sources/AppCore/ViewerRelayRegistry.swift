@@ -12,18 +12,33 @@ public struct ViewerRelayTarget: Sendable, Equatable {
     public let bookID: Int
     /// リモートのサーバが出した本専用の鍵（平文）。**メモリにだけ置く**。保存・ログ・表示に出さない。
     public let remoteToken: String
+    /// G60 §5.9: 本のページ数（先読みの範囲）。渡した時点の manifest の値で、ビューアが manifest を読み直したら
+    /// 中継がその値に合わせる（`ViewerRelayRegistry.updateBook`）。
+    public let pageCount: Int
+    /// G60 §5.9: manifest の `etag`（HTTP の形のまま）。ページのキャッシュのキーと `?v=` の版の出どころ
+    /// （`ViewerRelayPageKey` が `RemoteViewerPage.version(fromManifestETag:)` に通す）。
+    public let manifestETag: String?
 
-    public init(serverID: UUID, serverBase: URL, libraryUUID: String, bookID: Int, remoteToken: String) {
+    public init(serverID: UUID, serverBase: URL, libraryUUID: String, bookID: Int, remoteToken: String,
+                pageCount: Int = 0, manifestETag: String? = nil) {
         self.serverID = serverID
         self.serverBase = serverBase
         self.libraryUUID = libraryUUID
         self.bookID = bookID
         self.remoteToken = remoteToken
+        self.pageCount = pageCount
+        self.manifestETag = manifestETag
     }
 
     /// リモートの本の API の基点（`…/api/v1/libraries/<lib>/books/<id>`）。
     public var remoteBookURL: String {
         BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: bookID)
+    }
+
+    /// ページ数と etag だけを替えたもの（ほか、リモートの鍵もそのまま）。
+    func with(pageCount: Int, manifestETag: String?) -> ViewerRelayTarget {
+        ViewerRelayTarget(serverID: serverID, serverBase: serverBase, libraryUUID: libraryUUID, bookID: bookID,
+                          remoteToken: remoteToken, pageCount: pageCount, manifestETag: manifestETag)
     }
 }
 
@@ -35,7 +50,8 @@ extension ViewerRelayTarget: CustomStringConvertible, CustomDebugStringConvertib
     public var debugDescription: String { description }
     public var customMirror: Mirror {
         Mirror(self, children: ["serverID": serverID, "serverBase": serverBase, "libraryUUID": libraryUUID,
-                                "bookID": bookID, "remoteToken": "<redacted>"])
+                                "bookID": bookID, "pageCount": pageCount, "manifestETag": manifestETag as Any,
+                                "remoteToken": "<redacted>"])
     }
 }
 
@@ -76,6 +92,20 @@ public final class ViewerRelayRegistry: @unchecked Sendable {
         lock.withLock {
             pruneLocked(now: now)
             return entries[relayID]?.target
+        }
+    }
+
+    /// G60 §5.9: ビューアが読んだ manifest（中継が素通しした応答）のページ数と etag に合わせる。
+    /// リモートの鍵と期限はそのまま。変わったら true（無い・期限切れ・同じなら false）。
+    @discardableResult
+    public func updateBook(_ relayID: String, pageCount: Int, manifestETag: String?, now: Date = Date()) -> Bool {
+        lock.withLock {
+            pruneLocked(now: now)
+            guard let entry = entries[relayID] else { return false }
+            guard entry.target.pageCount != pageCount || entry.target.manifestETag != manifestETag else { return false }
+            entries[relayID] = Entry(target: entry.target.with(pageCount: pageCount, manifestETag: manifestETag),
+                                     expiresAt: entry.expiresAt)
+            return true
         }
     }
 

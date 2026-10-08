@@ -2001,7 +2001,7 @@ final class RemoteLibraryState {
                 damageNote = m.damageNote
                 let made = RemoteBookContent(
                     client: self.client, serverID: self.serverID, libraryUUID: self.libraryUUID, bookID: book.id,
-                    libraryToken: self.libraryToken, maxWidth: 1600,
+                    libraryToken: self.libraryToken, maxWidth: RemoteViewerPage.maxWidth,
                     snapshot: RemoteBookSnapshot(manifest: m))
                 content = made
                 remoteContent = made
@@ -2136,7 +2136,7 @@ final class RemoteLibraryState {
                         // キーが決して一致せず、可視保護が常に空振りしてしまう。
                         guard let bid else { return }
                         let keys = Set(pages.map {
-                            RemotePageCache.Key(serverID: sID, libraryUUID: luid, bookID: bid, kind: .page, page: $0, maxw: 1600, version: version)
+                            RemotePageCache.Key(serverID: sID, libraryUUID: luid, bookID: bid, kind: .page, page: $0, maxw: RemoteViewerPage.maxWidth, version: version)
                         })
                         let prev = chain.task
                         chain.task = Task { await prev?.value; await RemotePageCache.shared.setProtected(keys, owner: owner) }
@@ -2149,7 +2149,7 @@ final class RemoteLibraryState {
                     cachedPages: { bid, version in
                         // レビュー Important1 fix: version を透過して RemotePageCache.cachedPages に渡す
                         // （版を無視すると relink 直後の旧版行を「キャッシュ済み」と数えて HUD が過大申告する）。
-                        await RemotePageCache.shared.cachedPages(serverID: sID, libraryUUID: luid, bookID: bid, maxw: 1600, version: version)
+                        await RemotePageCache.shared.cachedPages(serverID: sID, libraryUUID: luid, bookID: bid, maxw: RemoteViewerPage.maxWidth, version: version)
                     }
                 )
             }
@@ -2656,7 +2656,7 @@ final class RemoteLibraryState {
         )
         let content = RemoteBookContent(
             client: client, serverID: serverID, libraryUUID: libraryUUID,
-            bookID: dto.id, libraryToken: libraryToken, maxWidth: 1600, snapshot: snapshot)
+            bookID: dto.id, libraryToken: libraryToken, maxWidth: RemoteViewerPage.maxWidth, snapshot: snapshot)
         let row = Self.makeBookRow(from: dto)
         return .swap(NextVolume(content: content, book: row, state: state, sourceLabel: String(localized: "リモート")))
     }

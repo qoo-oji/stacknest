@@ -79,9 +79,9 @@ public struct RemoteBookContent: BookContent {
     }
 
     /// ETag の前後の `"` を剥がす。ETag でない/クォートが無い値はそのまま返す（防御的・後方互換）。
+    /// G60 §5.9: 中継と同じ版にするため、規則は AppCore の 1 か所（`RemoteViewerPage.version(fromManifestETag:)`）に任せる。
     static func normalizeVersion(_ raw: String?) -> String? {
-        guard let raw, raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") else { return raw }
-        return String(raw.dropFirst().dropLast())
+        RemoteViewerPage.version(fromManifestETag: raw)
     }
 
     /// G26 Codex Important #3: 開いた時点のスナップショットから返す（**追加の往復をしない**）。
