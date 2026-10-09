@@ -29,6 +29,8 @@ public struct ViewerRelayConfig: Sendable {
     let loader: ViewerRelayPageLoader
     /// G60 §5.9: 渡した本の先読み（キャッシュを使う形だけ。1 冊ずつ。範囲は `wholeBookPrefetch` に従う）。
     public let prefetcher: ViewerRelayPrefetcher?
+    /// G60 §5.9: 先読みの範囲の設定（先読み係に渡したものと同じ閉包。配線をテストで確かめるために公開する）。
+    public let wholeBookPrefetch: @Sendable () -> Bool
 
     /// - Parameter wholeBookPrefetch: 内蔵ビューアと同じ設定「開いた本を全ページ先読みする」が今 ON か
     ///   （先読み係が取るページを選ぶたびに読む。App は `RemoteCacheSettings.wholeBookPrefetch()` を渡す。既定は OFF）。
@@ -43,6 +45,7 @@ public struct ViewerRelayConfig: Sendable {
         self.maxResponseBytes = maxResponseBytes
         self.maxRequestBytes = maxRequestBytes
         self.pageCache = pageCache
+        self.wholeBookPrefetch = wholeBookPrefetch
         let loader = ViewerRelayPageLoader()
         self.loader = loader
         self.prefetcher = pageCache.map { cache in

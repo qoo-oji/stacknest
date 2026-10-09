@@ -1349,6 +1349,29 @@ struct ExternalViewerSyncWiringTests {
         #expect(target.manifestETag == "\"e7\"")
     }
 
+    /// 続きのページが範囲を超えていても、先読みの中心は最後のページに収まる。
+    @Test func prefetchFocusIsClampedToTheLastPage() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let prefetches = Prefetches()
+        let h = handoff(env, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let reply = remoteReply()
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 72, filename: "a.zip", lastPage: 0),
+            manifest: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "\"e7\""),
+            viewer: viewer, serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X",
+            startPage: 25, settings: env.settings,
+            issue: { reply }, fetchStatus: { _ in throw CancellationError() })
+
+        #expect(failure == nil)
+        #expect(prefetches.items.map { $0.focus } == [19])
+    }
+
     /// 渡せなかったら（確かめたビューアが消えていた）先読みしない。
     @Test func noPrefetchWhenTheHandOffFails() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }

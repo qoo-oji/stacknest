@@ -124,6 +124,17 @@ struct LocalControlControllerReloadTests {
         #expect(c.viewerRelay.prefetcher != nil)
     }
 
+    /// 中継の先読みの範囲は、内蔵ビューアと同じ設定「開いた本を全ページ先読みする」に従う（配線を固定する）。
+    @Test func theRelayFollowsTheWholeBookPrefetchSetting() {
+        let original = RemoteCacheSettings.wholeBookPrefetch()
+        defer { RemoteCacheSettings.setWholeBookPrefetch(original) }
+        let c = LocalControlController()
+        RemoteCacheSettings.setWholeBookPrefetch(true)
+        #expect(c.viewerRelay.wholeBookPrefetch())
+        RemoteCacheSettings.setWholeBookPrefetch(false)
+        #expect(!c.viewerRelay.wholeBookPrefetch())
+    }
+
     /// 口を止めたら（StackNest の終了もここを通る）、中継の本の先読みも止める。
     @Test func stopAlsoStopsTheRelayPrefetch() async throws {
         let ports = FakePorts()
