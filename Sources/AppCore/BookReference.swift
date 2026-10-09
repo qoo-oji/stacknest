@@ -113,6 +113,14 @@ public struct BookReferenceStore: Sendable {
     public let root: URL
     private var fm: FileManager { .default }
 
+    /// Codex P2（5 回目）: 参照ファイルの書き込みと起動時の掃除を、プロセスの中で 1 本の列に並べる。掃除は別の Task・
+    /// 別のインスタンスで走るので、消す相手を決めてから消すまでのあいだに同じ本の渡しが同じ名前で書き直すと、書いた
+    /// ばかりのファイルを消していた（空の部屋を畳むのも同じ）。インスタンスをまたぐので型の鍵にする。
+    private static let ioLock = NSLock()
+
+    /// テスト用: 掃除が消す相手を決めた後・消す前に呼ぶ（鍵を持ったまま）。
+    nonisolated(unsafe) static var testHookBeforePruneDeletes: (() -> Void)?
+
     public init(baseDirectory: URL? = nil) {
         let base = baseDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -124,6 +132,12 @@ public struct BookReferenceStore: Sendable {
     @discardableResult
     public func write(_ reference: BookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
         guard Self.isSafeComponent(libraryUUID) else { throw WriteError.invalidLibraryUUID }
+        return try Self.ioLock.withLock {
+            try writeLocked(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
+        }
+    }
+
+    private func writeLocked(_ reference: BookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
         let ownerOnlyDirectory: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
         // 根は先に 700 で作る。シンボリックリンクなら（リンク先には触れず）リンクごと消して作り直す。
         try removeIfSymlink(root)
@@ -184,6 +198,10 @@ public struct BookReferenceStore: Sendable {
     /// 期限切れ・読めない参照ファイルを消し、空になったディレクトリを畳む。起動時に呼ぶ。消した件数を返す。
     @discardableResult
     public func pruneExpired(now: Date = Date()) -> Int {
+        Self.ioLock.withLock { pruneExpiredLocked(now: now) }
+    }
+
+    private func pruneExpiredLocked(now: Date) -> Int {
         guard fm.fileExists(atPath: root.path) else { return 0 }
         var doomed: [URL] = []
         if let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil) {
@@ -204,6 +222,7 @@ public struct BookReferenceStore: Sendable {
                 doomed.append(url)
             }
         }
+        Self.testHookBeforePruneDeletes?()
         for url in doomed { try? fm.removeItem(at: url) }
         removeEmptyDirectories(under: root)
         return doomed.count

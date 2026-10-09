@@ -150,6 +150,38 @@ struct BookReferenceTests {
         #expect(fm.fileExists(atPath: store.root.path))
     }
 
+    /// Codex P2（5 回目）: 起動時の掃除（別の Task・別のインスタンス）と同じ本の渡しが重なっても、書いたばかりの参照
+    /// ファイルを消さない。掃除が消す相手を決めた直後に、別のインスタンスが同じ本（同じ名前）を書きに来る場面を作る。
+    /// 書き込みと掃除が並ぶ作りなら、書き込みは掃除が終わるまで待ち、新しいファイルが残る。
+    @Test func pruneDoesNotDeleteAReferenceWrittenWhileItRuns() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let pruner = BookReferenceStore(baseDirectory: base)
+        let writer = BookReferenceStore(baseDirectory: base)
+        let now = Date()
+        _ = try pruner.write(sample(expiresAt: now.addingTimeInterval(-1)), origin: .local, libraryUUID: "LIB-1", bookID: 5)
+        let fresh = sample(expiresAt: now.addingTimeInterval(3600))
+        let written = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable { var url: URL? }
+        let box = Box()
+        BookReferenceStore.testHookBeforePruneDeletes = {
+            DispatchQueue.global().async {
+                box.url = try? writer.write(fresh, origin: .local, libraryUUID: "LIB-1", bookID: 5)
+                written.signal()
+            }
+            // 書き込みが掃除と並ばない作りなら、ここで書き終わる。並ぶ作りなら掃除が終わるまで待たされる。
+            _ = written.wait(timeout: .now() + 0.5)
+        }
+        defer { BookReferenceStore.testHookBeforePruneDeletes = nil }
+
+        pruner.pruneExpired(now: now)
+        if box.url == nil { _ = written.wait(timeout: .now() + 5) }
+
+        let url = try #require(box.url)
+        #expect(FileManager.default.fileExists(atPath: url.path), "書いたばかりの参照ファイルが残る")
+        let kept = try BookReference.decode(Data(contentsOf: url))
+        #expect(kept.expiresAt > now)
+    }
+
     @Test func pruneRemovesOnlyStaleRegularTempFiles() throws {
         let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
         let store = BookReferenceStore(baseDirectory: base)
