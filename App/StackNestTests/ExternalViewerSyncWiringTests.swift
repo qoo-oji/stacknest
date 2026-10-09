@@ -139,6 +139,8 @@ struct ExternalViewerSyncWiringTests {
     final class LastReads { var items: [LastReadBook] = [] }
     /// G60 §5.9: 中継の本の先読みを始めた記録（中継の id と中心）。
     final class Prefetches { var items: [(relayID: String, focus: Int)] = [] }
+    /// 127.0.0.1 の口が動いているか（渡しの途中で止める試験用）。
+    final class EndpointFlag { var running = true }
     final class Fallbacks { var entries: [(bookID: Int, manifest: ManifestDTO?)] = [] }
     /// 確認の待ちに渡された時間を記録する（`sleep` は @Sendable なので鍵で包む）。
     final class Delays: @unchecked Sendable {
@@ -152,15 +154,16 @@ struct ExternalViewerSyncWiringTests {
     /// - Parameter prefetches: 中継の本の先読みを始めた記録（G60 §5.9）。nil なら記録しない（本物の先読みは走らない）。
     /// - Parameter sleep: 確認の待ち。**既定は即座に取り消す**（確認を走らせず、照会の要求も出さない。
     ///   スタブは照会以外に `{}` を返すので、既定で確認が走ると全部「未使用」と読まれてしまう）。
-    func handoff(_ env: Env, endpointRunning: Bool = true, lastReads: LastReads? = nil, relay: Bool = true,
-                 prefetches: Prefetches? = nil,
+    /// - Parameter endpoint: 渡しの途中で口を止める試験用。あれば `endpointRunning` より優先する。
+    func handoff(_ env: Env, endpointRunning: Bool = true, endpoint: EndpointFlag? = nil, lastReads: LastReads? = nil,
+                 relay: Bool = true, prefetches: Prefetches? = nil,
                  sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() })
         -> ExternalViewerHandoff {
         ExternalViewerHandoff(
             tokens: env.tokens,
             references: BookReferenceStore(baseDirectory: env.base.appendingPathComponent("AppSupport")),
             localPort: { 4321 },
-            isLocalEndpointRunning: { endpointRunning },
+            isLocalEndpointRunning: { endpoint?.running ?? endpointRunning },
             recordLastRead: { lastReads?.items.append($0) },
             now: { Date() },
             relays: env.relays,
@@ -775,6 +778,37 @@ struct ExternalViewerSyncWiringTests {
         #expect(env.tokens.allRecords().isEmpty)
         #expect(s.errorText?.contains("内蔵ビューアで開きました") == true)
         #expect(s.errorText?.contains("127.0.0.1") == true)
+    }
+
+    /// G60 §5.9 最終レビュー m4: リモートの鍵を出してもらう往復のあいだに 127.0.0.1 の口が止まったら、中継の記録も
+    /// 参照ファイルも作らず、ビューアも起動せず、先読みも始めない（口を止めた後に先読みが 1 回分走らない）。
+    @Test func remoteRelayEndpointStoppedDuringIssuanceStartsNoPrefetch() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let endpoint = EndpointFlag()
+        let prefetches = Prefetches()
+        let h = handoff(env, endpoint: endpoint, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let reply = ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000), tokenID: "TID-1")
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 65, filename: "a.zip", lastPage: 0), manifest: archiveManifest(), viewer: viewer,
+            serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X", startPage: 0,
+            settings: env.settings,
+            issue: {
+                endpoint.running = false   // 往復のあいだに、作者が同期とローカルコントロールを OFF にする
+                return reply
+            },
+            fetchStatus: { _ in throw CancellationError() })
+
+        #expect(failure == .localEndpointNotRunning)
+        #expect(launches.entries.isEmpty)
+        #expect(prefetches.items.isEmpty)
+        #expect(env.relays.count == 0)
+        #expect(env.tokens.allRecords().isEmpty)
     }
 
     /// レビュー I-4: リモートの鍵が先に切れる（今から 1 時間）なら、参照ファイルと中継の記録はその時刻で切れる

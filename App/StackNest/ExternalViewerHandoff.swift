@@ -170,6 +170,9 @@ struct ExternalViewerHandoff {
         } catch {
             return .tokenUnavailable
         }
+        // G60 §5.9（最終レビュー m4）: 鍵を出してもらう往復のあいだに口が止まっていたら（同期とローカルコントロールを
+        // OFF にした）、中継の記録も参照ファイルも作らず、先読みも始めない。出してもらったリモートの鍵は使われずに切れる。
+        if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
         let bookURL: String
         let token: String
         let expiresAt: Date
