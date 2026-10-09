@@ -118,10 +118,17 @@ public struct BookReferenceStore: Sendable {
     /// ばかりのファイルを消していた（空の部屋を畳むのも同じ）。インスタンスをまたぐので型の鍵にする。
     private static let ioLock = NSLock()
 
-    /// テスト用: 掃除が消す相手を決めた後・消す前に呼ぶ（鍵を持ったまま）。
-    nonisolated(unsafe) static var testHookBeforePruneDeletes: (() -> Void)?
+    /// テスト用: この店の掃除が消す相手を決めた後・消す前に呼ぶ（鍵を持ったまま）。インスタンスごとなので、
+    /// 並行に走るほかの掃除からは呼ばれない（Codex P2・6 回目）。
+    let pruneHookBeforeDeletes: (@Sendable () -> Void)?
 
     public init(baseDirectory: URL? = nil) {
+        self.init(baseDirectory: baseDirectory, pruneHookBeforeDeletes: nil)
+    }
+
+    /// テスト用: 掃除の途中に差し込む閉包を持たせる。
+    init(baseDirectory: URL?, pruneHookBeforeDeletes: (@Sendable () -> Void)?) {
+        self.pruneHookBeforeDeletes = pruneHookBeforeDeletes
         let base = baseDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("StackNest", isDirectory: true)
@@ -222,7 +229,7 @@ public struct BookReferenceStore: Sendable {
                 doomed.append(url)
             }
         }
-        Self.testHookBeforePruneDeletes?()
+        pruneHookBeforeDeletes?()
         for url in doomed { try? fm.removeItem(at: url) }
         removeEmptyDirectories(under: root)
         return doomed.count

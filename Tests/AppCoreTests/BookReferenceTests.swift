@@ -155,23 +155,22 @@ struct BookReferenceTests {
     /// 書き込みと掃除が並ぶ作りなら、書き込みは掃除が終わるまで待ち、新しいファイルが残る。
     @Test func pruneDoesNotDeleteAReferenceWrittenWhileItRuns() throws {
         let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
-        let pruner = BookReferenceStore(baseDirectory: base)
         let writer = BookReferenceStore(baseDirectory: base)
         let now = Date()
-        _ = try pruner.write(sample(expiresAt: now.addingTimeInterval(-1)), origin: .local, libraryUUID: "LIB-1", bookID: 5)
+        _ = try writer.write(sample(expiresAt: now.addingTimeInterval(-1)), origin: .local, libraryUUID: "LIB-1", bookID: 5)
         let fresh = sample(expiresAt: now.addingTimeInterval(3600))
         let written = DispatchSemaphore(value: 0)
         final class Box: @unchecked Sendable { var url: URL? }
         let box = Box()
-        BookReferenceStore.testHookBeforePruneDeletes = {
+        // 差し込みはこの掃除の店だけ（ほかのテストの掃除からは呼ばれない）。
+        let pruner = BookReferenceStore(baseDirectory: base, pruneHookBeforeDeletes: {
             DispatchQueue.global().async {
                 box.url = try? writer.write(fresh, origin: .local, libraryUUID: "LIB-1", bookID: 5)
                 written.signal()
             }
             // 書き込みが掃除と並ばない作りなら、ここで書き終わる。並ぶ作りなら掃除が終わるまで待たされる。
             _ = written.wait(timeout: .now() + 0.5)
-        }
-        defer { BookReferenceStore.testHookBeforePruneDeletes = nil }
+        })
 
         pruner.pruneExpired(now: now)
         if box.url == nil { _ = written.wait(timeout: .now() + 5) }
