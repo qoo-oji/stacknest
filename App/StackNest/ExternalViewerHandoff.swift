@@ -121,7 +121,9 @@ struct ExternalViewerHandoff {
         // Codex P2（`openRemote` の鍵の往復と同じ）: ページ数の待ちのあいだに口が止まっていたら、鍵を出さない
         // （読めない参照ファイルを渡さず、呼び出し側がファイルで開く）。
         guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
-        let issued = tokens.issue(libraryUUID: libraryUUID, bookID: book.id, issuer: .localEndpoint,
+        // 本の印に結び付ける（本の番号が使い回されても、別の本には効かない・Codex P1）。
+        let issued = tokens.issue(libraryUUID: libraryUUID, bookID: book.id,
+                                  bookStamp: ViewerTokenRecord.bookStamp(dateAdded: book.dateAdded), issuer: .localEndpoint,
                                   lockCredential: lock, now: now())
         // ポートは参照ファイルを組む直前に読む（口がポート競合で取り直していても、その時点の値を使う。
         // `isLocalEndpointRunning` はバインド前から true なので、取り直しの最中に開くと古いポートを指しうる。

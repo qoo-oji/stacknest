@@ -175,6 +175,11 @@ extension LibraryResolver {
         ) else { throw HTTPError(.notFound) }
         let id = try context.parameters.require("id", as: Int.self)
         guard let row = try lib.db.fetchBook(id: id) else { throw HTTPError(.notFound) }
+        // G60（Codex P1・2 回目）: 本の鍵は、発行したときの本の印が今の本と一致するときだけ通す（本の番号は使い回され
+        // うる）。違う・印が無いなら 401（「StackNest から開き直して」）。本の道は 4 つともここを通る。
+        if let viewerAccess, viewerAccess.bookStamp != ViewerTokenRecord.bookStamp(dateAdded: row.dateAdded) {
+            throw HTTPError(.unauthorized)
+        }
         return (lib, row)
     }
 

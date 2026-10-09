@@ -97,7 +97,8 @@ struct BearerAuthMiddleware<Context: RequestContext & RoleHoldingContext>: Route
                 ctx.scope = .libraries(record.relayID == nil ? [record.libraryUUID] : [])
                 ctx.grantID = "viewer-token:\(record.id)"
                 ctx.viewerBook = ViewerBookAccess(libraryUUID: record.libraryUUID, bookID: record.bookID,
-                                                  lockFingerprint: record.lockFingerprint, relayID: record.relayID)
+                                                  lockFingerprint: record.lockFingerprint, relayID: record.relayID,
+                                                  bookStamp: record.bookStamp)
                 // G60 v3: 初めて通ったときに一度だけ、使われた日時と名乗りを記録する（spec §5.7）。
                 // ここに来るのは照合・発行元グラント・道の検査を通った要求だけ。この中間処理が返す 401・403 は数えない（下流の施錠の 403 は数える）。
                 // 以後は照合の結果を見るだけで書かない（ページを取るたびに保存しない）。
@@ -164,10 +165,15 @@ public struct ViewerBookAccess: Sendable, Equatable {
     /// G60 v3（spec §5.8）: 中継の鍵なら、その中継の id（中継のルートが照らす）。本の鍵は nil。
     public let relayID: String?
 
-    public init(libraryUUID: String, bookID: Int, lockFingerprint: String?, relayID: String? = nil) {
+    /// G60（Codex P1・2 回目）: 発行したときの本の印（`ViewerTokenRecord.bookStamp`）。本の道は今の本の印と照らす。
+    public let bookStamp: String?
+
+    public init(libraryUUID: String, bookID: Int, lockFingerprint: String?, relayID: String? = nil,
+                bookStamp: String? = nil) {
         self.libraryUUID = libraryUUID
         self.bookID = bookID
         self.lockFingerprint = lockFingerprint
+        self.bookStamp = bookStamp
         self.relayID = relayID
     }
 }

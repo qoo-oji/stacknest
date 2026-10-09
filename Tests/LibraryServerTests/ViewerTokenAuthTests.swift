@@ -18,6 +18,11 @@ struct ViewerTokenAuthTests {
         return (ViewerTokenStore(defaults: defaults), { defaults.removePersistentDomain(forName: name) })
     }
 
+    /// 本の今の印（発行の 2 か所と同じく、書庫の DB の追加日時から作る）。
+    private func stamp(_ lib: ServedLibrary, _ id: Int) throws -> String {
+        ViewerTokenRecord.bookStamp(dateAdded: try #require(try lib.db.fetchBook(id: id)).dateAdded)
+    }
+
     private func makeApp(_ libs: [ServedLibrary], store: ViewerTokenStore,
                          issuer: ViewerTokenIssuer = .sharedServer) -> some ApplicationProtocol {
         LibraryServerCore(
@@ -59,7 +64,7 @@ struct ViewerTokenAuthTests {
         try fx.addCover(bookID: id)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil).token
+        let token = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil).token
         let base = "/api/v1/libraries/\(lib.uuid)/books/\(id)"
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "\(base)/manifest", method: .get,
@@ -85,12 +90,50 @@ struct ViewerTokenAuthTests {
         #expect(try fx.db.loadViewerState(bookID: id).lastPage == 2)
     }
 
+    /// Codex P1（2 回目）: 本の番号は使い回されうる（`INTEGER PRIMARY KEY`。いちばん大きい番号の本を消すと、次に
+    /// 取り込んだ本に同じ番号が付く）。鍵は発行したときの本の印（追加日時）に結び付け、今の本の印と違えば 4 つの道とも
+    /// 401（「StackNest から開き直して」）。印の無い鍵も 401。印の合う鍵は今までどおり通る。
+    @Test func aTokenForAReplacedBookIsRejected() async throws {
+        let fx = try TestLibraryFixture(name: "V-reuse", bookCount: 0); defer { fx.cleanup() }
+        let (id, _) = try fx.addFolderBook(imageCount: 3)
+        try fx.addCover(bookID: id)
+        let lib = fx.servedLibrary()
+        let (store, done) = makeStore(); defer { done() }
+        // 同じ番号だった前の本（消した本）の印。
+        let replaced = ViewerTokenRecord.bookStamp(dateAdded: Date(timeIntervalSince1970: 1_000))
+        let stale = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: replaced,
+                                issuer: .sharedServer, lockCredential: nil).token
+        let unstamped = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil).token
+        let current = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id),
+                                  issuer: .sharedServer, lockCredential: nil).token
+        let base = "/api/v1/libraries/\(lib.uuid)/books/\(id)"
+        try await makeApp([lib], store: store).test(.router) { client in
+            for token in [stale, unstamped] {
+                for path in ["\(base)/manifest", "\(base)/pages/0", "\(base)/cover"] {
+                    try await client.execute(uri: path, method: .get, headers: [.authorization: "Bearer \(token)"]) { r in
+                        #expect(r.status == .unauthorized, "\(path)")
+                    }
+                }
+                try await client.execute(uri: "\(base)/progress", method: .post,
+                                         headers: [.authorization: "Bearer \(token)"],
+                                         body: .init(string: #"{"page": 2}"#)) { r in
+                    #expect(r.status == .unauthorized)
+                }
+            }
+            try await client.execute(uri: "\(base)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(current)"]) { r in
+                #expect(r.status == .ok)
+            }
+        }
+        #expect(try fx.db.loadViewerState(bookID: id).lastPage != 2, "印の合わない鍵では位置を書き換えない")
+    }
+
     @Test func otherRoutesAreForbidden() async throws {
         let fx = try TestLibraryFixture(name: "V2", bookCount: 0); defer { fx.cleanup() }
         let (id, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil).token
+        let token = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil).token
         let book = "/api/v1/libraries/\(lib.uuid)/books/\(id)"
         let cases: [(HTTPRequest.Method, String)] = [
             (.get, "/api/v1/libraries"),
@@ -132,7 +175,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil).token
+        let token = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil).token
         let manifest = "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest"
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "\(manifest)?token=\(token)", method: .get) { r in
@@ -154,7 +197,7 @@ struct ViewerTokenAuthTests {
         let grant = Grant(id: "g-share", label: "share", token: "SHARE", tier: .read, scope: .all,
                           createdAt: Date(timeIntervalSince1970: 0))
         let repo = InMemoryGrantRepository(initial: [grant])
-        let issuedVG = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+        let issuedVG = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                    lockCredential: nil, issuedByGrantID: "g-share")
         let token = issuedVG.token
         let app = LibraryServerCore(
@@ -169,7 +212,7 @@ struct ViewerTokenAuthTests {
             let usedAfterFirst = try #require(store.record(id: issuedVG.record.id)?.firstUsedAt)
             // Task 3 レビュー M-1: まだ使っていない 2 本目を同じグラントで出しておき、scope を縮めた後の 401 で
             // 初回使用が書かれないことを確かめる（1 本目は既に使ったので、一度だけの守りが誤りを隠してしまう）。
-            let fresh = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+            let fresh = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                     lockCredential: nil, issuedByGrantID: "g-share")
             var narrowed = grant
             narrowed.scope = .libraries(["OTHER-LIBRARY"])
@@ -206,7 +249,7 @@ struct ViewerTokenAuthTests {
             Grant(id: "g-any", label: "any", token: "ANY", tier: .admin, scope: .all,
                   createdAt: Date(timeIntervalSince1970: 0)),
         ])
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .localEndpoint, lockCredential: nil).token
+        let token = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .localEndpoint, lockCredential: nil).token
         let app = LibraryServerCore(
             config: .init(host: "127.0.0.1", port: 0, token: "unused", grantRepository: repo,
                           viewerTokens: store, viewerTokenIssuer: .localEndpoint),
@@ -232,7 +275,7 @@ struct ViewerTokenAuthTests {
         let (b1, _) = try fb.addFolderBook(imageCount: 2)
         let la = fa.servedLibrary(), lb = fb.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let token = store.issue(libraryUUID: la.uuid, bookID: a1, issuer: .sharedServer, lockCredential: nil).token
+        let token = store.issue(libraryUUID: la.uuid, bookID: a1, bookStamp: try stamp(la, a1), issuer: .sharedServer, lockCredential: nil).token
         try await makeApp([la, lb], store: store).test(.router) { client in
             try await client.execute(uri: "/api/v1/libraries/\(la.uuid)/books/\(a2)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(token)"]) { r in
@@ -251,7 +294,7 @@ struct ViewerTokenAuthTests {
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
         let longAgo = Date().addingTimeInterval(-31 * 24 * 60 * 60)
-        let issuedOld = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+        let issuedOld = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                     lockCredential: nil, now: longAgo)
         let token = issuedOld.token
         try await makeApp([lib], store: store).test(.router) { client in
@@ -268,7 +311,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let localToken = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .localEndpoint, lockCredential: nil).token
+        let localToken = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .localEndpoint, lockCredential: nil).token
         try await makeApp([lib], store: store, issuer: .sharedServer).test(.router) { client in
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(localToken)"]) { r in
@@ -295,9 +338,9 @@ struct ViewerTokenAuthTests {
         let (other, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let unlocked = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+        let unlocked = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                    lockCredential: lib.currentLockCredential()).token
-        let beforeLock = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+        let beforeLock = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                      lockCredential: nil).token
         let base = "/api/v1/libraries/\(lib.uuid)/books"
         try await makeApp([lib], store: store).test(.router) { client in
@@ -334,7 +377,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let token = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .localEndpoint, lockCredential: nil).token
+        let token = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .localEndpoint, lockCredential: nil).token
         let app = LibraryServerCore(
             config: .init(host: "127.0.0.1", port: 0, token: "unused-read", editToken: "cli-token",
                           apiOnly: true, adminTier: true,
@@ -369,7 +412,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 2)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil)
         let base = "/api/v1/libraries/\(lib.uuid)/books/\(id)"
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "\(base)/manifest", method: .get,
@@ -398,7 +441,7 @@ struct ViewerTokenAuthTests {
         let (other, _) = try fx.addFolderBook(imageCount: 1)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil)
         let cases: [(HTTPRequest.Method, String)] = [
             (.get, "/api/v1/libraries/\(lib.uuid)/books/\(id)/detail"),
             (.post, "/api/v1/session"),
@@ -423,7 +466,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 1)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil)
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(issued.token)"]) { r in
@@ -439,7 +482,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 1)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer, lockCredential: nil)
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer, lockCredential: nil)
         let long = "com.example.viewer/1.0; format=1; " + String(repeating: "x", count: 500)
         try await makeApp([lib], store: store).test(.router) { client in
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
@@ -458,7 +501,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 1)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .localEndpoint, lockCredential: nil)
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .localEndpoint, lockCredential: nil)
         let app = LibraryServerCore(
             config: .init(host: "127.0.0.1", port: 0, token: "unused-read", editToken: "cli-token",
                           apiOnly: true, adminTier: true,
@@ -484,7 +527,7 @@ struct ViewerTokenAuthTests {
         let (id, _) = try fx.addFolderBook(imageCount: 1)
         let lib = fx.servedLibrary()
         let (store, done) = makeStore(); defer { done() }
-        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, issuer: .sharedServer,
+        let issued = store.issue(libraryUUID: lib.uuid, bookID: id, bookStamp: try stamp(lib, id), issuer: .sharedServer,
                                  lockCredential: lib.currentLockCredential())
         try fx.db.setLibrarySetting(key: "lock_password_hash", value: "rotated-hash")
         try await makeApp([lib], store: store).test(.router) { client in

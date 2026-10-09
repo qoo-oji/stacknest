@@ -58,6 +58,8 @@ struct ViewerTokenEndpointTests {
             #expect(record.bookID == id)
             #expect(record.lockFingerprint == nil)
             #expect(record.issuedByGrantID == "r")
+            // Codex P1（2 回目）: 本の印に結び付ける（本の番号が使い回されても、別の本には効かない）。
+            #expect(record.bookStamp == ViewerTokenRecord.bookStamp(dateAdded: try #require(try lib.db.fetchBook(id: id)).dateAdded))
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/books/\(id)/manifest", method: .get,
                                      headers: [.authorization: "Bearer \(token)"]) { r in
                 #expect(r.status == .ok)

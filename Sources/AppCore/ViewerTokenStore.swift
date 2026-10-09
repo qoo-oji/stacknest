@@ -36,6 +36,11 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     /// `libraryUUID`/`bookID` は見張り用の値（`relaySentinelLibraryUUID`・`relaySentinelBookID`）なので、
     /// どの本の道にも通らない。新しいビルドは起動時に孤児の中継の鍵を消す（`removeRelayTokens`）。
     public let relayID: String?
+    /// G60（Codex P1・2 回目）: 発行したときの本の印（`bookStamp(dateAdded:)`）。本の番号は使い回されうる
+    /// （`INTEGER PRIMARY KEY`。いちばん大きい番号の本を消すと、次に取り込んだ本に同じ番号が付く）ので、本の道は
+    /// この印が今の本の印と一致するときだけ通す（違えば 401）。中継の鍵（本の道を通らない）と、この印を持つ前に
+    /// 保存した記録は nil で、nil の本の鍵は本の道を通らない。
+    public let bookStamp: String?
     /// G60 v3: 初めて認証に通った日時（まだなら nil）。一度書いたら変えない（spec §5.7）。
     /// v2 で保存した記録にはこのキーが無いので、既定 nil の `var` にして合成のデコードで読めるようにする。
     public internal(set) var firstUsedAt: Date? = nil
@@ -48,6 +53,12 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     public static let relaySentinelLibraryUUID = "relay"
     /// G60 v3（M-3）: 中継の鍵の記録の `bookID`。本の id は 1 から振られるので 0 は実在しない。
     public static let relaySentinelBookID = 0
+
+    /// G60（Codex P1・2 回目）: 本の印。書庫の DB の追加日時を秒に切り捨てた値（発行と照合の両方が DB の値から作る。
+    /// 秒にするのは、取り込んだ直後の手元の値と DB に入った値で秒未満が違っても同じ印にするため）。
+    public static func bookStamp(dateAdded: Date) -> String {
+        "added:\(Int64(dateAdded.timeIntervalSince1970.rounded(.down)))"
+    }
 }
 
 /// G60: 発行の結果。平文の `token` は呼び出し元へ 1 度だけ渡し、保存しない。
@@ -119,7 +130,8 @@ public final class ViewerTokenStore: @unchecked Sendable {
     /// 新しいトークンを出す。期限切れの記録はここでも掃除する。
     /// - Parameter issuedByGrantID: 発行した接続のグラントの id。グラントに結び付けないなら nil。
     /// - Parameter relayID: 中継の鍵なら、その中継の id（`ViewerRelayRegistry.register` の戻り値）。本の鍵は nil。
-    public func issue(libraryUUID: String, bookID: Int, issuer: ViewerTokenIssuer,
+    /// - Parameter bookStamp: 本の鍵なら、その本の印（`ViewerTokenRecord.bookStamp(dateAdded:)`）。無い本の鍵は本の道を通らない。
+    public func issue(libraryUUID: String, bookID: Int, bookStamp: String? = nil, issuer: ViewerTokenIssuer,
                       lockCredential: String?, issuedByGrantID: String? = nil,
                       relayID: String? = nil,
                       now: Date = Date()) -> IssuedViewerToken {
@@ -134,7 +146,8 @@ public final class ViewerTokenStore: @unchecked Sendable {
             expiresAt: now.addingTimeInterval(Self.lifetime),
             lockFingerprint: Self.lockFingerprint(for: lockCredential),
             issuedByGrantID: issuedByGrantID,
-            relayID: relayID)
+            relayID: relayID,
+            bookStamp: bookStamp)
         lock.withLock {
             records.removeAll { $0.expiresAt <= now }
             records.append(record)

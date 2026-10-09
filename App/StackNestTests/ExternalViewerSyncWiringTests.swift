@@ -248,6 +248,9 @@ struct ExternalViewerSyncWiringTests {
         #expect(record.libraryUUID == uuid)
         #expect(record.bookID == 1)
         #expect(record.issuedByGrantID == nil, "アプリが手元で出したトークンはグラントに結び付かない")
+        // Codex P1（2 回目）: 本の印（書庫の DB の追加日時＝1970 年から 100 秒）に結び付ける。
+        #expect(record.bookStamp == "added:100")
+        #expect(record.bookStamp == ViewerTokenRecord.bookStamp(dateAdded: row.dateAdded))
     }
 
     @Test func localSyncOffOpensTheFile() async throws {

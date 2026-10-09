@@ -2052,9 +2052,10 @@ public struct LibraryServerCore: Sendable {
             // グラントで認証した接続なら、そのグラントに結び付ける（グラントの削除で失効・作者の決定）。
             // 固定トークンの経路（grantID == "legacy"）は結び付けない。
             let issuedByGrantID: String? = context.grantID == "legacy" ? nil : context.grantID
+            // 本の印に結び付ける（本の番号が使い回されても、別の本には効かない・Codex P1）。
             let issued = viewerTokens.issue(
-                libraryUUID: lib.uuid, bookID: row.id, issuer: issuer,
-                lockCredential: lockCredential, issuedByGrantID: issuedByGrantID)
+                libraryUUID: lib.uuid, bookID: row.id, bookStamp: ViewerTokenRecord.bookStamp(dateAdded: row.dateAdded),
+                issuer: issuer, lockCredential: lockCredential, issuedByGrantID: issuedByGrantID)
             // 発行したトークンは共有キャッシュ・ブラウザに残さない。
             return EditedResponse(
                 headers: [.cacheControl: "no-store"],
