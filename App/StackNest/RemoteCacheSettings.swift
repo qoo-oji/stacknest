@@ -19,5 +19,16 @@ enum RemoteCacheSettings {
 
     static let wholeBookPrefetchKey = "remote_prefetch_whole_book"
     static func wholeBookPrefetch(_ d: UserDefaults = .standard) -> Bool { d.bool(forKey: wholeBookPrefetchKey) }  // 既定 false
-    static func setWholeBookPrefetch(_ v: Bool, _ d: UserDefaults = .standard) { d.set(v, forKey: wholeBookPrefetchKey) }
+    static func setWholeBookPrefetch(_ v: Bool, _ d: UserDefaults = .standard) {
+        d.set(v, forKey: wholeBookPrefetchKey)
+        // G60 §5.9: 中継の先読み（127.0.0.1 の口）に知らせる。先読み係は取るページを選ぶたびに設定を読むが、
+        // 近傍を取り終えて止まっているときに ON にされたことは、この知らせでしか分からない。
+        // 内蔵ビューアはページを移るたびに読み直すので、知らせは要らない。
+        NotificationCenter.default.post(name: .remoteWholeBookPrefetchDidChange, object: nil)
+    }
+}
+
+extension Notification.Name {
+    /// G60 §5.9: 「開いた本を全ページ先読みする」が切り替わった（`LocalControlController` が中継の先読みへ伝える）。
+    static let remoteWholeBookPrefetchDidChange = Notification.Name("app.shelfsmith.stacknest.remoteWholeBookPrefetchDidChange")
 }

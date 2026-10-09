@@ -2,6 +2,8 @@
 import Testing
 import Foundation
 import AppCore
+import LibraryServer
+import RemoteClient
 @testable import StackNest
 
 /// G60 最終レビュー I-1: `reload()` を立て続けに呼んでも、自分の旧サーバとのポート競合で
@@ -105,5 +107,79 @@ struct LocalControlControllerReloadTests {
 
         #expect(ports.bound.isEmpty, "stop() の後にサーバが起動していない")
         #expect(!c.isRunning)
+    }
+
+    // MARK: - G60 §5.9: 中継の本の先読み
+
+    @MainActor final class StopCount { var value = 0 }
+    @MainActor final class ModeBox {
+        var value: LocalEndpointMode?
+        init(_ value: LocalEndpointMode?) { self.value = value }
+    }
+
+    /// 127.0.0.1 の口の中継は、内蔵ビューアと同じリモートのキャッシュ（使うときに引く）を使い、先読み係を持つ。
+    @Test func theRelayUsesTheSharedRemoteCache() {
+        let c = LocalControlController()
+        #expect(c.viewerRelay.pageCache is RemotePageCacheRelayAdapter)
+        #expect(c.viewerRelay.prefetcher != nil)
+    }
+
+    /// 口を止めたら（StackNest の終了もここを通る）、中継の本の先読みも止める。
+    @Test func stopAlsoStopsTheRelayPrefetch() async throws {
+        let ports = FakePorts()
+        let c = makeController(ports)
+        let stops = StopCount()
+        c.stopRelayPrefetch = { _ in stops.value += 1 }
+        c.startIfEnabled()
+        try await waitUntil { ports.bound == [50_001] }
+
+        c.stop()
+
+        #expect(stops.value == 1)
+        try await waitUntil { ports.bound.isEmpty }
+    }
+
+    /// 再構成で口が起動しなくなる（同期もローカルコントロールも OFF）なら止める。口が起動し直すなら止めない
+    /// （中継の記録はメモリに残っていて、ビューアは同じ口で読み続けられる）。
+    @Test func reloadStopsThePrefetchOnlyWhenTheEndpointGoesAway() async throws {
+        let ports = FakePorts()
+        let mode = ModeBox(.viewerTokensOnly)
+        let c = makeController(ports, mode: .viewerTokensOnly)
+        c.endpointModeProvider = { mode.value }
+        let stops = StopCount()
+        c.stopRelayPrefetch = { _ in stops.value += 1 }
+        c.startIfEnabled()
+        try await waitUntil { ports.bound == [50_001] }
+
+        c.reload()
+        try await Task.sleep(for: .milliseconds(200))
+        try await waitUntil { c.isRunning && ports.bound.count == 1 }
+        #expect(stops.value == 0, "口が起動し直す再構成では止めない")
+
+        mode.value = nil
+        c.reload()
+        #expect(stops.value == 1)
+        try await waitUntil { ports.bound.isEmpty }
+        #expect(!c.isRunning)
+    }
+
+    /// 「開いた本を全ページ先読みする」を切り替えると（設定の画面のトグルは `RemoteCacheSettings.setWholeBookPrefetch` を通る）、
+    /// 127.0.0.1 の口が中継の先読みへ伝える（ON なら、止まっていた先読みを全ページで始め直す）。
+    /// 書き込みは suite の defaults にする（`UserDefaults.standard` に触れない）。知らせはどの口も受けるので、
+    /// ほかに作られた口は自分の中継へ伝えるだけで何も起きない（渡した本が無い）。
+    @Test func wholeBookSettingChangesReachTheRelay() async throws {
+        let c = LocalControlController()
+        let changes = StopCount()
+        c.wholeBookPrefetchChanged = { _ in changes.value += 1 }
+        let name = "g60-59-whole-book-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        RemoteCacheSettings.setWholeBookPrefetch(true, defaults)
+        try await waitUntil { changes.value == 1 }
+        RemoteCacheSettings.setWholeBookPrefetch(false, defaults)
+        try await waitUntil { changes.value == 2 }
+
+        #expect(RemoteCacheSettings.wholeBookPrefetch(defaults) == false)
     }
 }

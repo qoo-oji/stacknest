@@ -137,6 +137,8 @@ struct ExternalViewerSyncWiringTests {
     }
 
     final class LastReads { var items: [LastReadBook] = [] }
+    /// G60 §5.9: 中継の本の先読みを始めた記録（中継の id と中心）。
+    final class Prefetches { var items: [(relayID: String, focus: Int)] = [] }
     final class Fallbacks { var entries: [(bookID: Int, manifest: ManifestDTO?)] = [] }
     /// 確認の待ちに渡された時間を記録する（`sleep` は @Sendable なので鍵で包む）。
     final class Delays: @unchecked Sendable {
@@ -147,9 +149,11 @@ struct ExternalViewerSyncWiringTests {
     }
 
     /// - Parameter relay: リモートの本を中継するか（本番の判断は `ExternalViewerSyncRouting.relaysRemoteBooks`）。
+    /// - Parameter prefetches: 中継の本の先読みを始めた記録（G60 §5.9）。nil なら記録しない（本物の先読みは走らない）。
     /// - Parameter sleep: 確認の待ち。**既定は即座に取り消す**（確認を走らせず、照会の要求も出さない。
     ///   スタブは照会以外に `{}` を返すので、既定で確認が走ると全部「未使用」と読まれてしまう）。
     func handoff(_ env: Env, endpointRunning: Bool = true, lastReads: LastReads? = nil, relay: Bool = true,
+                 prefetches: Prefetches? = nil,
                  sleep: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() })
         -> ExternalViewerHandoff {
         ExternalViewerHandoff(
@@ -162,7 +166,8 @@ struct ExternalViewerSyncWiringTests {
             relays: env.relays,
             relaysRemoteBooks: relay,
             sleep: sleep,
-            confirmedViewers: env.confirmed)
+            confirmedViewers: env.confirmed,
+            startRelayPrefetch: { relayID, focus in prefetches?.items.append((relayID, focus)) })
     }
 
     func recording(_ launches: Launches) -> (URL, URL) -> Void {
@@ -1306,6 +1311,91 @@ struct ExternalViewerSyncWiringTests {
 
         guard case .launchFailed = failure else { Issue.record("起動に失敗した理由を返す: \(String(describing: failure))"); return }
         #expect(launches.entries.isEmpty)
+    }
+
+    // MARK: - G60 §5.9: 中継の本の先読み
+
+    private func remoteReply() -> ViewerTokenReply {
+        ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: Date(timeIntervalSince1970: 2_000_000_000), tokenID: "TID-1")
+    }
+
+    /// 中継の本を渡せたら、その中継の先読みを始める（中心は開くページ。範囲は先読み係が設定に従って決める）。
+    /// 中継の記録には、渡す時点の manifest のページ数と etag（キャッシュのキーの版）を持たせる。
+    @Test func relayedHandOffStartsThePrefetch() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let prefetches = Prefetches()
+        let h = handoff(env, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let reply = remoteReply()
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 70, filename: "a.zip", lastPage: 0),
+            manifest: ManifestDTO(pageCount: 20, direction: "rtl", format: "archive", etag: "\"e7\""),
+            viewer: viewer, serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X",
+            startPage: 7, settings: env.settings,
+            issue: { reply }, fetchStatus: { _ in throw CancellationError() })
+
+        #expect(failure == nil)
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let relayID = String(ref.book.dropFirst("http://127.0.0.1:4321/api/v1/relay/".count))
+        #expect(prefetches.items.map { $0.relayID } == [relayID])
+        #expect(prefetches.items.map { $0.focus } == [7])
+        let target = try #require(env.relays.target(for: relayID))
+        #expect(target.pageCount == 20)
+        #expect(target.manifestETag == "\"e7\"")
+    }
+
+    /// 渡せなかったら（確かめたビューアが消えていた）先読みしない。
+    @Test func noPrefetchWhenTheHandOffFails() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let prefetches = Prefetches()
+        let h = handoff(env, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let app = env.viewerApp
+        let reply = remoteReply()
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 71, filename: "a.zip", lastPage: 0), manifest: archiveManifest(), viewer: viewer,
+            serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X", startPage: 0,
+            settings: env.settings,
+            issue: {
+                try? FileManager.default.removeItem(at: app)
+                return reply
+            },
+            fetchStatus: { _ in throw CancellationError() })
+
+        guard case .launchFailed = failure else { Issue.record("起動に失敗した理由を返す: \(String(describing: failure))"); return }
+        #expect(prefetches.items.isEmpty)
+    }
+
+    /// 中継を切った形（§5.6 の直接つなぐ形）では、中継が無いので先読みもしない。
+    @Test func noPrefetchInDirectMode() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let prefetches = Prefetches()
+        let h = handoff(env, relay: false, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let reply = remoteReply()
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 72, filename: "a.zip", lastPage: 0), manifest: archiveManifest(), viewer: viewer,
+            serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X", startPage: 0,
+            settings: env.settings, issue: { reply }, fetchStatus: { _ in throw CancellationError() })
+
+        #expect(failure == nil)
+        #expect(!launches.entries.isEmpty)
+        #expect(prefetches.items.isEmpty)
     }
 
     /// M-1: 将来の版を併せて宣言していても、リモートの参照ファイルは StackNest が書ける最大（1）で書く。

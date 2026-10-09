@@ -6,6 +6,7 @@ import LibraryServer
 import LibraryServerAPI
 import LibraryStore
 import AppCore
+import RemoteClient
 
 /// 127.0.0.1 専用のローカル制御エンドポイント（CLI/MCP 用）。ネットワーク共有とは独立。
 @Observable
@@ -46,7 +47,11 @@ final class LocalControlController {
     /// G60 v3（spec §5.8・試用）: リモートの本の中継。記録は `ViewerRelayRegistry.shared`（App の受け渡しと同じ
     /// インスタンス）。口を起動し直すたび（設定の切り替え・ポートの取り直し）に作らず、プロセスで 1 つだけ持つ
     /// （取り次ぎの URLSession は invalidate しないので、作るたびに残ってしまう）。
-    @ObservationIgnored let viewerRelay = ViewerRelayConfig(registry: .shared)
+    /// G60 §5.9: 中継のページは、内蔵ビューアと同じリモートのキャッシュ（`RemotePageCache.shared`・使うときに引く）から
+    /// 返し、渡した本を先読みする。範囲は内蔵と同じ「開いた本を全ページ先読みする」（先読み係が取るページを選ぶたびに読む）。
+    @ObservationIgnored let viewerRelay = ViewerRelayConfig(
+        registry: .shared, pageCache: RemotePageCacheRelayAdapter.shared,
+        wholeBookPrefetch: { RemoteCacheSettings.wholeBookPrefetch() })
 
     // MARK: - テスト用の継ぎ目（本番は既定のまま）
 
@@ -65,6 +70,33 @@ final class LocalControlController {
     /// 非 nil なら本物のサーバを組まずにこれを走らせる（実ポートを使わないテスト用）。
     /// 本物と同じく、取り消されたら後始末をして戻り、ポートが使われていれば EADDRINUSE を投げること。
     @ObservationIgnored var serverRunnerOverride: (@MainActor (_ port: Int, _ mode: LocalEndpointMode) async throws -> Void)?
+
+    /// G60 §5.9: 中継の本の先読みを止める。口を止めたとき（終了も通る）と、再構成で口が起動しなくなるときに呼ぶ。
+    /// テストは呼ばれた回数を数える。
+    @ObservationIgnored var stopRelayPrefetch: @MainActor (ViewerRelayConfig) -> Void = { relay in
+        Task { await relay.stopPrefetch() }
+    }
+
+    /// G60 §5.9: 「開いた本を全ページ先読みする」が切り替わったときに中継へ伝える（ON なら、近傍を取り終えて
+    /// 止まっていた先読みを全ページで始め直す。OFF は先読み係が次の 1 枚から読むので、伝えても何も変わらない）。
+    /// テストは呼ばれた回数を数える。
+    @ObservationIgnored var wholeBookPrefetchChanged: @MainActor (ViewerRelayConfig) -> Void = { relay in
+        Task { await relay.wholeBookPrefetchSettingChanged() }
+    }
+    /// G60 §5.9: 設定の切り替えの知らせ（`RemoteCacheSettings.setWholeBookPrefetch` が投げる）を受ける登録。
+    @ObservationIgnored private var wholeBookObserver: (any NSObjectProtocol)?
+
+    init() {
+        // 知らせは投げた側の thread で受け、MainActor へ移してから中継へ伝える（`shared` もテストの口も同じ形）。
+        wholeBookObserver = NotificationCenter.default.addObserver(
+            forName: .remoteWholeBookPrefetchDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.wholeBookPrefetchChanged(self.viewerRelay)
+            }
+        }
+    }
 
     func startIfEnabled() {
         guard let mode = endpointModeProvider() else { return }
@@ -213,6 +245,8 @@ final class LocalControlController {
         serverTask = nil
         isRunning = false
         portRetries = 0
+        // G60 §5.9: 口を止めたら中継の本の先読みも止める（StackNest の終了もここを通る）。
+        stopRelayPrefetch(viewerRelay)
     }
 
     /// `reload()` の再起動の鎖の末尾。次の `reload()` はこれを待ってから動く。
@@ -228,6 +262,9 @@ final class LocalControlController {
     /// ポートを取り直していた（書き出し済みの参照ファイルが古いポートを指したまま使えなくなる）。
     /// 各呼び出しは前の再起動を待ち、その再起動が立てたサーバも止めて待ってから起動する。
     func reload() {
+        // G60 §5.9: 再構成の後に口が起動しない（同期とローカルコントロールの両方が OFF）なら、先読みも止める。
+        // 口が起動し直すなら止めない（中継の記録はメモリに残り、ビューアは同じ口で読み続けられる）。
+        if endpointModeProvider() == nil { stopRelayPrefetch(viewerRelay) }
         let old = serverTask
         let previous = pendingRestart
         serverTask?.cancel()

@@ -35,6 +35,9 @@ struct ExternalViewerHandoff {
     var sleep: @Sendable (Duration) async throws -> Void
     /// G60 v3: 確認できた対応ビューアの記録（設定の状態の行が読む）。
     var confirmedViewers: ConfirmedViewerStore
+    /// G60 §5.9（2026-10-08 作者の決定）: 中継の本を渡せたら、その本の先読みを始める（127.0.0.1 の口の中継が持つ
+    /// 先読み係。範囲は設定に従う。前に渡した本の先読みは止まる）。引数は中継の id と開くページ。
+    var startRelayPrefetch: @MainActor (_ relayID: String, _ focus: Int) async -> Void
 
     static var live: ExternalViewerHandoff {
         ExternalViewerHandoff(
@@ -47,7 +50,10 @@ struct ExternalViewerHandoff {
             relays: .shared,
             relaysRemoteBooks: ExternalViewerSyncRouting.relaysRemoteBooks,
             sleep: { try await Task.sleep(for: $0) },
-            confirmedViewers: .shared)
+            confirmedViewers: .shared,
+            startRelayPrefetch: { relayID, focus in
+                await LocalControlController.shared.viewerRelay.startPrefetch(relayID: relayID, focus: focus)
+            })
     }
 
     enum Failure: Error, Equatable {
@@ -168,15 +174,20 @@ struct ExternalViewerHandoff {
         let token: String
         let expiresAt: Date
         var readUse: (@Sendable () async -> UseOutcome)?
+        // G60 §5.9: 渡せたら先読みする中継（中継のときだけ）。
+        var prefetchRelayID: String?
         if relaysRemoteBooks {
             // 中継の記録の期限・中継の鍵の期限・参照ファイルの期限を同じ時刻から決める。
             let issuedAt = now()
             // 先に切れる方に合わせる（リモートの鍵が切れたら、中継しても 401）。中継の記録もこの時刻で消える。
             let relayExpiry = min(issuedAt.addingTimeInterval(ViewerTokenStore.lifetime), reply.expiresAt)
             // 中継の記録を先に登録してから鍵を出す（起動時の孤児の掃除が、出したばかりの鍵を消さないように）。
+            // G60 §5.9: 渡す時点の manifest のページ数と etag も持たせる（キャッシュのキーの版と先読みの範囲）。
             let relayID = relays.register(ViewerRelayTarget(
                 serverID: serverID, serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id,
-                remoteToken: reply.token), expiresAt: relayExpiry, now: issuedAt)
+                remoteToken: reply.token, pageCount: manifest.pageCount, manifestETag: manifest.etag),
+                expiresAt: relayExpiry, now: issuedAt)
+            prefetchRelayID = relayID
             // 中継の鍵の記録には本物の書庫・本を持たせない（見張り用の値。本物は中継の記録だけ・M-3）。
             let local = tokens.issue(libraryUUID: ViewerTokenRecord.relaySentinelLibraryUUID,
                                      bookID: ViewerTokenRecord.relaySentinelBookID, issuer: .localEndpoint,
@@ -218,9 +229,16 @@ struct ExternalViewerHandoff {
             pageCount: manifest.pageCount,
             direction: manifest.direction,
             startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
-        return hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
-                    settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed,
-                    cancelsOnClose: !relaysRemoteBooks, onCheckStarted: onCheckStarted)
+        let failure = hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
+                           settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed,
+                           cancelsOnClose: !relaysRemoteBooks, onCheckStarted: onCheckStarted)
+        // G60 §5.9（2026-10-08 作者の決定）: 中継の本を渡せたら、裏で先読みしてリモートのキャッシュに入れる
+        // （内蔵ビューアと分け合う）。範囲は「開いた本を全ページ先読みする」に従い、先読み係が決める（ON＝全ページ・
+        // OFF＝近傍だけ）。中心は開くページ。前に渡した本の先読みは止まる。渡せなかったら先読みしない。
+        if failure == nil, let prefetchRelayID {
+            await startRelayPrefetch(prefetchRelayID, reference.startPage)
+        }
+        return failure
     }
 
     /// G60 v3: 待ってから 1 度だけ確かめる。待ちが取り消されたら確かめない（`.unknown`）。
