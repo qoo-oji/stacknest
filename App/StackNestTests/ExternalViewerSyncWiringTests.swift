@@ -607,6 +607,28 @@ struct ExternalViewerSyncWiringTests {
         #expect(G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/49/detail") })
     }
 
+    /// Codex P2（3 回目）: 開いた位置をサーバへ書き終えてから外部ビューアを起動する（起動した後に書くと、ビューアが
+    /// 先に書いた新しい位置を、遅れて届いた最初の書き込みが巻き戻しうる）。
+    @Test func remoteInitialProgressIsWrittenBeforeTheViewerLaunches() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        final class Seen { var progressBeforeLaunch: Bool? }
+        let seen = Seen()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = { file, viewer in
+            seen.progressBeforeLaunch = G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/50/progress") }
+            launches.entries.append((file, viewer))
+        }
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, serverLastPage: 7)
+        s.testPutManifestHandoff(bookID: 50, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 50, filename: "a.zip", lastPage: 7))
+        try await waitUntil { !launches.entries.isEmpty }
+
+        #expect(seen.progressBeforeLaunch == true)
+    }
+
     /// Codex P1（内蔵ビューアの道も同じ選び方）: 引き直した本詳細があればその値（未読なら nil）、無ければ一覧の値。
     @Test func currentServerLastPagePrefersTheFetchedDetail() {
         func detail(_ lastPage: Int?) -> BookDetailDTO {

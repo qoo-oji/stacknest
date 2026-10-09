@@ -2034,7 +2034,9 @@ final class RemoteLibraryState {
             // （旧 setProtected 呼び出しは Task 2 で owner 必須になったため削除）。
             // 開いた時点で既読をサーバ確定（/progress は R でも許可）。offline 先行時にサーバを
             // 巻き戻さないよう、解決後ページで POST する。
-            Task { try? await self.client.postProgress(libraryUUID: self.libraryUUID, bookID: book.id, page: resolvedLastPage, libraryToken: self.libraryToken) }
+            // Codex P2（3 回目・外部ビューアの道と同じ）: 書き終えてから窓を開く（開いた後のページ送りの書き込みを、
+            // 遅れて届いたこの書き込みが巻き戻さないように）。
+            _ = try? await self.client.postProgress(libraryUUID: self.libraryUUID, bookID: book.id, page: resolvedLastPage, libraryToken: self.libraryToken)
             let initialState = ResolvedViewerState(
                 spreadEnabled: ViewerSettings.shared.spreadByDefault,
                 coverOffset: true,
@@ -2238,6 +2240,10 @@ final class RemoteLibraryState {
             resolveResumePage(server: Self.currentServerLastPage(detail: detail, listed: book.lastPage),
                               offline: offlineLastPage),
             pageCount: manifest.pageCount)
+        // 開いた時点で既読にし、開く位置をサーバへ書く（内蔵と同じ。offline 先行時にサーバを巻き戻さないよう解決後の
+        // ページで書く）。Codex P2（3 回目）: 書き終えてから渡す。渡した後に書くと、ビューアが先に書いた新しい位置を、
+        // 遅れて届いたこの書き込みが巻き戻しうる。渡せなかったとき（内蔵へ倒す・施錠）に書いていても、同じ位置か断られるだけ。
+        _ = try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: resumePage, libraryToken: libraryToken)
         let failure = await viewerHandoff.openRemote(
             book: book, manifest: manifest, viewer: viewer, serverID: serverID, serverBase: client.baseURL,
             libraryUUID: libraryUUID, startPage: resumePage, settings: viewerSettings,
@@ -2265,13 +2271,12 @@ final class RemoteLibraryState {
             }
             return
         }
-        // 開いた時点で既読にする（内蔵と同じ）。読み進めた位置は外部ビューアが書き戻す。
+        // 開いた時点で既読にする（内蔵と同じ。サーバへは渡す前に書いた）。読み進めた位置は外部ビューアが書き戻す。
         books = books.markingRead(bookID: book.id, at: Date())
         viewerHandoff.recordLastRead(.remote(
             serverID: serverID, serverURL: client.baseURL.absoluteString,
             libraryUUID: libraryUUID, libraryName: libraryName,
             bookID: book.id, title: book.title, locked: locked))
-        Task { try? await client.postProgress(libraryUUID: libraryUUID, bookID: book.id, page: resumePage, libraryToken: libraryToken) }
     }
 
     /// G60 v3: 外部ビューアが本を読み込まなかった（spec §5.7）。お知らせに従来の開き方（内蔵ビューア）のボタンを付ける。
