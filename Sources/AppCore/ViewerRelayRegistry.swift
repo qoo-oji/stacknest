@@ -109,6 +109,12 @@ public final class ViewerRelayRegistry: @unchecked Sendable {
         }
     }
 
+    /// G60 §5.9（作者の決定 2026-10-10・Codex P1）: 上流に 401・403 で断られた中継を閉じる（記録を消す）。
+    /// 以後その中継の要求は記録が無いのと同じ 401（キャッシュにあるページも返さない）。無ければ何もしない。
+    public func close(_ relayID: String) {
+        lock.withLock { _ = entries.removeValue(forKey: relayID) }
+    }
+
     /// 今ある（期限の切れていない）中継か。起動時の掃除（`ViewerTokenStore.removeRelayTokens`）が使う。
     public func isLive(_ relayID: String, now: Date = Date()) -> Bool {
         target(for: relayID, now: now) != nil

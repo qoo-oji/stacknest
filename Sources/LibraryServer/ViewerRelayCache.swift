@@ -18,23 +18,30 @@ enum SharedPageOutcome: Sendable {
     case failed
 }
 
-/// G60 §5.9: 同じページを同時に頼まれたら（ビューアと先読み、ビューアの 2 本）、リモートへは 1 回だけ取りに行く。
+/// G60 §5.9: 同じ中継で同じページを同時に頼まれたら（ビューアと先読み、ビューアの 2 本）、リモートへは 1 回だけ取りに行く。
 /// 取りに行く作業は頼んだ側の取り消しから切り離す（先読みを止めても、取り中の分は最後まで取ってキャッシュに入れる）。
+/// 相乗りは中継ごと（作者の決定 2026-10-10・最終レビュー m2）: 取りに行くのはその中継のリモートの鍵なので、401・403 は
+/// その中継のもの。中継をまたいで相乗りすると、古い中継が断られた結果で新しい中継まで閉じてしまう。
 actor ViewerRelayPageLoader {
-    private var inFlight: [ViewerRelayPageKey: Task<SharedPageOutcome, Never>] = [:]
-    private var joined: [ViewerRelayPageKey: Int] = [:]
+    private struct Flight: Hashable {
+        let relayID: String
+        let page: ViewerRelayPageKey
+    }
+    private var inFlight: [Flight: Task<SharedPageOutcome, Never>] = [:]
+    private var joined: [Flight: Int] = [:]
 
-    func load(_ key: ViewerRelayPageKey,
+    func load(_ key: ViewerRelayPageKey, relayID: String,
               _ work: @escaping @Sendable () async -> SharedPageOutcome) async -> SharedPageOutcome {
-        if let running = inFlight[key] {
-            joined[key, default: 0] += 1
+        let flight = Flight(relayID: relayID, page: key)
+        if let running = inFlight[flight] {
+            joined[flight, default: 0] += 1
             return await running.value
         }
         let task = Task { await work() }
-        inFlight[key] = task
+        inFlight[flight] = task
         let outcome = await task.value
-        inFlight[key] = nil
-        joined[key] = nil
+        inFlight[flight] = nil
+        joined[flight] = nil
         return outcome
     }
 
@@ -42,7 +49,9 @@ actor ViewerRelayPageLoader {
     var inFlightCount: Int { inFlight.count }
 
     /// テスト用: 取り中の作業に相乗りした要求の数。
-    func joinedCount(for key: ViewerRelayPageKey) -> Int { joined[key] ?? 0 }
+    func joinedCount(for key: ViewerRelayPageKey, relayID: String) -> Int {
+        joined[Flight(relayID: relayID, page: key)] ?? 0
+    }
 }
 
 extension ViewerRelayForwarder {
@@ -65,11 +74,15 @@ extension ViewerRelayForwarder {
         let response: Response
         if let cache = relay.pageCache, usesSharedVariant(request) {
             let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader])
-            let outcome = await loadSharedPage(target, page: page, viewer: viewer, cache: cache, loader: relay.loader,
-                                               session: relay.session, limit: relay.maxResponseBytes)
+            let outcome = await loadSharedPage(target, page: page, relayID: relayID, viewer: viewer, cache: cache,
+                                               loader: relay.loader, session: relay.session, limit: relay.maxResponseBytes)
+            if case .upstream(let status, _, _) = outcome {
+                closeIfRefused(status, relayID: relayID, registry: relay.registry)
+            }
             response = sharedPageResponse(outcome)
         } else {
             response = await forward(target, remotePath: "pages/\(page)", request: request, body: nil, relay: relay)
+            closeIfRefused(Int(response.status.code), relayID: relayID, registry: relay.registry)
         }
         await relay.prefetcher?.liveRequestEnded(relayID: relayID)
         return response
@@ -78,12 +91,13 @@ extension ViewerRelayForwarder {
     /// キャッシュにあれば返す。無ければ内蔵ビューアと同じ形（`maxw`＝内蔵の幅・`v`＝版）でリモートから取り、
     /// `Cache-Control: no-store` でなければ入れる（`RemoteBookContent.imageData` と同じ）。同時の同じページは 1 回だけ取る。
     /// - Parameter viewer: 整えた名乗り（ビューアの要求のとき）。先読みは nil。
-    static func loadSharedPage(_ target: ViewerRelayTarget, page: Int, viewer: String?,
+    /// - Parameter relayID: 取りに行く中継（相乗りは中継ごと）。
+    static func loadSharedPage(_ target: ViewerRelayTarget, page: Int, relayID: String, viewer: String?,
                                cache: any ViewerRelayPageCache, loader: ViewerRelayPageLoader,
                                session: URLSession, limit: Int) async -> SharedPageOutcome {
         let key = ViewerRelayPageKey(target: target, page: page)
         if let hit = await cache.cachedPage(key) { return .hit(hit) }
-        return await loader.load(key) {
+        return await loader.load(key, relayID: relayID) {
             // 待っている間に、ほかの要求が取り終えて入れているかもしれない。
             if let hit = await cache.cachedPage(key) { return .hit(hit) }
             guard let request = Self.makeSharedPageRequest(target, key: key, viewer: viewer) else { return .failed }
@@ -159,13 +173,23 @@ extension ViewerRelayForwarder {
             },
             fetch: { relayID, page in
                 guard let target = registry.target(for: relayID) else { return .relayGone }
-                let outcome = await Self.loadSharedPage(target, page: page, viewer: nil, cache: cache, loader: loader,
-                                                        session: session, limit: limit)
+                let outcome = await Self.loadSharedPage(target, page: page, relayID: relayID, viewer: nil, cache: cache,
+                                                        loader: loader, session: session, limit: limit)
+                if case .upstream(let status, _, _) = outcome {
+                    Self.closeIfRefused(status, relayID: relayID, registry: registry)
+                }
                 return Self.prefetchOutcome(outcome)
             },
             wholeBook: wholeBook,
             // 待ちの閉包は LibraryServer の中で書く（既定値にしない理由は `ViewerRelayPrefetcher.init` を参照）。
             sleep: { try await Task.sleep(for: $0) })
+    }
+
+    /// 作者の決定（2026-10-10・Codex P1）: 上流が 401・403 で断ったら、その中継を閉じる（spec §5.9 を改めた）。
+    /// 以後その中継の要求は、キャッシュにあるページも含めて `authorize` で 401（「StackNest から開き直して」）。
+    /// 断った応答そのものは、そのままビューアへ返す（施錠の印も）。ビューアの要求・素通し・先読みのどれで断られても閉じる。
+    static func closeIfRefused(_ status: Int, relayID: String, registry: ViewerRelayRegistry) {
+        if status == 401 || status == 403 { registry.close(relayID) }
     }
 
     /// キャッシュの道の結果 → 先読みの結果。

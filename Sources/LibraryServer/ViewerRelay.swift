@@ -219,7 +219,7 @@ enum ViewerRelayForwarder {
         let relayID = try context.parameters.require("relayID")
         // 多層防御: 道の許可リスト（ViewerTokenRoutes.allowsRelay）に加えて、ここでも鍵の中継を照らす。
         guard let access = context.viewerBook, access.relayID == relayID else { throw HTTPError(.forbidden) }
-        // 中継の記録が無い（StackNest を終了した後）・期限が切れた → 401（「StackNest から開き直して」）。
+        // 中継の記録が無い（StackNest を終了した後・上流に断られて閉じた）・期限が切れた → 401（「StackNest から開き直して」）。
         guard let target = relay.registry.target(for: relayID) else { throw HTTPError(.unauthorized) }
         return (relayID, target)
     }
@@ -238,8 +238,11 @@ enum ViewerRelayForwarder {
         if remotePath == "manifest" && relay.pageCache != nil {
             onSuccess = { @Sendable data in await ViewerRelayForwarder.noteManifest(data, relayID: relayID, relay: relay) }
         }
-        return await forward(target, remotePath: remotePath, request: request, body: body, relay: relay,
-                             onSuccess: onSuccess)
+        let response = await forward(target, remotePath: remotePath, request: request, body: body, relay: relay,
+                                     onSuccess: onSuccess)
+        // 作者の決定（2026-10-10・Codex P1）: manifest・cover・progress で断られても、その中継を閉じる。
+        closeIfRefused(Int(response.status.code), relayID: relayID, registry: relay.registry)
+        return response
     }
 
     /// 取り次ぐ URL と要求を部品から組み直す（ビューアの要求をそのまま流さない）。

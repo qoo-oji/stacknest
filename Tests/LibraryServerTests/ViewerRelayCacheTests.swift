@@ -289,10 +289,10 @@ struct ViewerRelayCacheTests {
 
     /// キャッシュの道でも、リモートの 200 以外は状態コード・`X-Library-Locked` をそのまま返し、入れない。
     /// リダイレクトは辿らず 502。
+    /// 作者の決定（2026-10-10）で 401・403 は中継を閉じるので、場合ごとに中継を分ける（閉じた後の振る舞いは
+    /// `anUpstreamRefusalClosesTheRelayEvenForCachedPages`）。
     @Test func remoteErrorsOnTheCachedPathPassThroughUnstored() async throws {
-        let fx = makeFixture(); defer { fx.done() }
-        let cache = FakeRelayPageCache()
-        RelayCacheRemoteStub.responses = [
+        let responses: [String: RelayCacheRemoteStub.Canned] = [
             "\(remoteBook)/pages/1": .init(status: 401),
             "\(remoteBook)/pages/2": .init(status: 403,
                                            headers: ["X-Library-Locked": "1", "Content-Type": "text/plain",
@@ -305,8 +305,11 @@ struct ViewerRelayCacheTests {
         let expected: [(Int, HTTPResponse.Status)] = [
             (1, .unauthorized), (2, .forbidden), (3, .internalServerError), (4, .badGateway), (9, .notFound),
         ]
-        try await makeApp(fx, relay: makeRelay(fx, cache: cache)).test(.router) { client in
-            for (n, status) in expected {
+        for (n, status) in expected {
+          let fx = makeFixture(); defer { fx.done() }
+          let cache = FakeRelayPageCache()
+          RelayCacheRemoteStub.responses = responses
+          try await makeApp(fx, relay: makeRelay(fx, cache: cache)).test(.router) { client in
                 try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/\(n)", method: .get,
                                          headers: [.authorization: "Bearer \(fx.token)"]) { r in
                     #expect(r.status == status, "pages/\(n)")
@@ -318,10 +321,12 @@ struct ViewerRelayCacheTests {
                         #expect(r.headers[HTTPField.Name("X-Other")!] == nil, "許可リスト外のヘッダは写さない")
                     }
                 }
-            }
+          }
+          #expect(await cache.stores == 0, "pages/\(n)")
+          #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
+          #expect((fx.registry.target(for: fx.relayID) == nil) == (status == .unauthorized || status == .forbidden),
+                  "401・403 だけが中継を閉じる（pages/\(n)）")
         }
-        #expect(await cache.stores == 0)
-        #expect(RelayCacheRemoteStub.seen.allSatisfy { $0.url.query == "maxw=1600&v=e1" }, "キャッシュの道で取っている")
     }
 
     /// ほかの `maxw` は今までどおり取り次ぐ（`v` を付けない・`If-None-Match` を渡す・キャッシュを引かない）。
@@ -414,18 +419,18 @@ struct ViewerRelayCacheTests {
         let gate = RelayTestGate()
         let calls = RelayCallCounter()
         let bytes = Self.jpeg
-        async let first = loader.load(pageKey) {
+        async let first = loader.load(pageKey, relayID: "R1") {
             await calls.bump()
             await gate.wait()
             return .fetched(bytes, stored: true)
         }
         // 1 本目が取り中になってから 2 本目を頼み、相乗りしたのを見てから門を開ける。
         while await loader.inFlightCount == 0 { await Task.yield() }
-        async let second = loader.load(pageKey) {
+        async let second = loader.load(pageKey, relayID: "R1") {
             await calls.bump()
             return .fetched(Data([0]), stored: true)
         }
-        while await loader.joinedCount(for: pageKey) == 0 { await Task.yield() }
+        while await loader.joinedCount(for: pageKey, relayID: "R1") == 0 { await Task.yield() }
         await gate.open()
         let (a, b) = await (first, second)
         #expect(await calls.value == 1)
@@ -435,6 +440,66 @@ struct ViewerRelayCacheTests {
         #expect(da == bytes)
         #expect(db == bytes)
         #expect(await loader.inFlightCount == 0)
+    }
+
+    /// 作者の決定（2026-10-10・最終レビュー m2）: 相乗りは中継ごと。別の中継が同じページを同時に頼んだら、それぞれが
+    /// 自分のリモートの鍵で取りに行く（古い中継が断られた結果を、新しい中継が受け取って閉じないように）。
+    @Test(.timeLimit(.minutes(1))) func requestsFromDifferentRelaysDoNotShareAFetch() async {
+        let fx = makeFixture(); defer { fx.done() }
+        let loader = ViewerRelayPageLoader()
+        let pageKey = key(fx, 3)
+        let gate = RelayTestGate()
+        let calls = RelayCallCounter()
+        async let old = loader.load(pageKey, relayID: "OLD") {
+            await calls.bump()
+            await gate.wait()
+            return .upstream(status: 401, headers: HTTPFields(), body: Data())
+        }
+        while await loader.inFlightCount == 0 { await Task.yield() }
+        async let new = loader.load(pageKey, relayID: "NEW") {
+            await calls.bump()
+            return .fetched(Self.jpeg, stored: true)
+        }
+        // 中継ごとなら 2 本が取り中になる。相乗りしてしまう作りでは 1 本のままなので、期限で見切って門を開ける
+        // （試験を止めずに、取りに行った回数で落とす）。
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await loader.inFlightCount < 2, ContinuousClock.now < deadline { await Task.yield() }
+        await gate.open()
+        let (a, b) = await (old, new)
+        #expect(await calls.value == 2)
+        guard case .upstream(401, _, _) = a, case .fetched(let data, _) = b else {
+            Issue.record("中継ごとの結果になっていない"); return
+        }
+        #expect(data == Self.jpeg)
+    }
+
+    /// 作者の決定（2026-10-10・Codex P1）: 上流に 401・403 で断られたら、その中継を閉じる。断った応答そのものは
+    /// そのまま返し（施錠の印も）、以後はキャッシュにあるページも含めて 401（「StackNest から開き直して」）。
+    /// ページ（キャッシュの道）・manifest（素通し）のどちらで断られても閉じる。
+    @Test(arguments: ["pages/5", "manifest"])
+    func anUpstreamRefusalClosesTheRelayEvenForCachedPages(_ refusedPath: String) async throws {
+        for (status, headers) in [(401, [String: String]()), (403, ["X-Library-Locked": "1"])] {
+            let fx = makeFixture(); defer { fx.done() }
+            let cache = FakeRelayPageCache()
+            await cache.put(Self.jpeg, for: key(fx, 3))
+            RelayCacheRemoteStub.responses = ["\(remoteBook)/\(refusedPath)": .init(status: status, headers: headers)]
+            let base = "/api/v1/relay/\(fx.relayID)"
+            let auth: HTTPFields = [.authorization: "Bearer \(fx.token)"]
+            try await makeApp(fx, relay: makeRelay(fx, cache: cache)).test(.router) { client in
+                try await client.execute(uri: "\(base)/pages/3", method: .get, headers: auth) { r in
+                    #expect(r.status == .ok, "断られる前はキャッシュから返す")
+                }
+                try await client.execute(uri: "\(base)/\(refusedPath)", method: .get, headers: auth) { r in
+                    #expect(Int(r.status.code) == status, "断った応答はそのまま（\(refusedPath)・\(status)）")
+                    if status == 403 { #expect(r.headers[Self.lockedHeader] == "1") }
+                }
+                try await client.execute(uri: "\(base)/pages/3", method: .get, headers: auth) { r in
+                    #expect(r.status == .unauthorized, "閉じた中継はキャッシュにあるページも返さない（\(refusedPath)・\(status)）")
+                    #expect(Data(buffer: r.body) != Self.jpeg)
+                }
+            }
+            #expect(fx.registry.target(for: fx.relayID) == nil)
+        }
     }
 
     // MARK: - 先読み（Task 3）
@@ -517,15 +582,16 @@ struct ViewerRelayCacheTests {
         #expect(await cache.stores == 0)
         #expect(await relay.prefetcher?.stopReason(for: fx.relayID) == .refused)
 
+        // 作者の決定（2026-10-10）: 先読みが断られたら中継を閉じる。以後のビューアの要求は 401 で、リモートへも行かない。
+        #expect(fx.registry.target(for: fx.relayID) == nil)
         try await makeApp(fx, relay: relay).test(.router) { client in
             try await client.execute(uri: "/api/v1/relay/\(fx.relayID)/pages/5", method: .get,
                                      headers: [.authorization: "Bearer \(fx.token)"]) { r in
-                #expect(r.status == .ok)
+                #expect(r.status == .unauthorized)
             }
         }
         await relay.prefetcher?.waitUntilIdle()
-        #expect(RelayCacheRemoteStub.seen.map(\.url.path) == ["\(remoteBook)/pages/1", "\(remoteBook)/pages/5"],
-                "ビューアの要求の 1 回だけ")
+        #expect(RelayCacheRemoteStub.seen.map(\.url.path) == ["\(remoteBook)/pages/1"], "閉じた中継はリモートへ行かない")
         #expect(await relay.prefetcher?.stopReason(for: fx.relayID) == .refused)
     }
 
@@ -635,7 +701,7 @@ struct ViewerRelayCacheTests {
         let sawCancellation = RelayCallCounter()
         let bytes = Self.jpeg
         let first = Task {
-            await loader.load(pageKey) {
+            await loader.load(pageKey, relayID: "R1") {
                 await gate.wait()
                 if Task.isCancelled { await sawCancellation.bump() }
                 return .fetched(bytes, stored: true)
@@ -643,9 +709,9 @@ struct ViewerRelayCacheTests {
         }
         while await loader.inFlightCount == 0 { await Task.yield() }
         let second = Task {
-            await loader.load(pageKey) { .fetched(Data([0]), stored: true) }
+            await loader.load(pageKey, relayID: "R1") { .fetched(Data([0]), stored: true) }
         }
-        while await loader.joinedCount(for: pageKey) == 0 { await Task.yield() }
+        while await loader.joinedCount(for: pageKey, relayID: "R1") == 0 { await Task.yield() }
         first.cancel()
         await gate.open()
         let (a, b) = await (first.value, second.value)

@@ -226,6 +226,8 @@ struct ViewerRelayTests {
     }
 
     /// 状態コード・本文・X-Library-Locked はそのまま返す（ビューアが「開き直して」「解錠して」を出せるように）。
+    /// 作者の決定（2026-10-10）で、上流の 401・403 はそのまま返したうえで中継を閉じる。閉じない応答（404・304）を先に、
+    /// 閉じる応答を後に確かめる（閉じた後の振る舞いは ViewerRelayCacheTests の `anUpstreamRefusalClosesTheRelayEvenForCachedPages`）。
     @Test func passesThroughErrorsAndTheLockHeader() async throws {
         let fx = makeFixture(); defer { fx.done() }
         RelayRemoteStub.responses = [
@@ -235,15 +237,6 @@ struct ViewerRelayTests {
         ]
         let base = "/api/v1/relay/\(fx.relayID)"
         try await makeApp(fx).test(.router) { client in
-            try await client.execute(uri: "\(base)/manifest", method: .get,
-                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
-                #expect(r.status == .unauthorized)
-            }
-            try await client.execute(uri: "\(base)/cover", method: .get,
-                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
-                #expect(r.status == .forbidden)
-                #expect(r.headers[Self.lockedHeader] == "1")
-            }
             try await client.execute(uri: "\(base)/pages/9", method: .get,
                                      headers: [.authorization: "Bearer \(fx.token)"]) { r in
                 #expect(r.status == .notFound)
@@ -253,7 +246,24 @@ struct ViewerRelayTests {
                 #expect(r.status == .notModified)
                 #expect(r.headers[.eTag] == "\"p1\"")
             }
+            #expect(fx.registry.target(for: fx.relayID) != nil, "404・304 では閉じない")
+            try await client.execute(uri: "\(base)/cover", method: .get,
+                                     headers: [.authorization: "Bearer \(fx.token)"]) { r in
+                #expect(r.status == .forbidden)
+                #expect(r.headers[Self.lockedHeader] == "1")
+            }
         }
+        #expect(fx.registry.target(for: fx.relayID) == nil, "施錠の 403 で閉じる")
+
+        let fx2 = makeFixture(); defer { fx2.done() }
+        RelayRemoteStub.responses = ["\(remoteBook)/manifest": .init(status: 401)]
+        try await makeApp(fx2).test(.router) { client in
+            try await client.execute(uri: "/api/v1/relay/\(fx2.relayID)/manifest", method: .get,
+                                     headers: [.authorization: "Bearer \(fx2.token)"]) { r in
+                #expect(r.status == .unauthorized)
+            }
+        }
+        #expect(fx2.registry.target(for: fx2.relayID) == nil, "401 で閉じる")
     }
 
     /// 中継の鍵はその relayID だけ。CLI のトークン・本の鍵・別の中継の鍵は中継の道で 403、中継の鍵は本の道で 403。
