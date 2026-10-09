@@ -629,6 +629,19 @@ struct ExternalViewerSyncWiringTests {
         #expect(seen.progressBeforeLaunch == true)
     }
 
+    /// Codex P2（5 回目）: 期限付きの待ち。期限までに返らなければ nil（作業は取り消す）、返れば値。
+    @Test func boundedWaitGivesUpOnASlowOperation() async {
+        let start = ContinuousClock.now
+        let slow: Int? = await RemoteLibraryState.value(within: .milliseconds(200)) {
+            try? await Task.sleep(for: .seconds(30))
+            return 1
+        }
+        #expect(slow == nil)
+        #expect(ContinuousClock.now - start < .seconds(5), "期限で見切る（30 秒待たない）")
+        let fast: Int? = await RemoteLibraryState.value(within: .seconds(5)) { 7 }
+        #expect(fast == 7)
+    }
+
     /// Codex P1（内蔵ビューアの道も同じ選び方）: 引き直した本詳細があればその値（未読なら nil）、無ければ一覧の値。
     @Test func currentServerLastPagePrefersTheFetchedDetail() {
         func detail(_ lastPage: Int?) -> BookDetailDTO {

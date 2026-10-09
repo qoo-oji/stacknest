@@ -2192,6 +2192,24 @@ final class RemoteLibraryState {
         }
     }
 
+    /// G60（Codex P2・5 回目）: ダウンロード済みのコピーがある本で、外部ビューアへ渡す前の manifest を待つ上限。
+    static let downloadedManifestWait: Duration = .seconds(2)
+
+    /// 期限までに返らなければ nil（作業は取り消す）。
+    nonisolated static func value<T: Sendable>(within limit: Duration,
+                                             _ operation: @escaping @Sendable () async -> T?) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await operation() }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// G60（Codex P1）: 開くときのサーバの位置。引き直した本詳細があればその値（未読なら nil）、取れなければ一覧の値。
     /// 外部ビューアが書き戻した位置（PATCH /progress）は SSE で届かないので、一覧の `lastPage` は古いことがある。
     static func currentServerLastPage(detail: BookDetailDTO?, listed: Int?) -> Int? {
@@ -2207,7 +2225,33 @@ final class RemoteLibraryState {
     /// 素早く 2 回開くとトークンを 2 枚出してビューアを 2 回起動するが、古い方は期限まで有効なだけで
     /// 害は無いので許容する（計画レビュー M-4）。
     private func openByReference(book: BookListItemDTO, resumeDirect: Bool, handedManifest: ManifestDTO?) async {
-        guard let manifest = await manifestForOpening(bookID: book.id, handed: handedManifest) else {
+        // 続きのページは内蔵と同じ解決（ダウンロード済みの本をオフラインで先へ読んでいても、サーバを巻き戻さない）。
+        // ダウンロード済みのコピーがあるかもここで見る（下の manifest の待ちに使う）。
+        let offlineLastPage: Int?
+        let hasDownloadedCopy: Bool
+        if let override = offlineLastPageOverride {
+            offlineLastPage = override(book.id)
+            hasDownloadedCopy = offlineLastPage != nil
+        } else {
+            let downloaded = offlineStore.all().first {
+                $0.serverID == self.serverID && $0.libraryUUID == self.libraryUUID && $0.detail.id == book.id
+            }
+            offlineLastPage = downloaded?.lastPage
+            hasDownloadedCopy = downloaded != nil
+        }
+        // Codex P2（5 回目）: ダウンロード済みのコピーがある本は、サーバにつながらないとき manifest の時間切れ（10 秒）まで
+        // 待たせない。短い期限で見切り、取れなければ内蔵ビューアで手元のコピーを開く（内蔵はダウンロード済みの本を開くとき
+        // ネットワークを待たない）。
+        let fetched: ManifestDTO?
+        if hasDownloadedCopy, handedManifest == nil {
+            fetched = await Self.value(within: Self.downloadedManifestWait) {
+                [client = self.client, libraryUUID = self.libraryUUID, libraryToken = self.libraryToken, bookID = book.id] in
+                try? await client.manifest(libraryUUID: libraryUUID, bookID: bookID, libraryToken: libraryToken)
+            }
+        } else {
+            fetched = await manifestForOpening(bookID: book.id, handed: handedManifest)
+        }
+        guard let manifest = fetched else {
             // manifest が取れない。ダウンロード済みの本はローカルのコピーで開けるので、内蔵の経路に任せる
             // （開けないときの理由の表示も内蔵の経路が担う）。
             openInBuiltInViewer(book: book, resumeDirect: resumeDirect, handedManifest: nil)
@@ -2228,15 +2272,6 @@ final class RemoteLibraryState {
         let client = self.client
         let libraryUUID = self.libraryUUID
         let libraryToken = self.libraryToken
-        // 続きのページは内蔵と同じ解決（ダウンロード済みの本をオフラインで先へ読んでいても、サーバを巻き戻さない）。
-        let offlineLastPage: Int?
-        if let override = offlineLastPageOverride {
-            offlineLastPage = override(book.id)
-        } else {
-            offlineLastPage = offlineStore.all().first {
-                $0.serverID == serverID && $0.libraryUUID == libraryUUID && $0.detail.id == book.id
-            }?.lastPage
-        }
         // Codex P1: 外部ビューアが書き戻した位置（PATCH /progress）は SSE で届かず、一覧の `lastPage` は古いことがある。
         // 古い位置で渡すと開く位置が戻り、渡した後の `postProgress` がサーバの新しい位置を巻き戻す。渡す前にサーバの
         // 今の位置を引き直す（取れなければ一覧の値）。
