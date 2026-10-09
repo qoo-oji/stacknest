@@ -2021,8 +2021,15 @@ final class RemoteLibraryState {
                 ViewerWindowRegistry.shared.cancelOpen(identity)
                 return
             }
+            // 一覧 DTO には pageDirection が無く、lastPage は古いことがあるので、サーバの本詳細を先に引く（下の向きにも使う）。
+            // オフライン読み出し時は引かない（offline detail の row.pageDirection と一覧の位置を使う）。
+            let serverDetail: BookDetailDTO? = readingOffline ? nil : try? await self.client.bookDetail(
+                libraryUUID: self.libraryUUID, bookID: book.id, libraryToken: self.libraryToken)
             // 4.2c-5: DL済みは offline の lastPage も考慮し max で続きを解決（前進読み前提）。
-            let resolvedLastPage = resolveResumePage(server: book.lastPage, offline: downloaded?.lastPage)
+            // G60（Codex P1）: サーバの位置は引き直した本詳細の値（外部ビューアの書き戻しは一覧に届かない）。
+            let resolvedLastPage = resolveResumePage(
+                server: Self.currentServerLastPage(detail: serverDetail, listed: book.lastPage),
+                offline: downloaded?.lastPage)
             // G3b: 起動時保護は controller の初回 recomputePrefetch()→reportActiveWindow が担う
             // （旧 setProtected 呼び出しは Task 2 で owner 必須になったため削除）。
             // 開いた時点で既読をサーバ確定（/progress は R でも許可）。offline 先行時にサーバを
@@ -2041,8 +2048,6 @@ final class RemoteLibraryState {
             if readingOffline {
                 serverDir = row.pageDirection
             } else {
-                let serverDetail = try? await self.client.bookDetail(
-                    libraryUUID: self.libraryUUID, bookID: book.id, libraryToken: self.libraryToken)
                 serverDir = serverDetail.flatMap { d in
                     d.pageDirection == "rtl" ? .rightToLeft
                         : (d.pageDirection == "ltr" ? .leftToRight : nil)
@@ -2180,6 +2185,13 @@ final class RemoteLibraryState {
         }
     }
 
+    /// G60（Codex P1）: 開くときのサーバの位置。引き直した本詳細があればその値（未読なら nil）、取れなければ一覧の値。
+    /// 外部ビューアが書き戻した位置（PATCH /progress）は SSE で届かないので、一覧の `lastPage` は古いことがある。
+    static func currentServerLastPage(detail: BookDetailDTO?, listed: Int?) -> Int? {
+        guard let detail else { return listed }
+        return detail.lastPage
+    }
+
     /// G60: 同期 ON のリモートの本。manifest を見てページで読む本なら、サーバに本専用トークンを出して
     /// もらい、参照ファイルで外部ビューアへ渡す。ページで読む本でなければ／使える外部ビューアが無ければ／
     /// 失敗したら内蔵ビューア。
@@ -2218,8 +2230,14 @@ final class RemoteLibraryState {
                 $0.serverID == serverID && $0.libraryUUID == libraryUUID && $0.detail.id == book.id
             }?.lastPage
         }
+        // Codex P1: 外部ビューアが書き戻した位置（PATCH /progress）は SSE で届かず、一覧の `lastPage` は古いことがある。
+        // 古い位置で渡すと開く位置が戻り、渡した後の `postProgress` がサーバの新しい位置を巻き戻す。渡す前にサーバの
+        // 今の位置を引き直す（取れなければ一覧の値）。
+        let detail = try? await client.bookDetail(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken)
         let resumePage = BookReference.clampedStartPage(
-            resolveResumePage(server: book.lastPage, offline: offlineLastPage), pageCount: manifest.pageCount)
+            resolveResumePage(server: Self.currentServerLastPage(detail: detail, listed: book.lastPage),
+                              offline: offlineLastPage),
+            pageCount: manifest.pageCount)
         let failure = await viewerHandoff.openRemote(
             book: book, manifest: manifest, viewer: viewer, serverID: serverID, serverBase: client.baseURL,
             libraryUUID: libraryUUID, startPage: resumePage, settings: viewerSettings,

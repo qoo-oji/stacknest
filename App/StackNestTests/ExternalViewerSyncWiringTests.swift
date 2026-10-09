@@ -18,6 +18,13 @@ final class G60ViewerTokenStub: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var storedIssueHeaders: [String: String] = [:]
     nonisolated(unsafe) private static var storedStatusStatus = 200
     nonisolated(unsafe) private static var storedStatusBody = Data(#"{"firstUsedAt":null,"viewer":null}"#.utf8)
+    nonisolated(unsafe) private static var storedDetailBody: Data?
+
+    /// `GET …/books/{id}/detail` の応答。nil なら他の道と同じ `{}`（読めないので一覧の位置に倒れる）。
+    static var detailBody: Data? {
+        get { lock.withLock { storedDetailBody } }
+        set { lock.withLock { storedDetailBody = newValue } }
+    }
 
     /// G60 v3: `GET /api/v1/viewer-tokens/{id}`（使用の照会）の応答。
     static var statusStatus: Int {
@@ -55,12 +62,13 @@ final class G60ViewerTokenStub: URLProtocol, @unchecked Sendable {
         Self.lock.withLock { Self.storedPaths.append("\(request.httpMethod ?? "") \(path)") }
         let isIssue = path.hasSuffix("/viewer-token")
         let isStatus = path.hasPrefix("/api/v1/viewer-tokens/")
+        let detail = path.hasSuffix("/detail") ? Self.detailBody : nil
         let status = isIssue ? Self.issueStatus : (isStatus ? Self.statusStatus : 200)
         let resp = HTTPURLResponse(url: request.url!, statusCode: status,
                                    httpVersion: "HTTP/1.1",
                                    headerFields: ["Content-Type": "application/json"].merging(isIssue ? Self.issueHeaders : [:]) { $1 })!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: isIssue ? Self.issueBody : (isStatus ? Self.statusBody : Data("{}".utf8)))
+        client?.urlProtocol(self, didLoad: isIssue ? Self.issueBody : (isStatus ? Self.statusBody : (detail ?? Data("{}".utf8))))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
@@ -422,7 +430,7 @@ struct ExternalViewerSyncWiringTests {
     /// - Parameter issueExpiresAt: リモートが返す鍵の期限（既定は中継の鍵より遠い 2033 年）。
     private func makeRemoteState(_ env: Env, issueStatus: Int, libraryToken: String? = nil,
                                  issueHeaders: [String: String] = [:], lastReads: LastReads? = nil,
-                                 offlineLastPage: Int? = nil,
+                                 offlineLastPage: Int? = nil, serverLastPage: Int? = nil,
                                  relay: Bool = true, endpointRunning: Bool = true,
                                  issueExpiresAt: Date = Date(timeIntervalSince1970: 2_000_000_000),
                                  statusStatus: Int = 200,
@@ -436,6 +444,14 @@ struct ExternalViewerSyncWiringTests {
         G60ViewerTokenStub.statusBody = statusBody
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        // サーバの今の位置（`detail`）。nil なら読めない応答にする（一覧の位置に倒れる）。
+        G60ViewerTokenStub.detailBody = try serverLastPage.map {
+            try encoder.encode(BookDetailDTO(
+                id: 0, title: "本の題名", author: nil, genre: nil, path: nil, dateAdded: Date(), playDate: nil,
+                bookType: 0, fileType: 0, pages: 20, lastPage: $0, rating: 0, unseen: false,
+                keywordA: nil, keywordB: nil, keywordC: nil, neta: nil, memo: nil, series: nil, volume: nil,
+                coverImageName: nil, coverCropRectJSON: nil, pageDirection: nil))
+        }
         G60ViewerTokenStub.issueBody = try encoder.encode(
             ViewerTokenReply(token: "VIEWER-TOKEN", expiresAt: issueExpiresAt, tokenID: "TID-1"))
         let cfg = URLSessionConfiguration.ephemeral
@@ -567,6 +583,39 @@ struct ExternalViewerSyncWiringTests {
         let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
         #expect(ref.startPage == 12)
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/48/progress") } }
+    }
+
+    /// Codex P1: 外部ビューアが書き戻した位置は一覧に届かない（`/progress` は SSE を出さない）。渡す前にサーバの
+    /// 今の位置を引き直して、そこから開く（一覧の古い位置で開いて、渡した後の `postProgress` でサーバを巻き戻さない）。
+    @Test func remoteStartPageUsesTheServerPositionFetchedAtHandoff() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let (s, _) = try makeRemoteState(env, issueStatus: 200, serverLastPage: 15)
+        s.testPutManifestHandoff(bookID: 49, value: archiveManifest())
+
+        s.openViewer(book: remoteBook(id: 49, filename: "a.zip", lastPage: 3))   // 一覧はまだ 3 のまま
+        try await waitUntil { !launches.entries.isEmpty }
+
+        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        #expect(ref.startPage == 15)
+        #expect(G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/49/detail") })
+    }
+
+    /// Codex P1（内蔵ビューアの道も同じ選び方）: 引き直した本詳細があればその値（未読なら nil）、無ければ一覧の値。
+    @Test func currentServerLastPagePrefersTheFetchedDetail() {
+        func detail(_ lastPage: Int?) -> BookDetailDTO {
+            BookDetailDTO(id: 1, title: "t", author: nil, genre: nil, path: nil, dateAdded: Date(), playDate: nil,
+                          bookType: 0, fileType: 0, pages: 20, lastPage: lastPage, rating: 0, unseen: false,
+                          keywordA: nil, keywordB: nil, keywordC: nil, neta: nil, memo: nil, series: nil, volume: nil,
+                          coverImageName: nil, coverCropRectJSON: nil, pageDirection: nil)
+        }
+        #expect(RemoteLibraryState.currentServerLastPage(detail: detail(15), listed: 3) == 15)
+        #expect(RemoteLibraryState.currentServerLastPage(detail: detail(2), listed: 9) == 2, "戻って読んだ位置も引き直した値に従う")
+        #expect(RemoteLibraryState.currentServerLastPage(detail: detail(nil), listed: 3) == nil, "サーバが未読なら未読")
+        #expect(RemoteLibraryState.currentServerLastPage(detail: nil, listed: 3) == 3, "取れなければ一覧の値")
     }
 
     @Test func remoteIssueFailureFallsBackToTheBuiltInViewerWithABanner() async throws {
