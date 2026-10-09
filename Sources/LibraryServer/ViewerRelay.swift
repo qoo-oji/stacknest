@@ -124,15 +124,29 @@ enum ViewerRelayForwarder {
         private var received = Data()
         private var overflowed = false
         private var continuation: CheckedContinuation<Outcome, Never>?
-        private var outcome: Outcome?
+        /// 継続を置く前に届いた完了の結果（Codex P2）。呼び出し側の取り消しで `task.cancel()` が先に走ると、
+        /// `start` より前に `didCompleteWithError` が来ることがある。捨てると `load` が待ち続けるので、ここに預ける。
+        private var earlyOutcome: Outcome?
 
         init(limit: Int) {
             self.limit = limit
         }
 
         /// 作業を始める。結果は `didCompleteWithError` で 1 回だけ返す。
+        /// 完了が先に届いていたら、作業は始めずにその結果をすぐ返す。
         func start(_ task: URLSessionDataTask, continuation: CheckedContinuation<Outcome, Never>) {
-            lock.withLock { self.continuation = continuation }
+            let early: Outcome? = lock.withLock {
+                if let early = earlyOutcome {
+                    earlyOutcome = nil
+                    return early
+                }
+                self.continuation = continuation
+                return nil
+            }
+            if let early {
+                continuation.resume(returning: early)
+                return
+            }
             task.resume()
         }
 
@@ -176,6 +190,7 @@ enum ViewerRelayForwarder {
                 received = Data()
                 let cont = continuation
                 continuation = nil
+                if cont == nil { earlyOutcome = result }
                 return (cont, result)
             }
             cont?.resume(returning: result)

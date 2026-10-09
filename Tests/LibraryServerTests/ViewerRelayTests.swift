@@ -401,6 +401,34 @@ struct ViewerRelayTests {
         #expect(over.state != .suspended, "累計が上限を超えた 1 かたまりで、残りを待たずに取り消す（\(over.state.rawValue)）")
     }
 
+    /// Codex P2: 継続を置く前に完了が届いても（呼び出し側の取り消しで `task.cancel()` が先に走った）、結果を失わない。
+    /// 失うと、後から置いた継続には二度と完了が来ず、`load` が待ち続ける。
+    @Test func completionBeforeTheContinuationIsInstalledIsNotLost() async throws {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: URLRequest(url: URL(string: "http://127.0.0.1:1/")!))   // resume しない
+        let loader = ViewerRelayForwarder.BoundedLoader(limit: 16)
+        loader.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+
+        // 直す前は待ち続けるので、別の Task で待ち、期限で打ち切る（試験全体を止めない）。
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            private var stored: ViewerRelayForwarder.Outcome?
+            var value: ViewerRelayForwarder.Outcome? { lock.withLock { stored } }
+            func set(_ o: ViewerRelayForwarder.Outcome) { lock.withLock { stored = o } }
+        }
+        let box = Box()
+        Task { box.set(await withCheckedContinuation { loader.start(task, continuation: $0) }) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while box.value == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+
+        guard case .failed? = box.value else {
+            Issue.record("先に届いた完了の結果（failed）が返らない: \(String(describing: box.value))")
+            return
+        }
+        #expect(task.state == .suspended, "先に完了した作業は始めない")
+    }
+
     /// Minor-2（意図した動き）: 中継の鍵の初回使用は「有効な中継の鍵で 127.0.0.1 の口に届いた」こと。
     /// リモートが 502 を返しても、中継の記録が無くて 401 でも記録される（本を読み込めたかは意味しない）。
     @Test func relayFirstUseMeansReachingTheEndpoint() async throws {
