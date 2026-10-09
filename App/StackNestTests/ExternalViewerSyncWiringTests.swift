@@ -1344,6 +1344,33 @@ struct ExternalViewerSyncWiringTests {
         #expect(launches.entries.first?.viewer.path == env.viewerApp.path, "確かめたビューアを起動する（引き直さない）")
     }
 
+    /// Codex P2（2 回目）: ページ数の待ちのあいだに 127.0.0.1 の口が止まったら（ローカルコントロールが OFF で
+    /// 同期を OFF にした）、鍵を出さず、参照ファイルも渡さず `.localEndpointNotRunning` を返す（呼び出し側はファイルで開く）。
+    /// 待ちの後・発行の前に呼ばれるロックの値の閉包の中で口を止めて、待ちのあいだに止まったことにする。
+    @Test func localEndpointStoppedWhileCountingPagesIssuesNothing() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let endpoint = EndpointFlag()
+        let h = handoff(env, endpoint: endpoint)
+        let (state, row, _) = try makeLocalState(env, handoff: h)
+        let viewer = try #require(HelperLauncher.referenceViewer(bookPath: row.path ?? "", settings: env.settings))
+
+        let failure = await h.openLocal(
+            book: row, libraryUUID: try #require(state.librarySettings?.ensureLibraryUUID()), viewer: viewer,
+            lockCredential: {
+                endpoint.running = false
+                return nil
+            },
+            verifiedLockHash: { nil }, startPage: 0, direction: .rightToLeft, settings: env.settings)
+
+        #expect(failure == .localEndpointNotRunning)
+        #expect(launches.entries.isEmpty)
+        #expect(env.tokens.allRecords().isEmpty)
+    }
+
     /// I-1（ローカル）: ページ数の待ちの後・発行の前にロックの値を読む閉包の中で設定を差し替える。
     @Test func localLaunchesTheViewerThatWasChecked() async throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }

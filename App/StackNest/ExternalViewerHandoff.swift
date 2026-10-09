@@ -118,6 +118,9 @@ struct ExternalViewerHandoff {
         // （ページ数の待ちの間に外部から施錠・変更されうる）。有って違うなら発行しない。
         let lock = lockCredential()
         if let lock, lock != verifiedLockHash() { return .libraryLocked }
+        // Codex P2（`openRemote` の鍵の往復と同じ）: ページ数の待ちのあいだに口が止まっていたら、鍵を出さない
+        // （読めない参照ファイルを渡さず、呼び出し側がファイルで開く）。
+        guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
         let issued = tokens.issue(libraryUUID: libraryUUID, bookID: book.id, issuer: .localEndpoint,
                                   lockCredential: lock, now: now())
         // ポートは参照ファイルを組む直前に読む（口がポート競合で取り直していても、その時点の値を使う。
