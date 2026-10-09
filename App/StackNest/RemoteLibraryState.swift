@@ -2035,8 +2035,13 @@ final class RemoteLibraryState {
             // 開いた時点で既読をサーバ確定（/progress は R でも許可）。offline 先行時にサーバを
             // 巻き戻さないよう、解決後ページで POST する。
             // Codex P2（3 回目・外部ビューアの道と同じ）: 書き終えてから窓を開く（開いた後のページ送りの書き込みを、
-            // 遅れて届いたこの書き込みが巻き戻さないように）。
-            _ = try? await self.client.postProgress(libraryUUID: self.libraryUUID, bookID: book.id, page: resolvedLastPage, libraryToken: self.libraryToken)
+            // 遅れて届いたこの書き込みが巻き戻さないように）。ただしダウンロード済みのコピーで開くときは待たない
+            // （Codex P2・4 回目: サーバに届かないと、書き込みの時間切れまで手元の本の窓が開かない）。
+            if readingOffline {
+                Task { try? await self.client.postProgress(libraryUUID: self.libraryUUID, bookID: book.id, page: resolvedLastPage, libraryToken: self.libraryToken) }
+            } else {
+                _ = try? await self.client.postProgress(libraryUUID: self.libraryUUID, bookID: book.id, page: resolvedLastPage, libraryToken: self.libraryToken)
+            }
             let initialState = ResolvedViewerState(
                 spreadEnabled: ViewerSettings.shared.spreadByDefault,
                 coverOffset: true,
