@@ -38,7 +38,7 @@ can be imported:
 }
 ```
 
-`<repo>` is `.../stacknest`.
+`<repo>` is the directory where you cloned this repository.
 
 `STACKNEST_CLI` is **optional** (usually not needed).
 At startup, the MCP resolves `stacknest-cli` in this order:
