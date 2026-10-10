@@ -86,7 +86,7 @@ Send `Authorization: Bearer <token>` and the [identification header](#identifica
 
 - The token works for these four requests only. Any other URL or any other book is **403**.
 - A **403** on the book's own URL that carries the header `X-Library-Locked: 1` means the library's lock changed after the file was made (its password was changed, or it was locked). Tell the reader to unlock the library in StackNest and open the book from StackNest again.
-- **401** means the token expired (or was revoked). Tell the reader to open the book from StackNest again.
+- **401** means the token expired (or was revoked). It is also 401 when, after the token was issued, the book's number was taken by a different book (the book was removed and another one was added). Tell the reader to open the book from StackNest again.
 - **404** means the book is gone (removed from the library, or the server closed the library). For `pages/{n}`, a page number past the end is also **404**.
 - `pages/{n}` returns **500** when a page can't be rendered, and `progress` returns **400** for a negative page.
 
