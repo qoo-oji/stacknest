@@ -29,6 +29,14 @@ public enum QuickIntegrityCheck {
     /// 足した拡張子のアーカイブでこれなら、壊れているのではなく StackNest が読めない形式なので「対象外」。
     public static let unrecognizedFormatReason = "archive unreadable: unrecognized archive format"
 
+    /// 開く段の失敗を「対象外」にするか（簡易・詳細の両方がこの 1 か所で決める）。足した拡張子のアーカイブで
+    /// 「unrecognized archive format」のときだけ。**0 バイトのファイルは対象外にしない**（コピーが途中で止まった残骸で、
+    /// 標準・未知の拡張子の 0 バイトのアーカイブや 0 バイトの画像と同じく「破損」。G64 最終レビュー m1）。
+    static func isUnsupportedOpenFailure(category: BookCategory, isUserExtension: Bool,
+                                         reason: String, fileSize: Int64?) -> Bool {
+        isUserExtension && category == .archive && reason == unrecognizedFormatReason && fileSize != 0
+    }
+
     /// 列挙（I/O）が必要な種別か。image は開かずに 1 ページと確定できる。
     public static func needsProbe(category: BookCategory) -> Bool {
         switch category {
@@ -69,7 +77,8 @@ public enum QuickIntegrityCheck {
             }
             switch probe {
             case .failed(let reason):
-                if isUserExtension, category == .archive, reason == unrecognizedFormatReason {
+                if isUnsupportedOpenFailure(category: category, isUserExtension: isUserExtension,
+                                            reason: reason, fileSize: fileSize) {
                     return Outcome(status: .unsupported, pageCount: nil, reason: reason)
                 }
                 return Outcome(status: .damaged, pageCount: nil, reason: reason)

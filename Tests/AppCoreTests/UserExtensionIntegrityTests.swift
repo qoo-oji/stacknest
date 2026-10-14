@@ -18,6 +18,11 @@ struct UserExtensionIntegrityTests {
         #expect(added == .init(status: .unsupported, pageCount: nil, reason: unrecognized))
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
                                              fileSize: 10, isUserExtension: false).status == .damaged)
+        // G64 最終レビュー m1: 0 バイトは対象外にしない（サイズが取れなかった nil は今どおり）。
+        #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
+                                             fileSize: 0, isUserExtension: true).status == .damaged)
+        #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
+                                             fileSize: nil, isUserExtension: true).status == .unsupported)
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: "archive read truncated"),
                                              fileSize: 10, isUserExtension: true).status == .damaged)
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .enumerated(count: 2, truncated: true),
@@ -116,5 +121,32 @@ struct UserExtensionIntegrityTests {
         _ = try await FullIntegrityScanner.scan(database: db, mode: .all, deps: deps)
         #expect(try db.integrityRecord(bookID: 1)?.status == .unsupported)
         #expect(try db.integrityRecord(bookID: 2)?.status == .damaged, "標準のテキストは既存の行を上書きしない（今どおり）")
+    }
+
+    // MARK: G64 最終レビュー m1: 0 バイト
+
+    @Test("簡易チェック: 足したアーカイブの 0 バイトは破損（対象外にしない）")
+    func quickScanZeroByteAddedArchiveIsDamaged() async throws {
+        let dir = try G64Fixtures.tempDir("zero-quick"); defer { try? FileManager.default.removeItem(at: dir) }
+        let empty = dir.appendingPathComponent("a.djvu"); try Data().write(to: empty)
+        let noise = dir.appendingPathComponent("b.djvu"); try G64Fixtures.noise.write(to: noise)
+        let db = try setupDB([empty, noise])
+        let deps = QuickIntegrityScanner.liveDependencies(archiveExtractor: LibarchiveCoverExtractor(),
+                                                          folderExtractor: FolderCoverExtractor(), userExtensions: added)
+        _ = try await QuickIntegrityScanner.scan(database: db, deps: deps)
+        #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 2)?.status == .unsupported, "でたらめなバイトは今どおり対象外")
+    }
+
+    @Test("詳細チェック: 足したアーカイブの 0 バイトは破損（対象外にしない）")
+    func fullScanZeroByteAddedArchiveIsDamaged() async throws {
+        let dir = try G64Fixtures.tempDir("zero-full"); defer { try? FileManager.default.removeItem(at: dir) }
+        let empty = dir.appendingPathComponent("a.djvu"); try Data().write(to: empty)
+        let noise = dir.appendingPathComponent("b.djvu"); try G64Fixtures.noise.write(to: noise)
+        let db = try setupDB([empty, noise])
+        let deps = FullIntegrityScanner.liveDependencies(libraryBundleURL: dir, userExtensions: added)
+        _ = try await FullIntegrityScanner.scan(database: db, mode: .all, deps: deps)
+        #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 2)?.status == .unsupported, "でたらめなバイトは今どおり対象外")
     }
 }

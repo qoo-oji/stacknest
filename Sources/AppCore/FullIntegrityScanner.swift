@@ -212,8 +212,10 @@ public enum FullIntegrityScanner {
                     let reason = QuickIntegrityScanner.probeFailureReason(for: error)
                     // G64: 足した拡張子のアーカイブが開く段で「unrecognized archive format」なら、壊れているのではなく
                     // StackNest が読めない形式なので「対象外」（アーカイブとして評価した結果なので upsert で書く）。
-                    status = category == .archive && deps.isUserExtension(path)
-                        && reason == QuickIntegrityCheck.unrecognizedFormatReason ? .unsupported : .damaged
+                    // 0 バイトのファイルは対象外にしない（判定は簡易チェックと共通）。
+                    status = QuickIntegrityCheck.isUnsupportedOpenFailure(
+                        category: category, isUserExtension: deps.isUserExtension(path),
+                        reason: reason, fileSize: size) ? .unsupported : .damaged
                     badEntries = [reason]
                 }
             }
