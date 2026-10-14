@@ -40,7 +40,7 @@ struct TarArchiveTests {
     func listsCountsAndExtracts(fileName: String) async throws {
         let (url, dir, pages) = try Self.makeTar(named: fileName, gzip: fileName.hasSuffix(".tgz"))
         defer { try? FileManager.default.removeItem(at: dir) }
-        let extractor = LibarchiveCoverExtractor()
+        let extractor = LibarchiveCoverExtractor(allowsCompressedTar: true)   // .tgz は足した拡張子として読む
 
         let listing = try await extractor.listImageEntries(in: url)
         #expect(listing.names == ["page01.png", "page02.png", "page10.png"])
@@ -67,7 +67,7 @@ struct TarArchiveTests {
     func verifierReadsTarToTheEnd(fileName: String) throws {
         let (url, dir, _) = try Self.makeTar(named: fileName, gzip: fileName.hasSuffix(".tgz"))
         defer { try? FileManager.default.removeItem(at: dir) }
-        let result = try ArchiveIntegrityVerifier.verifySync(url: url)
+        let result = try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: true)
         #expect(result == ArchiveVerifyResult(entryCount: 4, imageCount: 3, badEntries: [], truncated: false))
     }
 
@@ -122,7 +122,7 @@ struct TarArchiveTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("zeros.cbt")
         try Data(count: 4096).write(to: url)
-        let listing = try await LibarchiveCoverExtractor().listImageEntries(in: url)
+        let listing = try await LibarchiveCoverExtractor(allowsCompressedTar: true).listImageEntries(in: url)
         #expect(listing.names.isEmpty && listing.truncated == false)
     }
 
@@ -147,15 +147,15 @@ struct TarArchiveTests {
     }
 
     /// 一覧（簡易チェックの道）と詳細チェックのどちらでも、開く段で「Unrecognized archive format」になる。
-    static func expectUnrecognized(_ url: URL) async throws {
+    static func expectUnrecognized(_ url: URL, allowsCompressedTar: Bool = false) async throws {
         await #expect {
-            _ = try await LibarchiveCoverExtractor().listImageEntries(in: url)
+            _ = try await LibarchiveCoverExtractor(allowsCompressedTar: allowsCompressedTar).listImageEntries(in: url)
         } throws: { error in
             guard case .archiveUnreadable(_, let reason) = error as? ArchiveAdapterError else { return false }
             return reason.contains("Unrecognized archive format")
         }
         #expect {
-            _ = try ArchiveIntegrityVerifier.verifySync(url: url)
+            _ = try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: allowsCompressedTar)
         } throws: { error in
             guard case .archiveUnreadable(_, let reason) = error as? ArchiveAdapterError else { return false }
             return reason.contains("Unrecognized archive format")
@@ -164,14 +164,45 @@ struct TarArchiveTests {
 
     // MARK: - G64: フィルタ（外側の圧縮）
 
-    @Test("tar を読む開き方は gzip だけ・zip 系は自前で解けるもの全部")
+    @Test("tar を読む開き方は、足したアーカイブ（allowsCompressedTar）のときだけ gzip・zip 系は自前で解けるもの全部")
     func filtersPerOpening() {
         for name in ["a.cbt", "a.tar", "a.tgz", "a.djvu", "a.xyz"] {
-            #expect(LibarchiveFormats.filters(for: URL(fileURLWithPath: "/tmp/\(name)")) == [.gzip], "\(name)")
+            let url = URL(fileURLWithPath: "/tmp/\(name)")
+            #expect(LibarchiveFormats.filters(for: url) == [], "\(name)")
+            #expect(LibarchiveFormats.filters(for: url, allowsCompressedTar: false) == [], "\(name)")
+            #expect(LibarchiveFormats.filters(for: url, allowsCompressedTar: true) == [.gzip], "\(name)")
         }
         for name in ["a.zip", "a.cbz", "a.rar", "a.7z", "a.epub"] {
-            #expect(LibarchiveFormats.filters(for: URL(fileURLWithPath: "/tmp/\(name)")) == LibarchiveFormats.builtInFilters, "\(name)")
+            let url = URL(fileURLWithPath: "/tmp/\(name)")
+            #expect(LibarchiveFormats.filters(for: url) == LibarchiveFormats.builtInFilters, "\(name)")
+            #expect(LibarchiveFormats.filters(for: url, allowsCompressedTar: true) == LibarchiveFormats.builtInFilters, "\(name)")
         }
+    }
+
+    /// G64 最終レビュー I1: gzip で包んだ tar は `allowsCompressedTar` のときだけ読む（既定は読まない）。
+    @Test("gzip の tar は allowsCompressedTar のときだけ読む（一覧・数える・取り出す・順方向・詳細チェック）")
+    func gzipTarNeedsTheFlag() async throws {
+        let (url, dir, pages) = try Self.makeTar(named: "book.cbt", gzip: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // 既定（false）: 標準の .cbt と同じ名前でも開けない。
+        try await Self.expectUnrecognized(url)
+        await #expect(throws: ArchiveAdapterError.self) { _ = try await LibarchiveCoverExtractor().countImageEntries(in: url) }
+        await #expect(throws: ArchiveAdapterError.self) { _ = try await LibarchiveCoverExtractor().extractCoverImage(from: url) }
+        await #expect(throws: ArchiveAdapterError.self) {
+            _ = try await SequentialArchiveExtractor(url: url, imageNames: Set(pages.keys)).data(forName: "page01.png")
+        }
+        // true: 読める。
+        let on = LibarchiveCoverExtractor(allowsCompressedTar: true)
+        #expect(try await on.listImageEntries(in: url).names.count == 3)
+        #expect(try await on.extractCoverImage(from: url) == pages["page01.png"])
+        let seq = SequentialArchiveExtractor(url: url, imageNames: Set(pages.keys), allowsCompressedTar: true)
+        #expect(try await seq.data(forName: "page02.png") == pages["page02.png"])
+        #expect(try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: true).imageCount == 3)
+        // 素の tar は、どちらでも読める。
+        let (plain, dir2, _) = try Self.makeTar(named: "plain.cbt")
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        #expect(try await LibarchiveCoverExtractor().listImageEntries(in: plain).names.count == 3)
+        #expect(try ArchiveIntegrityVerifier.verifySync(url: plain).imageCount == 3)
     }
 
     /// bzip2・xz は 1 回の呼び出しの中で小さなファイルを巨大に膨らませられるので、tar を読む開き方では登録しない。
@@ -179,7 +210,7 @@ struct TarArchiveTests {
     func bzip2AndXZAreNotReadForTar(fileName: String, flag: String) async throws {
         let (url, dir, _) = try Self.makeTar(named: fileName, flag: flag)
         defer { try? FileManager.default.removeItem(at: dir) }
-        try await Self.expectUnrecognized(url)
+        try await Self.expectUnrecognized(url, allowsCompressedTar: true)   // gzip を許しても bzip2・xz は開けない
     }
 
     @Test("登録するフィルタは自前で解けるものだけ（外部のプログラムを起動しない）")
@@ -296,21 +327,22 @@ struct TarArchiveTests {
         let (url, dir, pages) = try Self.makeTar(named: "book.tgz", gzip: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let limits = TarWalkLimits(maxEntries: 2, baseBytes: 1 << 30, bytesPerFileByte: 0, maxScaledBytes: 0)
-        let extractor = LibarchiveCoverExtractor(walkLimits: limits)
+        let extractor = LibarchiveCoverExtractor(walkLimits: limits, allowsCompressedTar: true)
 
         let listing = try await extractor.listImageEntries(in: url)
         #expect(listing.names == ["page01.png", "page10.png"])     // 3 つ目（page02）で止まる
         #expect(listing.truncated == true)
         let count = try await extractor.countImageEntries(in: url)
         #expect(count.count == 2 && count.truncated == true)
-        let verified = try ArchiveIntegrityVerifier.verifySync(url: url, walkLimits: limits)
+        let verified = try ArchiveIntegrityVerifier.verifySync(url: url, walkLimits: limits, allowsCompressedTar: true)
         #expect(verified.truncated == true && verified.entryCount == 2)
         // 上限の手前のエントリは取り出せ、先のエントリは「開けない」になる。
         #expect(try await extractor.imageData(in: url, entryName: "page10.png") == pages["page10.png"])
         await #expect(throws: ArchiveAdapterError.self) {
             _ = try await extractor.imageData(in: url, entryName: "page02.png")
         }
-        let seq = SequentialArchiveExtractor(url: url, imageNames: Set(pages.keys), walkLimits: limits)
+        let seq = SequentialArchiveExtractor(url: url, imageNames: Set(pages.keys), walkLimits: limits,
+                                           allowsCompressedTar: true)
         #expect(try await seq.data(forName: "page01.png") == pages["page01.png"])
         await #expect(throws: ArchiveAdapterError.self) {
             _ = try await seq.data(forName: "page02.png")
@@ -354,13 +386,13 @@ struct TarArchiveTests {
 
         let small = TarWalkLimits(maxEntries: 100, baseBytes: 1 << 20, bytesPerFileByte: 0, maxScaledBytes: 0)
         await #expect {
-            _ = try await LibarchiveCoverExtractor(walkLimits: small).listImageEntries(in: url)
+            _ = try await LibarchiveCoverExtractor(walkLimits: small, allowsCompressedTar: true).listImageEntries(in: url)
         } throws: { error in
             guard case .enumerationFailed(_, let reason) = error as? ArchiveAdapterError else { return false }
             return reason == TarWalkBudget.exceededReason
         }
         // 既定の上限なら読める（名前が長い 1 エントリで、画像ではない）。
-        let listing = try await LibarchiveCoverExtractor().listImageEntries(in: url)
+        let listing = try await LibarchiveCoverExtractor(allowsCompressedTar: true).listImageEntries(in: url)
         #expect(listing.names.isEmpty && listing.truncated == false)
     }
 
@@ -389,7 +421,7 @@ struct TarArchiveTests {
         try Self.compress(tar, with: "gzip", to: gz)
         let small = TarWalkLimits(maxEntries: 100, baseBytes: 1 << 20, bytesPerFileByte: 0, maxScaledBytes: 0)
         await #expect {
-            _ = try await LibarchiveCoverExtractor(walkLimits: small).listImageEntries(in: gz)
+            _ = try await LibarchiveCoverExtractor(walkLimits: small, allowsCompressedTar: true).listImageEntries(in: gz)
         } throws: { error in
             guard case .enumerationFailed(_, let reason) = error as? ArchiveAdapterError else { return false }
             return reason == TarWalkBudget.exceededReason
@@ -397,7 +429,7 @@ struct TarArchiveTests {
 
         let bz = dir.appendingPathComponent("sparse-bz.cbt")
         try Self.compress(tar, with: "bzip2", to: bz)
-        try await Self.expectUnrecognized(bz)
+        try await Self.expectUnrecognized(bz, allowsCompressedTar: true)
     }
 
     /// zip・rar・7z は数えない（今のまま）。エントリ 1 つまでの上限でも zip の 3 枚は全部読める。

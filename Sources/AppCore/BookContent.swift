@@ -49,7 +49,10 @@ public enum BookContentFactory {
         let category = BookCategory.classify(path: path, userExtensions: userExtensions)
         switch category {
         case .archive:
-            return ArchiveBookContent(url: url)
+            // gzip の tar を読んでよいのは、足したアーカイブの拡張子だけ（G64 I1）。
+            return ArchiveBookContent(
+                url: url,
+                allowsCompressedTar: BookCategory.userCategory(path: path, userExtensions: userExtensions) == .archive)
         case .folder:
             return FolderBookContent(url: url)
         case .image:
@@ -91,7 +94,9 @@ public enum BookContentFactory {
 /// 一時ファイルは deinit で削除する。actor のため PDFDocument アクセスは直列化される。
 public actor ArchiveBookContent: BookContent {
     private let url: URL
-    private let extractor = LibarchiveCoverExtractor()
+    private let extractor: LibarchiveCoverExtractor
+    /// G64: gzip で包んだ tar を読んでよいか（足したアーカイブの拡張子のときだけ true）。
+    private let allowsCompressedTar: Bool
     private var entryNames: [String]?
     /// 直近の列挙で打ち切りが起きたか（`loadEntries()` が設定する）。
     private var listingTruncated = false
@@ -102,7 +107,11 @@ public actor ArchiveBookContent: BookContent {
     private var pdfFallbackResolved = false
     private var pdfTempURL: URL?
 
-    public init(url: URL) { self.url = url }
+    public init(url: URL, allowsCompressedTar: Bool = false) {
+        self.url = url
+        self.allowsCompressedTar = allowsCompressedTar
+        self.extractor = LibarchiveCoverExtractor(allowsCompressedTar: allowsCompressedTar)
+    }
 
     deinit {
         if let tmp = pdfTempURL {
@@ -199,7 +208,8 @@ public actor ArchiveBookContent: BookContent {
             // G18 C5: stateless な per-page 再オープン（O(N)）ではなく、開きっぱなしの順方向
             // リーダーへ集約する（深いページでも一定コスト・矢印長押しのスムーズさを担保）。
             if seqExtractor == nil {
-                seqExtractor = SequentialArchiveExtractor(url: url, imageNames: Set(names))
+                seqExtractor = SequentialArchiveExtractor(url: url, imageNames: Set(names),
+                                                       allowsCompressedTar: allowsCompressedTar)
             }
             return try await seqExtractor!.data(forName: names[page])
         }

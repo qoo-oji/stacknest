@@ -19,21 +19,27 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
     /// G64: tar を歩く仕事の上限（テストは小さな値を渡す）。
     private let walkLimits: TarWalkLimits
 
-    public init(walkLimits: TarWalkLimits = .standard) {
+    /// G64: gzip で包んだ tar を読んでよいか。**ユーザーがアーカイブとして足した拡張子のときだけ true**（`BookExtractors` が決める）。
+    private let allowsCompressedTar: Bool
+
+    public init(walkLimits: TarWalkLimits = .standard, allowsCompressedTar: Bool = false) {
         self.walkLimits = walkLimits
+        self.allowsCompressedTar = allowsCompressedTar
     }
 
     public func extractCoverImage(from url: URL) async throws -> Data {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            try Self.extract(from: url, limits: limits)
+            try Self.extract(from: url, limits: limits, compressedTar: gz)
         }.value
     }
 
     public func extractCoverImage(from url: URL, preferredName: String?) async throws -> Data {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            let listing = try Self.enumerateImageEntries(from: url, limits: limits)
+            let listing = try Self.enumerateImageEntries(from: url, limits: limits, compressedTar: gz)
             guard !listing.names.isEmpty else { throw ArchiveAdapterError.noImageEntry(url) }
             let sorted = listing.names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             let target: String
@@ -43,14 +49,15 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
                 // preferredName が nil または該当エントリなし → natural sort 先頭にフォールバック
                 target = sorted[0]
             }
-            return try Self.extractByName(from: url, targetName: target, limits: limits)
+            return try Self.extractByName(from: url, targetName: target, limits: limits, compressedTar: gz)
         }.value
     }
 
     public func listImageEntries(in url: URL) async throws -> ArchiveListing {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            let listing = try Self.enumerateImageEntries(from: url, limits: limits)
+            let listing = try Self.enumerateImageEntries(from: url, limits: limits, compressedTar: gz)
             return ArchiveListing(
                 names: listing.names.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
                 truncated: listing.truncated
@@ -60,8 +67,9 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
 
     public func countImageEntries(in url: URL) async throws -> ArchiveEntryCount {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            try Self.count(from: url, limits: limits)
+            try Self.count(from: url, limits: limits, compressedTar: gz)
         }.value
     }
 
@@ -71,12 +79,13 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
     /// 読み出し失敗時は OSLog warning を残して nil を返す (caller は「PDF なし」と区別できない)。
     public func extractFirstPDFData(in url: URL) async throws -> Data? {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            let names = try Self.enumeratePDFEntries(from: url, limits: limits)
+            let names = try Self.enumeratePDFEntries(from: url, limits: limits, compressedTar: gz)
             guard !names.isEmpty else { return nil }
             let sorted = names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             do {
-                return try Self.extractByName(from: url, targetName: sorted[0], limits: limits)
+                return try Self.extractByName(from: url, targetName: sorted[0], limits: limits, compressedTar: gz)
             } catch {
                 Self.logger.warning("extractFirstPDFData: read failed for \(sorted[0], privacy: .public) in \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 return nil
@@ -89,19 +98,20 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
     /// 内蔵ビューア (Phase 2.6b) のページ取得で使用。
     public func imageData(in url: URL, entryName: String) async throws -> Data {
         let limits = walkLimits
+        let gz = allowsCompressedTar
         return try await Task.detached(priority: .userInitiated) {
-            try Self.extractByName(from: url, targetName: entryName, limits: limits)
+            try Self.extractByName(from: url, targetName: entryName, limits: limits, compressedTar: gz)
         }.value
     }
 
     /// Pass 1 (PDF 版) — open the archive and collect all `.pdf` entry names.
-    private static func enumeratePDFEntries(from url: URL, limits: TarWalkLimits) throws -> [String] {
+    private static func enumeratePDFEntries(from url: URL, limits: TarWalkLimits, compressedTar: Bool) throws -> [String] {
         guard let archive = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
         defer { archive_read_free(archive) }
 
-        LibarchiveFormats.enable(archive, for: url)
+        LibarchiveFormats.enable(archive, for: url, allowsCompressedTar: compressedTar)
 
         let status = url.path.withCString { cPath in
             archive_read_open_filename(archive, cPath, 16384)
@@ -146,26 +156,26 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
         return String(cString: cStr)
     }
 
-    private static func extract(from url: URL, limits: TarWalkLimits) throws -> Data {
+    private static func extract(from url: URL, limits: TarWalkLimits, compressedTar: Bool) throws -> Data {
         // Pass 1: enumerate all image entry names
-        let listing = try enumerateImageEntries(from: url, limits: limits)
+        let listing = try enumerateImageEntries(from: url, limits: limits, compressedTar: compressedTar)
         guard !listing.names.isEmpty else { throw ArchiveAdapterError.noImageEntry(url) }
         // Natural sort (localizedStandardCompare): page2 < page10
         let sorted = listing.names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         let target = sorted[0]
 
         // Pass 2: extract the data for the target entry by name
-        return try extractByName(from: url, targetName: target, limits: limits)
+        return try extractByName(from: url, targetName: target, limits: limits, compressedTar: compressedTar)
     }
 
     /// Pass 1 — open the archive and collect all image-extension entry names.
-    private static func enumerateImageEntries(from url: URL, limits: TarWalkLimits) throws -> ArchiveListing {
+    private static func enumerateImageEntries(from url: URL, limits: TarWalkLimits, compressedTar: Bool) throws -> ArchiveListing {
         guard let archive = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
         defer { archive_read_free(archive) }
 
-        LibarchiveFormats.enable(archive, for: url)
+        LibarchiveFormats.enable(archive, for: url, allowsCompressedTar: compressedTar)
 
         let status = url.path.withCString { cPath in
             archive_read_open_filename(archive, cPath, 16384)
@@ -214,13 +224,13 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
     }
 
     /// Pass 2 — open the archive again and extract the entry whose pathname == targetName.
-    private static func extractByName(from url: URL, targetName: String, limits: TarWalkLimits) throws -> Data {
+    private static func extractByName(from url: URL, targetName: String, limits: TarWalkLimits, compressedTar: Bool) throws -> Data {
         guard let archive = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
         defer { archive_read_free(archive) }
 
-        LibarchiveFormats.enable(archive, for: url)
+        LibarchiveFormats.enable(archive, for: url, allowsCompressedTar: compressedTar)
 
         let status = url.path.withCString { cPath in
             archive_read_open_filename(archive, cPath, 16384)
@@ -266,13 +276,13 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
         throw ArchiveAdapterError.noImageEntry(url)
     }
 
-    private static func count(from url: URL, limits: TarWalkLimits) throws -> ArchiveEntryCount {
+    private static func count(from url: URL, limits: TarWalkLimits, compressedTar: Bool) throws -> ArchiveEntryCount {
         guard let archive = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
         defer { archive_read_free(archive) }
 
-        LibarchiveFormats.enable(archive, for: url)
+        LibarchiveFormats.enable(archive, for: url, allowsCompressedTar: compressedTar)
 
         let status = url.path.withCString { cPath in
             archive_read_open_filename(archive, cPath, 16384)

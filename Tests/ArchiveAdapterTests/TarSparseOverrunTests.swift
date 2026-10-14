@@ -34,7 +34,7 @@ struct TarSparseOverrunTests {
         let (url, dir) = try Self.bombFile(gzip: gzip)
         defer { try? FileManager.default.removeItem(at: dir) }
         let start = Date()
-        let result = try ArchiveIntegrityVerifier.verifySync(url: url)
+        let result = try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: gzip)
         #expect(Date().timeIntervalSince(start) < 2)
         #expect(result.badEntries == ["sparse.png"])
         #expect(result.entryCount == 1 && result.truncated == false)
@@ -44,7 +44,7 @@ struct TarSparseOverrunTests {
     func sequentialStopsSparseZeroFill(gzip: Bool) async throws {
         let (url, dir) = try Self.bombFile(gzip: gzip)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let seq = SequentialArchiveExtractor(url: url, imageNames: ["sparse.png"])
+        let seq = SequentialArchiveExtractor(url: url, imageNames: ["sparse.png"], allowsCompressedTar: gzip)
         let start = Date()
         await #expect {
             _ = try await seq.data(forName: "sparse.png")

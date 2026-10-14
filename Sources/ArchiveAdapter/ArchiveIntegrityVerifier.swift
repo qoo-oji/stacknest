@@ -81,8 +81,11 @@ public enum ArchiveIntegrityVerifier {
     /// 上記の理由で同期版へ一本化した（本番呼び出しは `FullIntegrityScanner.liveDependencies`
     /// の 1 箇所のみで、そこは実行器経由になったため async 版に利用者がいなくなった）。
     /// - G64: tar は `walkLimits` で歩く量を縛る（超えたら構造破綻と同じ＝打ち切り、1 件も無ければ throw）。
+    /// - G64: `allowsCompressedTar` は gzip で包んだ tar を読んでよいか（足したアーカイブの拡張子のときだけ true。
+    ///   false の gzip の tar は開けない＝破損として扱われる）。
     public static func verifySync(url: URL, isCancelled: () -> Bool = { false },
-                                  walkLimits: TarWalkLimits = .standard) throws -> ArchiveVerifyResult {
+                                  walkLimits: TarWalkLimits = .standard,
+                                  allowsCompressedTar: Bool = false) throws -> ArchiveVerifyResult {
         // ★ G34a fix2: ファイルは**自分で開いて `F_NOCACHE` を立ててから**渡す。
         //
         // 走査は 1 冊あたり数十 MB を読んで**すべて捨てる**（CRC を検証したいだけでデータは要らない）。
@@ -111,7 +114,7 @@ public enum ArchiveIntegrityVerifier {
         }
         defer { archive_read_free(archive) }
 
-        LibarchiveFormats.enable(archive, for: url)
+        LibarchiveFormats.enable(archive, for: url, allowsCompressedTar: allowsCompressedTar)
 
         // ブロックサイズは 16KB ではなく 1MB。`F_NOCACHE` はカーネルの先読みも止めるため、
         // 16KB のままだと 50MB の本で 3,200 回の小さなデバイス read になり、走査が 16% 遅くなった

@@ -29,6 +29,8 @@ public actor SequentialArchiveExtractor {
     private let maxEntryBytes: Int
     /// G64: tar を歩く仕事の上限（開き直すたびに数え直す）。
     private let walkLimits: TarWalkLimits
+    /// G64: gzip で包んだ tar を読んでよいか（足したアーカイブの拡張子のときだけ true）。
+    private let allowsCompressedTar: Bool
     private var walkBudget: TarWalkBudget?
 
     /// libarchive ハンドル。アクセスは actor が直列化する（deinit の解放のためだけ
@@ -40,11 +42,12 @@ public actor SequentialArchiveExtractor {
     private var extracted: [String: URL] = [:]
 
     public init(url: URL, imageNames: Set<String>, maxEntryBytes: Int = ArchiveEntrySizeLimit.maxEntryBytes,
-                walkLimits: TarWalkLimits = .standard) {
+                walkLimits: TarWalkLimits = .standard, allowsCompressedTar: Bool = false) {
         self.url = url
         self.imageNames = imageNames
         self.maxEntryBytes = maxEntryBytes
         self.walkLimits = walkLimits
+        self.allowsCompressedTar = allowsCompressedTar
         self.tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("stacknest-arc-\(UUID().uuidString)", isDirectory: true)
     }
@@ -151,7 +154,7 @@ public actor SequentialArchiveExtractor {
         guard let a = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
-        LibarchiveFormats.enable(a, for: url)
+        LibarchiveFormats.enable(a, for: url, allowsCompressedTar: allowsCompressedTar)
         let status = url.path.withCString { cPath in
             archive_read_open_filename(a, cPath, 16384)
         }

@@ -146,7 +146,7 @@ public enum CoverRefresher {
                 // `@` 始まりは動画の場面指定などの印で、アーカイブのエントリ名ではない。
                 let name = preferredName.flatMap { $0.hasPrefix("@") ? nil : $0 }
                 return try await ArchivePDFFallback.coverData(in: sourceURL, preferredName: name,
-                                                              extractor: LibarchiveCoverExtractor())
+                                                              extractor: LibarchiveCoverExtractor(allowsCompressedTar: true))
             case .image:
                 return CoverJPEG.fromImageData(try Data(contentsOf: sourceURL), maxPixelSize: 1200)
             case .video:

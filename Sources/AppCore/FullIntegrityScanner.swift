@@ -328,7 +328,10 @@ extension FullIntegrityScanner {
                 // 同期的に読めるフラグへ写してから渡す（詳細は CancellationMirror）。
                 try await CancellationMirror.mirroring(probe: isCancelled) { syncIsCancelled in
                     try await executor.run {
-                        try ArchiveIntegrityVerifier.verifySync(url: url, isCancelled: syncIsCancelled)
+                        // 足したアーカイブの拡張子だけ、gzip で包んだ tar も読む（G64 I1）。
+                        try ArchiveIntegrityVerifier.verifySync(
+                            url: url, isCancelled: syncIsCancelled,
+                            allowsCompressedTar: BookCategory.userCategory(path: url.path, userExtensions: userExtensions) == .archive)
                     }
                 }
             },

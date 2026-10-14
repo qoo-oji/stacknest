@@ -24,6 +24,6 @@ public enum BookExtractors {
 
     private static func addedArchiveExtractor(for url: URL, userExtensions: UserExtensionMap) -> CoverImageExtractor? {
         BookCategory.userCategory(path: url.path, userExtensions: userExtensions) == .archive
-            ? LibarchiveCoverExtractor() : nil
+            ? LibarchiveCoverExtractor(allowsCompressedTar: true) : nil   // 足した拡張子だけ gzip の tar を読む（G64 I1）
     }
 }

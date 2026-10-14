@@ -132,7 +132,8 @@ extension QuickIntegrityScanner {
     public static func liveDependencies(
         archiveExtractor: any CoverImageExtractor,
         folderExtractor: any CoverImageExtractor,
-        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
+        addedArchiveExtractor: any CoverImageExtractor = LibarchiveCoverExtractor(allowsCompressedTar: true)
     ) -> Dependencies {
         Dependencies(
             categoryOf: { BookCategory.classify(path: $0, userExtensions: userExtensions) },
@@ -140,7 +141,9 @@ extension QuickIntegrityScanner {
             statFile: { Database.statFile($0) },
             probe: { url in
                 let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                let extractor = isDir ? folderExtractor : archiveExtractor
+                // 足したアーカイブの拡張子だけ、gzip で包んだ tar も読む（G64 I1）。
+                let isAddedArchive = BookCategory.userCategory(path: url.path, userExtensions: userExtensions) == .archive
+                let extractor = isDir ? folderExtractor : (isAddedArchive ? addedArchiveExtractor : archiveExtractor)
                 do {
                     let listing = try await extractor.listImageEntries(in: url)
                     return .enumerated(count: listing.names.count, truncated: listing.truncated)

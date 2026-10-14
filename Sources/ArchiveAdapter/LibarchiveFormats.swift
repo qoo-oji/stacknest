@@ -12,16 +12,22 @@ import Carchive
 /// **zip 系の拡張子では tar を有効にしない。** tar の読み手は「512 バイトが全部 0 のブロック」をアーカイブの終わりとして
 /// 受け付けるので、有効にすると 0 で埋まった（512 バイト以上の）壊れた `.zip` が「空の tar」として開け、破損チェックの
 /// 判定が「破損」から「空」に変わってしまう（2026-10-09 に実測）。標準の zip 系の振る舞いを変えないため、tar を読むのは
-/// 標準の `cbt`・`tar`、足した拡張子、未知の拡張子（`.tgz` など）だけにする。
+/// 標準の `cbt`・`tar`、足した拡張子、未知の拡張子だけにする（このうち gzip を許すのは足した拡張子だけ）。
 ///
 /// **フィルタは libarchive が自前で解けるものだけ**（作者の確認事項 A）。`archive_read_support_filter_all` は、自前の
 /// 解き手が無い形式（この macOS の libarchive 3.7.4 では zstd・lz4・lzop・lrzip・grzip）を**外部のプログラムを起動して**解く
 /// （PATH に `zstd` があれば `.tar.zst` を `zstd -d` で読むのを実測）。手元の任意のファイルで外部のプログラムを起動しない。
 ///
-/// **tar を読む開き方（zip 系以外）では gzip だけ**（作者の確認事項 B）。bzip2・xz などは、小さなファイルを libarchive の
+/// **gzip で包んだ tar を読んでよいのは、ユーザーがアーカイブとして足した拡張子だけ**（作者の決定 2026-10-15・G64 最終レビュー I1）。
+/// 標準の `.cbt`・`.tar` と未知の拡張子は、外側の圧縮の無い tar だけを読む（gzip のフィルタを登録しない）。gzip の tar は
+/// 小さなファイルが約 1000 倍に膨らみ、pax の sparse 1.0 の地図などで 1 回のヘッダの読みが GB 単位のメモリを確保しうるので
+/// （`TarWalkLimits` を参照）、監視フォルダや未知の拡張子の既定の入口には出さない。足した拡張子（例: `tgz`）は、ユーザーが
+/// 明示した読み取りなので gzip を許す。
+///
+/// **tar を読む開き方（zip 系以外）で登録できるフィルタは gzip だけ**（作者の確認事項 B）。bzip2・xz などは、小さなファイルを libarchive の
 /// 1 回の呼び出しの中で巨大に膨らませられる（実測: 1.4 KB の bzip2 の tar が、古い GNU の sparse の拡張ブロックの連なりで
 /// ヘッダを 1 つ読むだけで 1 GiB を歩き 3.4 秒）。1 回の呼び出しの中は外から止められないので、膨らみ方が約 1000 倍で
-/// 頭打ちの gzip だけにする。zip 系は今どおり（自前で解けるフィルタ全部）。
+/// 頭打ちの gzip だけにする（さらに上の決定で、足した拡張子のときだけ）。zip 系は今どおり（自前で解けるフィルタ全部）。
 enum LibarchiveFormats {
     /// tar を有効にしない拡張子（標準の zip 系と、zip でできた EPUB）。
     static let zipFamilyExtensions: Set<String> = ["zip", "cbz", "rar", "cbr", "7z", "cb7", "epub"]
@@ -58,13 +64,17 @@ enum LibarchiveFormats {
         return Filter.allCases.filter { $0.register(probe) == ARCHIVE_OK }
     }()
 
-    /// その URL で登録するフィルタ。tar を読む開き方は gzip だけ、zip 系は自前で解けるもの全部。
-    static func filters(for url: URL) -> [Filter] {
-        readsTar(url) ? builtInFilters.filter { $0 == .gzip } : builtInFilters
+    /// その URL で登録するフィルタ。zip 系は自前で解けるもの全部。tar を読む開き方は、`allowsCompressedTar` のときだけ gzip、
+    /// そうでなければフィルタなし（外側の圧縮の無い tar だけ）。
+    static func filters(for url: URL, allowsCompressedTar: Bool = false) -> [Filter] {
+        guard readsTar(url) else { return builtInFilters }
+        return allowsCompressedTar ? builtInFilters.filter { $0 == .gzip } : []
     }
 
     /// `archive_read_new` の直後、open の前に呼ぶ。
-    static func enable(_ archive: OpaquePointer, for url: URL) {
+    /// `allowsCompressedTar`: gzip で包んだ tar を読んでよいか。**ユーザーがアーカイブとして足した拡張子のときだけ true**
+    /// （AppCore が `BookCategory.userCategory(...) == .archive` で決めて渡す。ArchiveAdapter は足した一覧を知らない）。
+    static func enable(_ archive: OpaquePointer, for url: URL, allowsCompressedTar: Bool = false) {
         archive_read_support_format_zip(archive)
         archive_read_support_format_rar(archive)
         archive_read_support_format_rar5(archive)
@@ -76,7 +86,7 @@ enum LibarchiveFormats {
             let rc = archive_read_set_format_option(archive, "tar", "mac-ext", nil)   // nil で切る（"0" は空でない文字列＝入）
             assert(rc == ARCHIVE_OK, "tar mac-ext option rejected")
         }
-        for filter in filters(for: url) {
+        for filter in filters(for: url, allowsCompressedTar: allowsCompressedTar) {
             _ = filter.register(archive)
         }
     }
@@ -100,7 +110,7 @@ enum LibarchiveFormats {
 /// 申告サイズの和、(3) 申告サイズの合計（sparse のエントリは中身より大きな論理サイズを申告できる）。1 回のヘッダの読みの中は
 /// 止められないが、その中で歩ける量は libarchive 自身の上限（特別なヘッダ＝pax・GNU の長い名前は 1 つ 1 MiB まで・続けて 32 個まで。
 /// macOS の libarchive 3.7.4 で実測 2026-10-09: 1 MiB＋1 バイトで「Special header too large」、33 個目で「Too many special headers」）と、
-/// gzip の膨らみ方（約 1000 倍）で頭打ちになる（`LibarchiveFormats` を参照）。
+/// gzip の膨らみ方（約 1000 倍）で頭打ちになる（`LibarchiveFormats` を参照。gzip を読むのは足したアーカイブの拡張子だけ）。
 ///
 /// **この予算が縛れないもの（受け入れ済み・G64 fix1 I1）:** (1) 1 回のヘッダの読みの中、(2) 1 つのエントリのデータ読み飛ばし。
 /// sparse のエントリは、申告サイズ（実サイズ）と読み飛ばしで実際に消費する量（格納サイズ）が違いうるので、ヘッダ 1 つの読みと
@@ -110,7 +120,7 @@ enum LibarchiveFormats {
 ///
 /// **メモリの残り（既知・受け入れ済み・G64 fix2）:** 1 回のヘッダの読みは、解いたヘッダのデータに比例するメモリを確保しうる。
 /// 例えば pax の GNU.sparse 1.0 の地図は、地図のエントリ 1 つにつき約 32 バイトを確保し、libarchive に数の上限が無い。
-/// gzip ならファイルの大きさの約 1000 倍に達しうる。これは歩く量の予算では縛れない（AppleDouble の blob は `mac-ext` を切って塞いだ）。
+/// gzip ならファイルの大きさの約 1000 倍に達しうる（gzip の tar は足したアーカイブの拡張子でしか読まないので、標準の `.cbt`・未知の拡張子では約 8 倍に収まる）。これは歩く量の予算では縛れない（AppleDouble の blob は `mac-ext` を切って塞いだ）。
 ///
 /// 上限を超えたら、その位置でヘッダが読めなくなったのと同じに扱う（読めた分があれば打ち切り＝破損、無ければ開けない）。
 /// 新しい文言は出さない。**tar のときだけ数える**（zip・rar・7z は今のまま）。
