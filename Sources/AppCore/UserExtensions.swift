@@ -163,6 +163,8 @@ public final class UserExtensionStore: @unchecked Sendable {
         return changed
     }
 
+    /// 注意: 呼び出しは `state` のロックを持ったまま。UserDefaults への書き込みが同期で走るので、`userBookExtensions` の
+    /// 同期的な監視者（KVO・`didChangeNotification`・バインディング）は `snapshot` を読んではならない（同じロックの再取得で落ちる）。
     private func persist(_ map: UserExtensionMap) {
         if map.isEmpty {
             defaults.removeObject(forKey: Self.defaultsKey)

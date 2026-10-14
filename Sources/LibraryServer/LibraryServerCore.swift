@@ -1727,6 +1727,8 @@ public struct LibraryServerCore: Sendable {
         // A2: 本のパス再リンク（RW）。relinkBook で path 更新＋ハッシュ NULL 化。
         api.post("libraries/:lib/books/:id/relink") { [self] request, context in
             try context.requireEdit()
+            // G64: 拡張子の一覧は 1 回の要求で 1 回だけ読む（表紙とページ数を同じ一覧で作る）。
+            let userExtensions = config.userExtensions()
             let bookID = try context.parameters.require("id", as: Int.self)
             let lib = try await resolver.resolveLibrary(request, context)
             guard ((try? lib.db.fetchBook(id: bookID)) ?? nil) != nil else { throw HTTPError(.notFound) }
@@ -1749,7 +1751,7 @@ public struct LibraryServerCore: Sendable {
                     _ = try? await Self.regenerateThumbnail(
                         bookID: updatedRow.id, sourceURLPath: updatedRow.path,
                         preferredName: updatedRow.coverImageName, bundleURL: lib.bundleURL, db: lib.db,
-                        userExtensions: config.userExtensions())
+                        userExtensions: userExtensions)
                 }
                 // G26 Codex Important #2: relink 先が破損していると `pageCount` は打ち切り値
                 // （40 ページ本を差し替えたつもりで 13）になる。relink は**まさに**ユーザーが
@@ -1757,7 +1759,7 @@ public struct LibraryServerCore: Sendable {
                 // 記録しない」という規則が最も要る場所で破れる。ビューア/取込経路と同じ
                 // `TruncatedReadPolicy.pageCountToWrite` を通す（nil＝書かない。修復後に
                 // 次回オープンの収束処理が正しい値を入れる）。
-                if let content = try? BookContentFactory.make(for: updatedRow, userExtensions: config.userExtensions()),
+                if let content = try? BookContentFactory.make(for: updatedRow, userExtensions: userExtensions),
                    let n = try? await content.pageCount,
                    let pages = TruncatedReadPolicy.pageCountToWrite(
                        livePageCount: n, truncated: await content.damageNote != nil) {

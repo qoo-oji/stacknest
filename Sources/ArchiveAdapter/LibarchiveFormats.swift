@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import OSLog
 import Carchive
 
 /// G64: libarchive で読む形式とフィルタ（外側の圧縮）の有効化。**ここ 1 か所だけ**（以前は同じ 5 行が 6 か所にあった）。
@@ -29,6 +30,8 @@ import Carchive
 /// ヘッダを 1 つ読むだけで 1 GiB を歩き 3.4 秒）。1 回の呼び出しの中は外から止められないので、膨らみ方が約 1000 倍で
 /// 頭打ちの gzip だけにする（さらに上の決定で、足した拡張子のときだけ）。zip 系は今どおり（自前で解けるフィルタ全部）。
 enum LibarchiveFormats {
+    private static let logger = Logger(subsystem: "app.shelfsmith.stacknest", category: "LibarchiveFormats")
+
     /// tar を有効にしない拡張子（標準の zip 系と、zip でできた EPUB）。
     static let zipFamilyExtensions: Set<String> = ["zip", "cbz", "rar", "cbr", "7z", "cb7", "epub"]
 
@@ -84,6 +87,10 @@ enum LibarchiveFormats {
             // `._` で始まるエントリの AppleDouble（macOS のメタデータ）を、libarchive は archive_entry_size ぶん上限なしで
             // メモリに読む（予算に見えないメモリ）。StackNest は使わないので切る。`._x` は普通のエントリとして見える。
             let rc = archive_read_set_format_option(archive, "tar", "mac-ext", nil)   // nil で切る（"0" は空でない文字列＝入）
+            if rc != ARCHIVE_OK {
+                // Release では assert が効かず AppleDouble のメモリの穴が黙って開き直るので、ログにも残す。
+                logger.fault("tar mac-ext option rejected (rc=\(rc, privacy: .public)); AppleDouble entries are not capped")
+            }
             assert(rc == ARCHIVE_OK, "tar mac-ext option rejected")
         }
         for filter in filters(for: url, allowsCompressedTar: allowsCompressedTar) {

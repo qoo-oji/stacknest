@@ -48,6 +48,7 @@ struct DTORoundTripTests {
         #expect(try dec().decode(LibraryDTO.self, from: enc().encode(lib)).locked == true)
         let caps = ServerCapabilities.inApp
         #expect(try dec().decode(ServerCapabilities.self, from: enc().encode(caps)).version == "1")
+        #expect(caps.formats.contains("tar"), "G64: tar is readable in-app")
         let reply = UnlockReply(libraryToken: "tok")
         #expect(try dec().decode(UnlockReply.self, from: enc().encode(reply)).libraryToken == "tok")
     }

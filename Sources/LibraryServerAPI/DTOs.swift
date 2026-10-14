@@ -263,7 +263,7 @@ public struct ServerCapabilities: Codable, Sendable {
 
     public static let inApp = ServerCapabilities(
         version: "1", fileOps: true, transcode: false,
-        formats: ["zip", "rar", "7z", "folder", "image", "pdf"]
+        formats: ["zip", "rar", "7z", "tar", "folder", "image", "pdf"]
     )
 }
 

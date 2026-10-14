@@ -67,7 +67,7 @@ components:
           items:
             type: string
           description: サポートするファイル形式
-          example: ["zip", "rar", "7z", "folder", "image", "pdf"]
+          example: ["zip", "rar", "7z", "tar", "folder", "image", "pdf"]
 
     MeReply:
       type: object
