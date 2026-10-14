@@ -160,22 +160,26 @@ struct BookReferenceTests {
         _ = try writer.write(sample(expiresAt: now.addingTimeInterval(-1)), origin: .local, libraryUUID: "LIB-1", bookID: 5)
         let fresh = sample(expiresAt: now.addingTimeInterval(3600))
         let written = DispatchSemaphore(value: 0)
-        final class Box: @unchecked Sendable { var url: URL? }
+        final class Box: @unchecked Sendable { var result: Result<URL, any Error>? }
         let box = Box()
         // 差し込みはこの掃除の店だけ（ほかのテストの掃除からは呼ばれない）。
         let pruner = BookReferenceStore(baseDirectory: base, pruneHookBeforeDeletes: {
-            DispatchQueue.global().async {
-                box.url = try? writer.write(fresh, origin: .local, libraryUUID: "LIB-1", bookID: 5)
+            // 書き手は専用のスレッドで走らせる。global キューに投げると、並列に走るほかのテストでスレッドが埋まった
+            // ときに何秒も始まらず、時間の待ちに間に合わない（CI と負荷をかけた手元で再現した）。
+            Thread {
+                box.result = Result { try writer.write(fresh, origin: .local, libraryUUID: "LIB-1", bookID: 5) }
                 written.signal()
-            }
+            }.start()
             // 書き込みが掃除と並ばない作りなら、ここで書き終わる。並ぶ作りなら掃除が終わるまで待たされる。
-            _ = written.wait(timeout: .now() + 0.5)
+            if written.wait(timeout: .now() + 0.5) == .success { written.signal() }
         })
 
         pruner.pruneExpired(now: now)
-        if box.url == nil { _ = written.wait(timeout: .now() + 5) }
+        // 書き終わりの合図を待つ（時間は上限としてだけ使う）。合図の後に読むので、書き手の結果を確かに見る。
+        let finished = written.wait(timeout: .now() + 60)
+        #expect(finished == .success, "書き手が 60 秒たっても終わらない")
 
-        let url = try #require(box.url)
+        let url = try #require(try box.result?.get())
         #expect(FileManager.default.fileExists(atPath: url.path), "書いたばかりの参照ファイルが残る")
         let kept = try BookReference.decode(Data(contentsOf: url))
         #expect(kept.expiresAt > now)
