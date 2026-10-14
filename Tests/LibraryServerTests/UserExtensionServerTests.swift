@@ -71,6 +71,12 @@ struct UserExtensionServerTests {
                     let dto = try JSONDecoder().decode(CoverCandidatesDTO.self, from: Data(buffer: response.body))
                     #expect(dto.entries == ["p1.png", "p2.png", "p3.png"])
                 }
+                // entry-image も同じ振り分け（足した tgz でも選んだページの画像を返す）。
+                try await client.execute(uri: "/api/v1/libraries/\(uuid)/books/\(id)/entry-image?name=p1.png", method: .get,
+                                         headers: [.authorization: "Bearer R"]) { response in
+                    #expect(response.status == .ok)
+                    #expect(response.body.readableBytes > 0)
+                }
             }
         }
     }
@@ -86,6 +92,11 @@ struct UserExtensionServerTests {
             #expect(status == .ok)
             #expect(dto?.format == "image")
             #expect(dto?.pageCount == 1)
+            // 内容のキャッシュもサーバの一覧で作る（足した画像として 1 ページを返す。一覧を無視すると archive 扱いになり開けない）。
+            try await client.execute(uri: "/api/v1/libraries/\(fixture.servedLibrary().uuid)/books/\(id)/pages/0",
+                                     method: .get, headers: [.authorization: "Bearer R"]) { response in
+                #expect(response.status == .ok)
+            }
         }
     }
 
@@ -96,6 +107,9 @@ struct UserExtensionServerTests {
         let docx = try fixture.addUnsupportedFormatBook(extension: "docx")
         let junk = fixture.bundleURL.appendingPathComponent("junk.tgz"); try Data("not an archive at all".utf8).write(to: junk)
         let junkID = try addBook(fixture, junk)
+        // 比べる相手: 標準の拡張子（cbt）の壊れた本。今のエラーと同じになること。
+        let badCBT = fixture.bundleURL.appendingPathComponent("junk.cbt"); try Data("not an archive at all".utf8).write(to: badCBT)
+        let badCBTID = try addBook(fixture, badCBT)
         let uuid = fixture.servedLibrary().uuid
         try await app(fixture).test(.router) { client in
             let (videoStatus, _) = try await manifest(client, uuid, video)
@@ -104,6 +118,9 @@ struct UserExtensionServerTests {
             #expect(videoStatus != .ok)
             #expect(docxStatus == videoStatus)
             #expect(junkStatus != .ok, "200・0 ページにしない")
+            let (badCBTStatus, _) = try await manifest(client, uuid, badCBTID)
+            #expect(badCBTStatus != .ok)
+            #expect(junkStatus == badCBTStatus, "標準の壊れたアーカイブと同じエラー")
         }
     }
 
