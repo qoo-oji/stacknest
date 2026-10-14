@@ -99,4 +99,16 @@ struct TarSparseOverrunTests {
         let listing = try await LibarchiveCoverExtractor(walkLimits: limits).listImageEntries(in: link)
         #expect(listing.names.count == 3 && listing.truncated == false)
     }
+
+    /// mac-ext を切っているので、`._x.png` は AppleDouble として食われず、普通のエントリとして並ぶ。
+    @Test("`._` のエントリは普通のエントリとして見える（mac-ext を切っている）")
+    func appleDoubleEntryIsOrdinary() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("g64-mac-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("mac.cbt")
+        try (Self.entry("._x.png", Data("AAAA".utf8)) + Self.entry("x.png", Data("xx".utf8)) + Data(count: 1024)).write(to: url)
+        let listing = try await LibarchiveCoverExtractor().listImageEntries(in: url)
+        #expect(listing.names == ["._x.png", "x.png"])
+    }
 }

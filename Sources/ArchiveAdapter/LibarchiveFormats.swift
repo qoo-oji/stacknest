@@ -71,6 +71,10 @@ enum LibarchiveFormats {
         archive_read_support_format_7zip(archive)
         if readsTar(url) {
             archive_read_support_format_tar(archive)
+            // `._` で始まるエントリの AppleDouble（macOS のメタデータ）を、libarchive は archive_entry_size ぶん上限なしで
+            // メモリに読む（予算に見えないメモリ）。StackNest は使わないので切る。`._x` は普通のエントリとして見える。
+            let rc = archive_read_set_format_option(archive, "tar", "mac-ext", nil)   // nil で切る（"0" は空でない文字列＝入）
+            assert(rc == ARCHIVE_OK, "tar mac-ext option rejected")
         }
         for filter in filters(for: url) {
             _ = filter.register(archive)
@@ -94,8 +98,8 @@ enum LibarchiveFormats {
 /// 数えるのは、ヘッダを 1 つ読むたびの (1) エントリの数、(2) 解いた後の位置（`archive_filter_bytes(_, 0)`＝libarchive が
 /// 実際に歩いた量。pax・GNU の長い名前・sparse の拡張ブロックなど、ヘッダの手前で歩いた分も入る）とこれから読むエントリの
 /// 申告サイズの和、(3) 申告サイズの合計（sparse のエントリは中身より大きな論理サイズを申告できる）。1 回のヘッダの読みの中は
-/// 止められないが、その中で歩ける量は libarchive 自身の上限（特別なヘッダ＝pax・GNU の長い名前は 1 つ 2 MiB まで・続けて 32 個まで。
-/// macOS の libarchive 3.7.4 で実測 2026-10-09: 2 MiB＋1 バイトで「Special header too large」、33 個目で「Too many special headers」）と、
+/// 止められないが、その中で歩ける量は libarchive 自身の上限（特別なヘッダ＝pax・GNU の長い名前は 1 つ 1 MiB まで・続けて 32 個まで。
+/// macOS の libarchive 3.7.4 で実測 2026-10-09: 1 MiB＋1 バイトで「Special header too large」、33 個目で「Too many special headers」）と、
 /// gzip の膨らみ方（約 1000 倍）で頭打ちになる（`LibarchiveFormats` を参照）。
 ///
 /// **この予算が縛れないもの（受け入れ済み・G64 fix1 I1）:** (1) 1 回のヘッダの読みの中、(2) 1 つのエントリのデータ読み飛ばし。
@@ -103,6 +107,10 @@ enum LibarchiveFormats {
 /// データ読み飛ばし 1 回は、予測を超えうる（超過は次のヘッダで初めて見える）。どちらも外側の圧縮の膨らみ方（gzip で約 1000 倍）×
 /// ファイルの大きさで頭打ちになり、同じ種類の残りとして受け入れる。データの**読み出し**（`archive_read_data`）は別で、
 /// sparse の穴の 0 埋めが申告サイズを超えて出続けるのを、エントリごとの「出てきた量 ≤ 申告サイズ」の上限（`producedLimit`・C1）で止める。
+///
+/// **メモリの残り（既知・受け入れ済み・G64 fix2）:** 1 回のヘッダの読みは、解いたヘッダのデータに比例するメモリを確保しうる。
+/// 例えば pax の GNU.sparse 1.0 の地図は、地図のエントリ 1 つにつき約 32 バイトを確保し、libarchive に数の上限が無い。
+/// gzip ならファイルの大きさの約 1000 倍に達しうる。これは歩く量の予算では縛れない（AppleDouble の blob は `mac-ext` を切って塞いだ）。
 ///
 /// 上限を超えたら、その位置でヘッダが読めなくなったのと同じに扱う（読めた分があれば打ち切り＝破損、無ければ開けない）。
 /// 新しい文言は出さない。**tar のときだけ数える**（zip・rar・7z は今のまま）。
