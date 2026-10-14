@@ -80,6 +80,10 @@ public actor SequentialArchiveExtractor {
             if let data = try streamForward(to: name) { return data }
         } catch is CancellationError {
             throw CancellationError()          // カーソル有効のまま（次要求が続きから進める）
+        } catch ArchiveAdapterError.archiveUnreadable(let u, let reason)
+                    where reason == TarWalkBudget.exceededReason || reason == TarWalkBudget.overrunReason {
+            // G64: 上限超過は何度やっても同じ。ハンドルを捨てて再試行すると上限までの歩きを繰り返すだけなので、そのまま投げる。
+            throw ArchiveAdapterError.archiveUnreadable(u, reason: reason)
         } catch {
             resetHandle()                      // 破損等: ハンドルを捨てる
             if let data = try? streamForward(to: name) { return data }  // 再オープンして 1 回だけ再試行
@@ -124,7 +128,7 @@ public actor SequentialArchiveExtractor {
             guard imageNames.contains(entryName) else {
                 archive_read_data_skip(archive); continue
             }
-            let data = try readCurrentEntryData()
+            let data = try readCurrentEntryData(entry: entry)
             let fileURL = tempDir.appendingPathComponent(UUID().uuidString)
             try data.write(to: fileURL, options: .atomic)
             extracted[entryName] = fileURL
@@ -168,7 +172,9 @@ public actor SequentialArchiveExtractor {
     /// セキュリティ: `archive_entry_size` は自己申告値で信頼できないため事前チェックせず、
     /// 実際に読み取った累積バイト数を毎チャンク後にチェックする（decompression-bomb / OOM 対策）。
     /// 上限超過時は `out` を捨てて即 throw — それ以上の蓄積・確保を行わない。
-    private func readCurrentEntryData() throws -> Data {
+    private func readCurrentEntryData(entry: OpaquePointer) throws -> Data {
+        // G64: tar は出てきた量を申告サイズでも縛る（既存の上限に加えて。zip 系は nil＝今のまま）。
+        let producedLimit = archive.flatMap { TarWalkBudget.producedLimit($0, entry: entry) }
         var out = Data()
         let bufSize = 256 * 1024
         var buf = [UInt8](repeating: 0, count: bufSize)
@@ -180,6 +186,9 @@ public actor SequentialArchiveExtractor {
                 throw ArchiveAdapterError.archiveUnreadable(url, reason: errorMessage())
             }
             if n == 0 { break }
+            if let producedLimit, Int64(out.count) + Int64(n) > producedLimit {
+                throw ArchiveAdapterError.archiveUnreadable(url, reason: TarWalkBudget.overrunReason)
+            }
             if ArchiveEntrySizeLimit.shouldReject(size: out.count + n, limit: maxEntryBytes) {
                 throw ArchiveAdapterError.archiveUnreadable(
                     url,

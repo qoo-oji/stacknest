@@ -177,12 +177,22 @@ public enum ArchiveIntegrityVerifier {
             // archive_read_data_skip の代わりに実データを読む。libarchive はこの読み取りで
             // CRC を検証し、不一致その他の読み取り失敗は負値を返す。
             var bad = false
+            // G64: tar は出てきた量を申告サイズで縛る（sparse の穴の 0 埋めが無限に出るのを止める）。zip 系は nil＝今のまま。
+            let producedLimit = TarWalkBudget.producedLimit(archive, entry: entry)
+            var produced: Int64 = 0
             readLoop: while true {
+                // 長い読みでも中断できるよう、チャンクごとに見る。
+                if isCancelled() {
+                    return ArchiveVerifyResult(entryCount: entryCount, imageCount: imageCount,
+                                               badEntries: badEntries, truncated: true)
+                }
                 let got = buffer.withUnsafeMutableBytes { rawBuf -> Int in
                     archive_read_data(archive, rawBuf.baseAddress, rawBuf.count)
                 }
                 if got == 0 { break readLoop }      // このエントリを読み切った
                 if got < 0 { bad = true; break readLoop }  // CRC 不一致等
+                produced += Int64(got)
+                if let producedLimit, produced > producedLimit { bad = true; break readLoop }
             }
             if bad {
                 badEntries.append(name)

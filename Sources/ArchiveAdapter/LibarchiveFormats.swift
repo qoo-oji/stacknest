@@ -98,6 +98,12 @@ enum LibarchiveFormats {
 /// macOS の libarchive 3.7.4 で実測 2026-10-09: 2 MiB＋1 バイトで「Special header too large」、33 個目で「Too many special headers」）と、
 /// gzip の膨らみ方（約 1000 倍）で頭打ちになる（`LibarchiveFormats` を参照）。
 ///
+/// **この予算が縛れないもの（受け入れ済み・G64 fix1 I1）:** (1) 1 回のヘッダの読みの中、(2) 1 つのエントリのデータ読み飛ばし。
+/// sparse のエントリは、申告サイズ（実サイズ）と読み飛ばしで実際に消費する量（格納サイズ）が違いうるので、ヘッダ 1 つの読みと
+/// データ読み飛ばし 1 回は、予測を超えうる（超過は次のヘッダで初めて見える）。どちらも外側の圧縮の膨らみ方（gzip で約 1000 倍）×
+/// ファイルの大きさで頭打ちになり、同じ種類の残りとして受け入れる。データの**読み出し**（`archive_read_data`）は別で、
+/// sparse の穴の 0 埋めが申告サイズを超えて出続けるのを、エントリごとの「出てきた量 ≤ 申告サイズ」の上限（`producedLimit`・C1）で止める。
+///
 /// 上限を超えたら、その位置でヘッダが読めなくなったのと同じに扱う（読めた分があれば打ち切り＝破損、無ければ開けない）。
 /// 新しい文言は出さない。**tar のときだけ数える**（zip・rar・7z は今のまま）。
 public struct TarWalkLimits: Sendable, Equatable {
@@ -136,6 +142,18 @@ public struct TarWalkLimits: Sendable, Equatable {
 struct TarWalkBudget {
     /// 上限を超えたときに投げるエラーの理由（ログ用・永続化はしない。`QuickIntegrityScanner` が固定の分類名に写す）。
     static let exceededReason = "archive walk limit exceeded"
+    /// tar のエントリのデータが、ヘッダの申告サイズより多く出てきたときの理由（sparse の穴の 0 埋めなど）。
+    static let overrunReason = "tar entry data exceeds declared size"
+
+    /// tar 系のエントリで、サイズが設定されているときの「読んでよい量」（max(0, 申告サイズ)）。それ以外（zip・rar・7z・
+    /// サイズ未設定のストリーミング）は nil＝この上限を掛けない。
+    /// GNU sparse のエントリは、実サイズ 0 のまま sparse の開始位置を 2^N にでき、`archive_read_data` は穴を 0 で埋めて
+    /// 最大 2^N バイトを出す。ヘッダ時点の予算には見えないので、出てきた量を申告サイズで縛る（G64 fix1・C1）。
+    static func producedLimit(_ archive: OpaquePointer, entry: OpaquePointer) -> Int64? {
+        guard archive_format(archive) & ARCHIVE_FORMAT_BASE_MASK == ARCHIVE_FORMAT_TAR,
+              archive_entry_size_is_set(entry) != 0 else { return nil }
+        return max(0, archive_entry_size(entry))
+    }
 
     private let maxEntries: Int
     private let limitBytes: Int64
@@ -143,7 +161,9 @@ struct TarWalkBudget {
     private var declaredBytes: Int64 = 0
 
     init(url: URL, limits: TarWalkLimits) {
-        let fileSize = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        // シンボリックリンクは辿る（辿らないとリンク自身の大きさ＝数十バイトになり、上限が潰れる）。
+        let resolved = url.resolvingSymlinksInPath()
+        let fileSize = ((try? FileManager.default.attributesOfItem(atPath: resolved.path))?[.size] as? NSNumber)?.int64Value ?? 0
         self.maxEntries = limits.maxEntries
         self.limitBytes = limits.limitBytes(fileSize: fileSize)
     }
