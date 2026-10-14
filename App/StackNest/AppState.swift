@@ -1439,7 +1439,7 @@ final class AppState {
         for book in books {
             if let viewer = referenceViewer(for: book),
                await servesPagesByReference(book, userExtensions: userExtensions) {
-                if let failure = await handOffToExternalViewer(book, viewer: viewer) {
+                if let failure = await handOffToExternalViewer(book, viewer: viewer, userExtensions: userExtensions) {
                     if failure == .libraryLocked {
                         // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
                         // 解錠シートの出る状態にして、解錠後にもう一度開いてもらう。
@@ -1472,7 +1472,8 @@ final class AppState {
     }
 
     /// G60: 1 冊を参照ファイルで渡す。開く位置は保存済みの読書位置。
-    private func handOffToExternalViewer(_ book: BookRow, viewer: ReferenceViewer) async -> ExternalViewerHandoff.Failure? {
+    private func handOffToExternalViewer(_ book: BookRow, viewer: ReferenceViewer,
+                                         userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) async -> ExternalViewerHandoff.Failure? {
         guard let settings = librarySettings else { return .tokenUnavailable }
         let startPage = (try? database?.loadViewerState(bookID: book.id))?.lastPage ?? 0
         // ロックの世代は、127.0.0.1 の口が照合に使うのと同じ DB の値（`ServedLibrary.currentLockCredential()`）
@@ -1488,7 +1489,7 @@ final class AppState {
             startPage: startPage,
             direction: book.pageDirection ?? viewerSettings.pageDirection,
             settings: viewerSettings,
-            userExtensions: userExtensions(),
+            userExtensions: userExtensions,
             onNotUsed: { [weak self] name in self?.presentViewerDidNotLoad(book, viewerName: name) },
             onUsed: { [weak self] in self?.dismissViewerDidNotLoad() })
     }

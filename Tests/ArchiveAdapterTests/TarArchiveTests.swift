@@ -40,7 +40,7 @@ struct TarArchiveTests {
     func listsCountsAndExtracts(fileName: String) async throws {
         let (url, dir, pages) = try Self.makeTar(named: fileName, gzip: fileName.hasSuffix(".tgz"))
         defer { try? FileManager.default.removeItem(at: dir) }
-        let extractor = LibarchiveCoverExtractor(allowsCompressedTar: true)   // .tgz は足した拡張子として読む
+        let extractor = LibarchiveCoverExtractor(allowsCompressedTar: fileName.hasSuffix(".tgz"))   // .tgz だけ足した拡張子として読む（本番と同じ）
 
         let listing = try await extractor.listImageEntries(in: url)
         #expect(listing.names == ["page01.png", "page02.png", "page10.png"])
@@ -67,7 +67,7 @@ struct TarArchiveTests {
     func verifierReadsTarToTheEnd(fileName: String) throws {
         let (url, dir, _) = try Self.makeTar(named: fileName, gzip: fileName.hasSuffix(".tgz"))
         defer { try? FileManager.default.removeItem(at: dir) }
-        let result = try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: true)
+        let result = try ArchiveIntegrityVerifier.verifySync(url: url, allowsCompressedTar: fileName.hasSuffix(".tgz"))
         #expect(result == ArchiveVerifyResult(entryCount: 4, imageCount: 3, badEntries: [], truncated: false))
     }
 
@@ -122,7 +122,7 @@ struct TarArchiveTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("zeros.cbt")
         try Data(count: 4096).write(to: url)
-        let listing = try await LibarchiveCoverExtractor(allowsCompressedTar: true).listImageEntries(in: url)
+        let listing = try await LibarchiveCoverExtractor().listImageEntries(in: url)
         #expect(listing.names.isEmpty && listing.truncated == false)
     }
 
