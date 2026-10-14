@@ -2,9 +2,10 @@
 import Foundation
 
 extension ArchiveAdapter {
-    /// libarchive がそのまま読める zip 系アーカイブの拡張子。フォルダは別枠（isDirectory 判定）。
-    /// `coverExtractor(for:)` と `importExtractor(for:)` の両方がこの集合を土台にする。
-    private static let libarchiveExtensions: Set<String> = ["zip", "cbz", "cbr", "rar", "7z", "cb7"]
+    /// libarchive がそのまま読める標準のアーカイブの拡張子（G64 で tar の `cbt`・`tar` を加えた）。
+    /// フォルダは別枠（isDirectory 判定）。`coverExtractor(for:)` と `importExtractor(for:)` の両方がこの集合を土台にする。
+    /// 足した拡張子は AppCore の `BookExtractors` が振る（ArchiveAdapter は AppCore の一覧を見られない）。
+    private static let libarchiveExtensions: Set<String> = ["zip", "cbz", "cbr", "rar", "7z", "cb7", "cbt", "tar"]
 
     /// **表紙候補を選ぶ用。** フォルダ・zip 系アーカイブに加え、EPUB・PDF（G54-S4）のように
     /// 取り込み時は専用経路を持つが「中の画像を表紙として選び直したい」形式も対象にする

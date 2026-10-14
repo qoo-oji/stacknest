@@ -27,6 +27,9 @@ public actor SequentialArchiveExtractor {
     /// セキュリティ: 1 エントリあたりの読み取り累積サイズ上限（decompression-bomb / OOM 対策）。
     /// 既定は `ArchiveEntrySizeLimit.maxEntryBytes`。テストで小さい値を注入できるよう引数化している。
     private let maxEntryBytes: Int
+    /// G64: tar を歩く仕事の上限（開き直すたびに数え直す）。
+    private let walkLimits: TarWalkLimits
+    private var walkBudget: TarWalkBudget?
 
     /// libarchive ハンドル。アクセスは actor が直列化する（deinit の解放のためだけ
     /// nonisolated(unsafe)＝実アクセスは全て actor 上なので安全）。
@@ -36,10 +39,12 @@ public actor SequentialArchiveExtractor {
     /// 抽出済みエントリ名 → temp ファイル URL。
     private var extracted: [String: URL] = [:]
 
-    public init(url: URL, imageNames: Set<String>, maxEntryBytes: Int = ArchiveEntrySizeLimit.maxEntryBytes) {
+    public init(url: URL, imageNames: Set<String>, maxEntryBytes: Int = ArchiveEntrySizeLimit.maxEntryBytes,
+                walkLimits: TarWalkLimits = .standard) {
         self.url = url
         self.imageNames = imageNames
         self.maxEntryBytes = maxEntryBytes
+        self.walkLimits = walkLimits
         self.tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("stacknest-arc-\(UUID().uuidString)", isDirectory: true)
     }
@@ -98,6 +103,10 @@ public actor SequentialArchiveExtractor {
             var entry: OpaquePointer?
             let r = archive_read_next_header(archive, &entry)
             if r == ARCHIVE_EOF { atEOF = true; return nil }
+            // G64: tar を歩く量の上限を超えたら、ヘッダが読めなくなったのと同じに扱う。
+            if let archive, walkBudget?.exceeds(archive, header: r, entry: entry) == true {
+                throw ArchiveAdapterError.archiveUnreadable(url, reason: TarWalkBudget.exceededReason)
+            }
             if r != ARCHIVE_OK && r != ARCHIVE_WARN {
                 throw ArchiveAdapterError.archiveUnreadable(url, reason: errorMessage())
             }
@@ -138,11 +147,7 @@ public actor SequentialArchiveExtractor {
         guard let a = archive_read_new() else {
             throw ArchiveAdapterError.archiveUnreadable(url, reason: "archive_read_new failed")
         }
-        archive_read_support_format_zip(a)
-        archive_read_support_format_rar(a)
-        archive_read_support_format_rar5(a)
-        archive_read_support_format_7zip(a)
-        archive_read_support_filter_all(a)
+        LibarchiveFormats.enable(a, for: url)
         let status = url.path.withCString { cPath in
             archive_read_open_filename(a, cPath, 16384)
         }
@@ -155,6 +160,7 @@ public actor SequentialArchiveExtractor {
         archive = a
         opened = true
         atEOF = false
+        walkBudget = TarWalkBudget(url: url, limits: walkLimits)
     }
 
     /// 現在のエントリの全データを読み切る（サイズ未知の format にも対応するため 0 が返るまでループ）。

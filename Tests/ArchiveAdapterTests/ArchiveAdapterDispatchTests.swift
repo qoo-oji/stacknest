@@ -133,7 +133,7 @@ struct ArchiveAdapterDispatchTests {
     }
 
     @Test("取り込み用は zip 系で libarchive の抽出器を返す",
-          arguments: ["zip", "cbz", "cbr", "rar", "7z", "cb7"])
+          arguments: ["zip", "cbz", "cbr", "rar", "7z", "cb7", "cbt", "tar", "CBT"])
     func importExtractorReturnsLibarchiveForZipFamily(ext: String) {
         let url = URL(fileURLWithPath: "/tmp/foo.\(ext)")
         #expect(ArchiveAdapter.importExtractor(for: url) is LibarchiveCoverExtractor)
@@ -152,5 +152,18 @@ struct ArchiveAdapterDispatchTests {
     func importExtractorReturnsNilForUnsupported(ext: String) {
         let url = URL(fileURLWithPath: "/tmp/foo.\(ext)")
         #expect(ArchiveAdapter.importExtractor(for: url) == nil)
+    }
+
+    // MARK: - G64: 標準の tar
+
+    @Test("G64: 表紙候補用も cbt・tar で libarchive の抽出器を返す", arguments: ["cbt", "tar", "TAR"])
+    func coverExtractorReturnsLibarchiveForTar(ext: String) {
+        #expect(ArchiveAdapter.coverExtractor(for: URL(fileURLWithPath: "/tmp/foo.\(ext)")) is LibarchiveCoverExtractor)
+    }
+
+    @Test("G64: 足した拡張子は ArchiveAdapter では未知のまま（AppCore の BookExtractors が振る）")
+    func addedExtensionsAreNotKnownHere() {
+        #expect(ArchiveAdapter.coverExtractor(for: URL(fileURLWithPath: "/tmp/foo.tgz")) == nil)
+        #expect(ArchiveAdapter.importExtractor(for: URL(fileURLWithPath: "/tmp/foo.tgz")) == nil)
     }
 }

@@ -80,7 +80,9 @@ public enum ArchiveIntegrityVerifier {
     /// G34a 以前は `isCancelled: () async -> Bool` を取る async 版だったが、
     /// 上記の理由で同期版へ一本化した（本番呼び出しは `FullIntegrityScanner.liveDependencies`
     /// の 1 箇所のみで、そこは実行器経由になったため async 版に利用者がいなくなった）。
-    public static func verifySync(url: URL, isCancelled: () -> Bool = { false }) throws -> ArchiveVerifyResult {
+    /// - G64: tar は `walkLimits` で歩く量を縛る（超えたら構造破綻と同じ＝打ち切り、1 件も無ければ throw）。
+    public static func verifySync(url: URL, isCancelled: () -> Bool = { false },
+                                  walkLimits: TarWalkLimits = .standard) throws -> ArchiveVerifyResult {
         // ★ G34a fix2: ファイルは**自分で開いて `F_NOCACHE` を立ててから**渡す。
         //
         // 走査は 1 冊あたり数十 MB を読んで**すべて捨てる**（CRC を検証したいだけでデータは要らない）。
@@ -109,11 +111,7 @@ public enum ArchiveIntegrityVerifier {
         }
         defer { archive_read_free(archive) }
 
-        archive_read_support_format_zip(archive)
-        archive_read_support_format_rar(archive)
-        archive_read_support_format_rar5(archive)
-        archive_read_support_format_7zip(archive)
-        archive_read_support_filter_all(archive)
+        LibarchiveFormats.enable(archive, for: url)
 
         // ブロックサイズは 16KB ではなく 1MB。`F_NOCACHE` はカーネルの先読みも止めるため、
         // 16KB のままだと 50MB の本で 3,200 回の小さなデバイス read になり、走査が 16% 遅くなった
@@ -130,6 +128,7 @@ public enum ArchiveIntegrityVerifier {
         var buffer = [UInt8](repeating: 0, count: bufferSize)
 
         var entry: OpaquePointer?
+        var budget = TarWalkBudget(url: url, limits: walkLimits)
         while true {
             // エントリ単位の中断確認（次のヘッダを読む/読まないの境界で見る）。
             if isCancelled() {
@@ -139,11 +138,13 @@ public enum ArchiveIntegrityVerifier {
 
             let r = archive_read_next_header(archive, &entry)
             if r == ARCHIVE_EOF { break }
-            if r != ARCHIVE_OK && r != ARCHIVE_WARN {
+            // G64: tar を歩く量の上限を超えたら、構造破綻と同じに扱う。
+            let overBudget = budget.exceeds(archive, header: r, entry: entry)
+            if (r != ARCHIVE_OK && r != ARCHIVE_WARN) || overBudget {
                 // G26 の規則: 構造破綻で途中打ち切り。集めた分を truncated=true で返す。
                 // 1 件も集まっていなければ「0 ページの本」として黙って開かせないため throw する。
                 if entryCount == 0 {
-                    let msg = errorMessage(archive)
+                    let msg = overBudget ? TarWalkBudget.exceededReason : errorMessage(archive)
                     throw ArchiveAdapterError.enumerationFailed(url, reason: msg.isEmpty ? "read header failed" : msg)
                 }
                 return ArchiveVerifyResult(entryCount: entryCount, imageCount: imageCount,
