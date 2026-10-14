@@ -196,6 +196,8 @@ final class FolderWatcher {
             guard !grouped.isEmpty else { return }
 
             var total = BookImporter.ImportResult()
+            // G64: 1 回の走査は 1 つの一覧で通す（バッチの途中で設定が変わっても混ざらない）。
+            let userExtensions = UserExtensionStore.shared.snapshot
             for (key, urls) in grouped {
                 // プリセットごとのバッチ境界で停止を見る（G35 Codex 3 巡目 P1 の緩和）。
                 // G36 で `BookImporter.add` 自身が**本の境界**で中断に協調するようになった
@@ -211,7 +213,8 @@ final class FolderWatcher {
                     urls: urls,
                     autoClassifyEnabled: ImportDefaults.effectiveAutoClassify(db: database),
                     thickThreshold: ImportDefaults.effectiveThickThreshold(db: database),
-                    preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: database))
+                    preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: database),
+                    userExtensions: userExtensions)
                 total.merge(r)
             }
 

@@ -20,6 +20,7 @@ public final class BookAddCoordinator {
             urls: urls,
             autoClassifyEnabled: ImportDefaults.effectiveAutoClassify(db: database),
             thickThreshold: ImportDefaults.effectiveThickThreshold(db: database),
-            preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: database))
+            preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: database),
+            userExtensions: UserExtensionStore.shared.snapshot)
     }
 }

@@ -4,6 +4,7 @@ import Foundation
 import Hummingbird
 import HummingbirdTesting
 import LibraryServerAPI
+import AppCore
 @testable import LibraryServer
 
 @Suite("POST /books endpoint")
@@ -122,5 +123,38 @@ struct AddBooksEndpointTests {
                 #expect(reply.alreadyPresent.contains(pngURL.path))
             }
         }
+    }
+
+    // MARK: - G64: サーバの一覧で分類する
+
+    /// `POST books` は `LibraryServerConfig.userExtensions`（書庫を持つ Mac の一覧）で分類する。
+    /// 中身が PNG の `.foo` を画像として足したサーバでは 1 ページの画像の本になる。
+    @Test func addUsesTheServersExtensionList() async throws {
+        let fixture = try TestLibraryFixture(name: "AddG64", bookCount: 0)
+        defer { fixture.cleanup() }
+        let lib = fixture.servedLibrary()
+        let app = LibraryServerCore(
+            config: .init(port: 0, token: "R", editToken: "W", adminTier: true,
+                          userExtensions: { ["foo": .image] }),
+            dataSource: StaticLibraryDataSource(libraries: [lib])
+        ).buildApplication()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("g64-add-\(UUID().uuidString).foo")
+        try minimalPNG().write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try await app.test(.router) { client in
+            let body = try JSONEncoder().encode(AddBooksRequestDTO(paths: [url.path]))
+            try await client.execute(
+                uri: "/api/v1/libraries/\(lib.uuid)/books", method: .post,
+                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                body: .init(bytes: Array(body))
+            ) { response in
+                #expect(response.status == .ok)
+                let reply = try decodeReply(response.body)
+                #expect(reply.addedIDs.count == 1)
+            }
+        }
+        let book = try #require(try fixture.db.fetchAllBooks().first { $0.path == url.path })
+        #expect(book.pages == 1)
     }
 }

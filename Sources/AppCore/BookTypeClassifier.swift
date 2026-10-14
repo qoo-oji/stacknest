@@ -13,8 +13,10 @@ public enum BookTypeClassifier {
     ///   打ち切り読みの 13 ページで「薄い本」と決めつけると、その分類は**永続化され、修復後も
     ///   見直されない** — `books.pages` を書かないのと同じ理由でページ数由来の判定自体を止める。
     ///   ページ数に依存しない分類（動画/テキスト/フォルダ/画像）は nil でも従来どおり働く。
-    public static func autoClassify(url: URL, pageCount: Int?, thickThreshold: Int) -> Int {
-        let category = BookCategory.classify(path: url.path)
+    /// - Parameter userExtensions: G64: 足した拡張子の一覧（取り込みは 1 回の取り込みで読んだ 1 つを渡す）。
+    public static func autoClassify(url: URL, pageCount: Int?, thickThreshold: Int,
+                                    userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) -> Int {
+        let category = BookCategory.classify(path: url.path, userExtensions: userExtensions)
         switch category {
         case .video:  return 5
         case .text:   return 4

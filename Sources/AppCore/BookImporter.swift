@@ -81,7 +81,10 @@ public struct BookImporter: Sendable {
     ///     `autoClassifyEnabled` と同じく既定値を持たない — 渡し忘れをコンパイルエラーで止めるため
     ///     （既定値があると、新しい取り込み経路を足す人が気づかず省略してもビルドが通ってしまい、
     ///     その経路だけ設定が黙って効かなくなる）。
-    public func add(urls: [URL], autoClassifyEnabled: Bool, thickThreshold: Int, preferEPUBTitle: Bool) async -> ImportResult {
+    ///   - userExtensions: G64: 足した拡張子の一覧。呼び出し側が `UserExtensionStore.shared.snapshot` を **1 回だけ**読んで渡す
+    ///     （1 回の取り込みは 1 つの一覧で最後まで通す）。`preferEPUBTitle` と同じ理由で既定値を持たない。
+    public func add(urls: [URL], autoClassifyEnabled: Bool, thickThreshold: Int, preferEPUBTitle: Bool,
+                    userExtensions: UserExtensionMap) async -> ImportResult {
         var result = ImportResult()
         let existingPaths = (try? Set(database.fetchAllBooks().map { $0.path ?? "" })) ?? []
         let thumbnailsDir = bundleURL.appendingPathComponent("Thumbnails")
@@ -163,7 +166,7 @@ public struct BookImporter: Sendable {
                     // pageCount は 0 のまま。取れない形式（mkv/webm/avi）・破損は nil のまま
                     // 既存の coverFailures 経路に落ちる（取り込みは続く）。
                     coverDataOverride = try? await VideoFrameExtractor.autoCoverData(url: url, maxPixelSize: 1200)
-                } else if BookCategory.classify(path: url.path) == .image {
+                } else if BookCategory.classify(path: url.path, userExtensions: userExtensions) == .image {
                     // Phase 2.5g+h+i fixup v1: 単独 image を追加した場合、その image を
                     // そのまま thumbnail として使う (resize は CoverImageResizer で 1200 px 化)。
                     pageCount = 1
@@ -192,7 +195,8 @@ public struct BookImporter: Sendable {
                         url: url,
                         pageCount: TruncatedReadPolicy.pageCountForClassification(
                             livePageCount: pageCount, truncated: pageCountTruncated),
-                        thickThreshold: thickThreshold
+                        thickThreshold: thickThreshold,
+                        userExtensions: userExtensions
                     )
                 } else {
                     // 旧挙動: フォルダ → 3、それ以外 → 0

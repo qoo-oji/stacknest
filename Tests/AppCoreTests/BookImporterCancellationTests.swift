@@ -48,7 +48,7 @@ struct BookImporterCancellationTests {
                                     format: try FilenameFormat(raw: "@title"))
 
         let task = Task {
-            await importer.add(urls: urls, autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+            await importer.add(urls: urls, autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
         }
         task.cancel()
         let result = await task.value
@@ -74,7 +74,7 @@ struct BookImporterCancellationTests {
         let importer = BookImporter(database: db, bundleURL: bundle,
                                     format: try FilenameFormat(raw: "@title"))
 
-        let result = await importer.add(urls: urls, autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+        let result = await importer.add(urls: urls, autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
 
         #expect(result.cancelled == false)
     }

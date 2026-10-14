@@ -53,4 +53,29 @@ struct BookTypeClassifierTests {
         #expect(BookTypeClassifier.autoClassify(url: url("/x/a.txt"), pageCount: nil, thickThreshold: 20) == 4)
         #expect(BookTypeClassifier.autoClassify(url: url("/x/a.jpg"), pageCount: nil, thickThreshold: 20) == 3)
     }
+
+    // MARK: - G64: 足した拡張子と標準の tar
+
+    @Test func addedExtensionsUseTheirCategory() {
+        let added: UserExtensionMap = ["tgz": .archive, "avif": .image, "3gp": .video, "docx": .text]
+        func classify(_ name: String, _ pages: Int?) -> Int {
+            BookTypeClassifier.autoClassify(url: URL(fileURLWithPath: "/tmp/\(name)"), pageCount: pages,
+                                            thickThreshold: 100, userExtensions: added)
+        }
+        #expect(classify("a.3gp", 0) == 5)
+        #expect(classify("a.docx", 0) == 4)
+        #expect(classify("a.avif", 1) == 3)
+        #expect(classify("a.tgz", 150) == 0)
+        #expect(classify("a.tgz", 20) == 1)
+        // 読めなかった足したアーカイブは呼び出し側が nil を渡す → 厚い本（自動分類 OFF と同じ既定）。
+        #expect(classify("a.tgz", nil) == 0)
+    }
+
+    @Test func standardTarIsJudgedByPageCountLikeZip() {
+        for ext in ["cbt", "tar"] {
+            let url = URL(fileURLWithPath: "/tmp/a.\(ext)")
+            #expect(BookTypeClassifier.autoClassify(url: url, pageCount: 150, thickThreshold: 100, userExtensions: [:]) == 0)
+            #expect(BookTypeClassifier.autoClassify(url: url, pageCount: 20, thickThreshold: 100, userExtensions: [:]) == 1)
+        }
+    }
 }

@@ -239,7 +239,7 @@ struct EPUBReaderGlobalTests {
             let epub = dir.appendingPathComponent("sample.epub")
             try Data("zz".utf8).write(to: epub)
 
-            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
             #expect(result.addedIDs.count == 1)
             #expect(result.coverFailures.isEmpty)
             #expect(try db.fetchAllBooks().count == 1)
@@ -263,7 +263,7 @@ struct EPUBReaderGlobalTests {
             let epub = dir.appendingPathComponent("sample.epub")
             try Data("zz".utf8).write(to: epub)
 
-            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
             guard let id = result.addedIDs.first else {
                 Issue.record("expected one added book id")
                 return
@@ -281,7 +281,7 @@ struct EPUBReaderGlobalTests {
             let epub = dir.appendingPathComponent("sample.epub")
             try Data("zz".utf8).write(to: epub)
 
-            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+            let result = await importer.add(urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
             guard let id = result.addedIDs.first else {
                 Issue.record("expected one added book id")
                 return
@@ -327,7 +327,7 @@ struct EPUBReaderGlobalTests {
             try Data("zz".utf8).write(to: epub)
 
             let result = await importer.add(
-                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
             guard let id = result.addedIDs.first else {
                 Issue.record("expected one added book id")
                 return
@@ -346,7 +346,7 @@ struct EPUBReaderGlobalTests {
             try Data("zz".utf8).write(to: epub)
 
             let result = await importer.add(
-                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true)
+                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true, userExtensions: [:])
             guard let id = result.addedIDs.first else {
                 Issue.record("expected one added book id")
                 return
@@ -365,7 +365,7 @@ struct EPUBReaderGlobalTests {
             try Data("zz".utf8).write(to: epub)
 
             let result = await importer.add(
-                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true)
+                urls: [epub], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true, userExtensions: [:])
             guard let id = result.addedIDs.first else {
                 Issue.record("expected one added book id")
                 return
@@ -383,7 +383,7 @@ struct EPUBReaderGlobalTests {
             let epubOff = dirOff.appendingPathComponent("filename-title.epub")
             try Data("zz".utf8).write(to: epubOff)
             let resultOff = await importerOff.add(
-                urls: [epubOff], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false)
+                urls: [epubOff], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: false, userExtensions: [:])
             guard let idOff = resultOff.addedIDs.first else {
                 Issue.record("expected one added book id (off)")
                 return
@@ -394,7 +394,7 @@ struct EPUBReaderGlobalTests {
             let epubOn = dirOn.appendingPathComponent("filename-title.epub")
             try Data("zz".utf8).write(to: epubOn)
             let resultOn = await importerOn.add(
-                urls: [epubOn], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true)
+                urls: [epubOn], autoClassifyEnabled: false, thickThreshold: 100, preferEPUBTitle: true, userExtensions: [:])
             guard let idOn = resultOn.addedIDs.first else {
                 Issue.record("expected one added book id (on)")
                 return

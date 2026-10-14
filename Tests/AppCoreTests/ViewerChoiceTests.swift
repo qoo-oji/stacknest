@@ -57,4 +57,19 @@ struct ViewerChoiceTests {
             #expect(ViewerChoice.shouldTryBuiltIn(forPath: "/tmp/a.txt", settings: s) == false)
         }
     }
+
+    // MARK: - G64: 足した拡張子は選んだ種類のとおり
+
+    @Test("G64: 足した動画・テキストは外部、足したアーカイブ・画像と標準の tar は画像側")
+    func addedExtensionsFollowTheirCategory() {
+        let added: UserExtensionMap = ["tgz": .archive, "avif": .image, "3gp": .video, "docx": .text]
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.3gp", userExtensions: added) == .externalOnly)
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.docx", userExtensions: added) == .externalOnly)
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.tgz", userExtensions: added) == .image)
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.avif", userExtensions: added) == .image)
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.cbt", userExtensions: [:]) == .image)
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.tar", userExtensions: [:]) == .image)
+        // 足していなければ今どおり未知＝アーカイブ＝画像側。
+        #expect(ViewerChoice.viewerSwitch(forPath: "/tmp/a.3gp", userExtensions: [:]) == .image)
+    }
 }

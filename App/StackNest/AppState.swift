@@ -2264,7 +2264,8 @@ final class AppState {
                 urls: urls,
                 autoClassifyEnabled: ImportDefaults.effectiveAutoClassify(db: db),
                 thickThreshold: ImportDefaults.effectiveThickThreshold(db: db),
-                preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: db))
+                preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(db: db),
+                userExtensions: UserExtensionStore.shared.snapshot)
             presentWatchSummary(result)
         }
     }

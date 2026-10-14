@@ -16,8 +16,10 @@ public enum ViewerSwitch: String, Sendable, Equatable, CaseIterable {
 /// **同じ規則**を使うために、判定をここ 1 か所に閉じ込める。
 public enum ViewerChoice {
     /// 拡張子とディレクトリ判定から、どのスイッチに従うかを決める。
-    public static func viewerSwitch(forPath path: String) -> ViewerSwitch {
-        switch BookCategory.classify(path: path) {
+    /// G64: 足した拡張子は選んだ種類のとおり（足したテキスト・動画は `.externalOnly`、足したアーカイブ・画像は `.image`）。
+    public static func viewerSwitch(forPath path: String,
+                                    userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) -> ViewerSwitch {
+        switch BookCategory.classify(path: path, userExtensions: userExtensions) {
         case .archive, .image, .folder:
             return .image
         case .video:

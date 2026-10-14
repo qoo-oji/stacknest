@@ -103,6 +103,9 @@ public struct LibraryServerConfig: Sendable {
     /// 付けるなら `viewerTokenIssuer` は `.localEndpoint` でなければならない（`relayConfigurationIsValid`。
     /// `LibraryServerCore.init` が precondition で確かめ、ルートの登録も同じ条件で絞る）。
     public var viewerRelay: ViewerRelayConfig?
+    /// G64: 足した拡張子の一覧（書庫を持つ Mac の一覧）。既定は App の `UserExtensionStore.shared` の今の値。
+    /// 取り込み・manifest・表紙はこの値で分類する（テストは固定の一覧を渡す）。1 回の要求は 1 回だけ読む。
+    public var userExtensions: @Sendable () -> UserExtensionMap
 
     /// G60 v3: 中継を付けてよい形か（中継は 127.0.0.1 の口だけ＝発行先 `.localEndpoint` の口だけ）。
     /// 共有サーバ（`.sharedServer`）に誤って中継を渡すと、ネットワークの向こうからリモートのサーバへ
@@ -136,7 +139,8 @@ public struct LibraryServerConfig: Sendable {
                 viewerTokens: ViewerTokenStore? = nil,
                 viewerTokenIssuer: ViewerTokenIssuer = .sharedServer,
                 acceptsPrincipalTokens: Bool = true,
-                viewerRelay: ViewerRelayConfig? = nil) {
+                viewerRelay: ViewerRelayConfig? = nil,
+                userExtensions: @escaping @Sendable () -> UserExtensionMap = { UserExtensionStore.shared.snapshot }) {
         self.host = host
         self.port = port
         self.token = token
@@ -164,6 +168,7 @@ public struct LibraryServerConfig: Sendable {
         self.viewerTokenIssuer = viewerTokenIssuer
         self.acceptsPrincipalTokens = acceptsPrincipalTokens
         self.viewerRelay = viewerRelay
+        self.userExtensions = userExtensions
     }
 }
 
@@ -1027,7 +1032,7 @@ public struct LibraryServerCore: Sendable {
             return StampApplyReply(updated: updated)
         }
         // 4.2d-2: ローカルパスのファイルをライブラリに追加（in-place・admin）。
-        api.post("libraries/:lib/books") { [self] request, context in
+        api.post("libraries/:lib/books") { [self, config] request, context in
             try context.requireAdmin()
             let lib = try await resolver.resolveLibrary(request, context)
             let body = try await request.decode(as: AddBooksRequestDTO.self, context: context)
@@ -1045,7 +1050,8 @@ public struct LibraryServerCore: Sendable {
                 urls: urls,
                 autoClassifyEnabled: ImportDefaults.effectiveAutoClassify(override: acOverride),
                 thickThreshold: ImportDefaults.effectiveThickThreshold(override: thOverride),
-                preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(override: ptOverride))
+                preferEPUBTitle: ImportDefaults.effectivePreferEPUBTitle(override: ptOverride),
+                userExtensions: config.userExtensions())
             // 行が増えるので全リロード通知（onBookChanged はメタ更新用で新規行に効かない）。
             if !result.addedIDs.isEmpty { self.notifyStructureChanged(lib.uuid) }
             return AddBooksReplyDTO(
