@@ -1488,6 +1488,7 @@ final class AppState {
             startPage: startPage,
             direction: book.pageDirection ?? viewerSettings.pageDirection,
             settings: viewerSettings,
+            userExtensions: userExtensions(),
             onNotUsed: { [weak self] name in self?.presentViewerDidNotLoad(book, viewerName: name) },
             onUsed: { [weak self] in self?.dismissViewerDidNotLoad() })
     }

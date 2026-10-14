@@ -103,13 +103,15 @@ struct ExternalViewerHandoff {
                    lockCredential: () -> String?, verifiedLockHash: () -> String?,
                    startPage: Int,
                    direction: PageDirection, settings: ViewerSettings,
+                   userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
                    onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
                    onUsed: @escaping @MainActor @Sendable () -> Void = {}) async -> Failure? {
         guard isLocalEndpointRunning() else { return .localEndpointNotRunning }
         guard let path = book.path, !path.isEmpty else { return .pageCountUnavailable }
         let pageCount: Int
         do {
-            pageCount = try await BookContentFactory.make(for: book).pageCount
+            // 渡す前の「読めるか」の確認（AppState.servesPagesByReference）と同じ一覧で読む（gzip の tar を読むかが一覧で決まる）。
+            pageCount = try await BookContentFactory.make(for: book, userExtensions: userExtensions).pageCount
         } catch {
             return .pageCountUnavailable
         }
