@@ -16,7 +16,8 @@ public enum CoverCompression {
         db: Database,
         bundleURL: URL,
         progress: sending (Int, Int) -> Void = { _, _ in },
-        isCancelled: sending () async -> Bool = { false }
+        isCancelled: sending () async -> Bool = { false },
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot
     ) async throws -> Int {
         let books = try db.fetchAllBooks()
         let total = books.count
@@ -47,7 +48,9 @@ public enum CoverCompression {
             // 旧二分岐は単独画像本（.jpg/.png 1 枚）を素通りさせていた。真に表紙を作れない形式は
             // CoverRefreshError.unsupportedFormat として log-only でスキップ（従来と同じ best-effort）。
             do {
-                let data = try await CoverRefresher.extractCoverData(sourceURL: sourceURL, preferredName: book.coverImageName)
+                // G64: 1 回の作り直しは、始めに読んだ 1 つの一覧で通す。
+                let data = try await CoverRefresher.extractCoverData(sourceURL: sourceURL, preferredName: book.coverImageName,
+                                                                     userExtensions: userExtensions)
                 let resized = await CoverRefresher.resizeCoverDataOffMain(data, maxPixelSize: 1200)
                 let bookDir = thumbURL.deletingLastPathComponent()
                 try FileManager.default.createDirectory(at: bookDir, withIntermediateDirectories: true)

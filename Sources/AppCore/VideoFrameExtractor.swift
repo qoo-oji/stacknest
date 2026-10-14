@@ -75,8 +75,9 @@ public enum VideoFrameExtractor {
     }
 
     /// 指定時刻のフレームを JPEG で返す（手動のシーン選択・`@t=` の再生成に使う）。
-    public static func frameData(url: URL, seconds: Double, maxPixelSize: Int) async throws -> Data {
-        let (asset, _) = try await openAsset(url: url)
+    /// - Parameter anyExtension: G64: 足した動画の拡張子のとき true（拡張子の制限を外して AVFoundation に試させる）。
+    public static func frameData(url: URL, seconds: Double, maxPixelSize: Int, anyExtension: Bool = false) async throws -> Data {
+        let (asset, _) = try await openAsset(url: url, anyExtension: anyExtension)
         let generator = makeGenerator(asset: asset, maxPixelSize: maxPixelSize)
         // 手動指定は「その場面」を返したい。ただし許容誤差を完全に切ると、直前のキーフレームから
         // 全フレームを復号し直すことになり、長い動画で待ち時間が跳ね上がる。1/30 秒あれば
@@ -94,8 +95,9 @@ public enum VideoFrameExtractor {
 
     /// 自動で選んだフレームを JPEG で返す。真っ黒・単色でない最初の候補を採り、
     /// どれも駄目なら最初に取れたフレームを使う（表紙が無いよりまし）。
-    public static func autoCoverData(url: URL, maxPixelSize: Int) async throws -> Data {
-        let (asset, duration) = try await openAsset(url: url)
+    /// - Parameter anyExtension: G64: 足した動画の拡張子のとき true（拡張子の制限を外して AVFoundation に試させる）。
+    public static func autoCoverData(url: URL, maxPixelSize: Int, anyExtension: Bool = false) async throws -> Data {
+        let (asset, duration) = try await openAsset(url: url, anyExtension: anyExtension)
         let generator = makeGenerator(asset: asset, maxPixelSize: maxPixelSize)
         // 自動はどこか 1 枚拾えればよいので、許容誤差を広く取って探索を速くする。
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
@@ -165,8 +167,8 @@ public enum VideoFrameExtractor {
         }
     }
 
-    private static func openAsset(url: URL) async throws -> (AVURLAsset, Double) {
-        guard isSupported(url: url) else { throw VideoFrameError.notAVideo }
+    private static func openAsset(url: URL, anyExtension: Bool) async throws -> (AVURLAsset, Double) {
+        guard anyExtension || isSupported(url: url) else { throw VideoFrameError.notAVideo }
         let asset = AVURLAsset(url: url)
         guard let duration = try? await asset.load(.duration),
               let tracks = try? await asset.loadTracks(withMediaType: .video),

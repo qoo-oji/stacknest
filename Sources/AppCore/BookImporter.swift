@@ -25,6 +25,8 @@ public struct BookImporter: Sendable {
     private let database: Database
     private let bundleURL: URL
     private let format: FilenameFormat
+    /// G64: 足した拡張子の本の表紙の最後の手段（Quick Look）。テストは偽物を渡す。
+    private let thumbnailer: any CoverThumbnailing
     private static let logger = Logger(subsystem: "app.shelfsmith.stacknest", category: "BookImporter")
 
     // fileType integer values matching Stackroom convention (stored in book.file_type)
@@ -65,10 +67,12 @@ public struct BookImporter: Sendable {
         public init() {}
     }
 
-    public init(database: Database, bundleURL: URL, format: FilenameFormat) {
+    public init(database: Database, bundleURL: URL, format: FilenameFormat,
+                thumbnailer: any CoverThumbnailing = QuickLookCoverThumbnailer()) {
         self.database = database
         self.bundleURL = bundleURL
         self.format = format
+        self.thumbnailer = thumbnailer
     }
 
     /// Adds the given URLs as books. Returns a summary; UI is responsible for showing it.
@@ -119,31 +123,51 @@ public struct BookImporter: Sendable {
                 // (pageCount == 0 が条件) とは排他的 — フラグを PDF 側で上書きする必要はない。
                 var pageCountTruncated = false
                 var coverDataOverride: Data? = nil
+                // G64: 足した拡張子の本の種類（足していなければ nil＝今までどおりの分岐）。
+                let addedCategory = BookCategory.userCategory(path: url.path, userExtensions: userExtensions)
+                // G64: 足したアーカイブを StackNest が読めなかった（開けない・画像も PDF も無い）。
+                // 本の種類の自動分類にページ数を渡さない（0 ページは事実ではない）。
+                var addedArchiveUnreadable = false
                 // G54-S4 修正ラウンド1: `ArchiveAdapter.coverExtractor(for:)` は「表紙候補を選ぶ用」
                 // （EPUB・将来 PDF も含む）に対して、取り込みはフォルダ・zip 系アーカイブだけを扱う
                 // `importExtractor(for:)` を使う。EPUB・PDF は下の専用分岐（EPUBAdapter.reader /
                 // PDFBookContent）でページ数・表紙を扱うため、ここで汎用アーカイブとして拾ってしまうと
                 // 専用分岐が黙ってスキップされる（G54-S4 Task1 で EPUB 取り込みが実際にこれで壊れた）。
-                let archiveExtractor = ArchiveAdapter.importExtractor(for: url)
-                if let extractor = archiveExtractor {
+                // G64: 足した拡張子は `BookExtractors` が振る（足したアーカイブは libarchive）。
+                let archiveExtractor = BookExtractors.importExtractor(for: url, userExtensions: userExtensions)
+                if let addedCategory {
+                    // G64: 足した拡張子の本。ページ数は種類ごとに数え、表紙は `extractCoverData` の順
+                    // （StackNest が読む → Quick Look）で作る。
+                    switch addedCategory {
+                    case .archive:
+                        if let extractor = archiveExtractor {
+                            if let counted = try? await extractor.countImageEntries(in: url) {
+                                pageCount = counted.count
+                                pageCountTruncated = counted.truncated
+                            }
+                            if pageCount == 0, let pdf = await ArchivePDFFallback.embeddedPDF(in: url, extractor: extractor) {
+                                pageCount = pdf.pageCount
+                            }
+                        }
+                        addedArchiveUnreadable = pageCount == 0
+                    case .image:
+                        if BookContentFactory.imageIOCanOpen(url) { pageCount = 1 }
+                    case .video, .text, .folder:
+                        break
+                    }
+                    if let data = try? await CoverRefresher.extractCoverData(
+                        sourceURL: url, preferredName: nil, userExtensions: userExtensions, thumbnailer: thumbnailer) {
+                        coverDataOverride = CoverImageResizer.resizeJPEG(data, maxPixelSize: 1200)
+                    }
+                } else if let extractor = archiveExtractor {
                     if let counted = try? await extractor.countImageEntries(in: url) {
                         pageCount = counted.count
                         pageCountTruncated = counted.truncated
                     }
-                    if pageCount == 0,
-                       let pdfData = try? await extractor.extractFirstPDFData(in: url) {
-                        // archive 内 PDF fallback: 一時ファイルに展開 → PDFBookContent
-                        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).pdf")
-                        do {
-                            try pdfData.write(to: tmp)
-                            if let content = PDFBookContent(url: tmp) {
-                                pageCount = content.pageCount
-                                coverDataOverride = content.coverJPEG(maxPixelSize: 1200)
-                            }
-                        } catch {
-                            Self.logger.warning("PDF fallback temp-write failed for \(url.lastPathComponent): \(error.localizedDescription)")
-                        }
-                        try? FileManager.default.removeItem(at: tmp)
+                    // archive 内 PDF fallback（G64 で `ArchivePDFFallback` に出した。振る舞いは同じ）。
+                    if pageCount == 0, let pdf = await ArchivePDFFallback.embeddedPDF(in: url, extractor: extractor) {
+                        pageCount = pdf.pageCount
+                        coverDataOverride = pdf.cover
                     }
                 } else if url.pathExtension.lowercased() == "pdf" {
                     // 単独 PDF
@@ -193,7 +217,7 @@ public struct BookImporter: Sendable {
                 if autoClassifyEnabled {
                     bookType = BookTypeClassifier.autoClassify(
                         url: url,
-                        pageCount: TruncatedReadPolicy.pageCountForClassification(
+                        pageCount: addedArchiveUnreadable ? nil : TruncatedReadPolicy.pageCountForClassification(
                             livePageCount: pageCount, truncated: pageCountTruncated),
                         thickThreshold: thickThreshold,
                         userExtensions: userExtensions
@@ -240,8 +264,9 @@ public struct BookImporter: Sendable {
                         Self.logger.warning("Cover write failed for \(url.lastPathComponent): \(error.localizedDescription)")
                         result.coverFailures.append(url)
                     }
-                } else if let extractor = archiveExtractor {
+                } else if addedCategory == nil, let extractor = archiveExtractor {
                     // 画像 first hit (現行) — CoverRefresher が B19 1200 px resize を担当
+                    // （足した拡張子の本は上で `extractCoverData` を試し済み。同じ抽出を繰り返さない）
                     do {
                         try await CoverRefresher.regenerate(
                             bookID: id,

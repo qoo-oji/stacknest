@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import ImageIO
 import LibraryStore
 import ArchiveAdapter
 import StackNestL10n
@@ -29,23 +30,35 @@ public enum BookContentError: Error, Sendable, Equatable {
 
 /// BookRow から適切な BookContent を生成する。
 public enum BookContentFactory {
-    /// `BookCategory.classify(path:)` で種別を振り分けて BookContent を返す。
+    /// `BookCategory.classify(path:userExtensions:)` で種別を振り分けて BookContent を返す。
     /// 動画・非対応・パス無しは throw（呼び出し側が外部ビューアにフォールバック）。
-    public static func make(for book: BookRow) throws -> BookContent {
+    public static func make(for book: BookRow,
+                            userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) throws -> BookContent {
         guard let path = book.path, !path.isEmpty else {
             throw BookContentError.invalidPath(book.path ?? "(nil)")
         }
-        guard FileManager.default.fileExists(atPath: path) else {
+        return try make(path: path, userExtensions: userExtensions)
+    }
+
+    /// G64: パスから作る（`BookReadability` が使う）。
+    public static func make(path: String, userExtensions: UserExtensionMap) throws -> BookContent {
+        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
             throw BookContentError.invalidPath(path)
         }
         let url = URL(fileURLWithPath: path)
-        let category = BookCategory.classify(path: path)
+        let category = BookCategory.classify(path: path, userExtensions: userExtensions)
         switch category {
         case .archive:
             return ArchiveBookContent(url: url)
         case .folder:
             return FolderBookContent(url: url)
         case .image:
+            // G64: `SingleImageBookContent` はバイトを返すだけで、読めない画像でも「1 ページ」と答える。
+            // 足した拡張子の画像だけ、ImageIO で開けるか（ヘッダだけ）を確かめる。標準の画像は今どおり確かめない。
+            if BookCategory.userCategory(path: path, userExtensions: userExtensions) == .image,
+               !imageIOCanOpen(url) {
+                throw BookContentError.unsupported(.image)
+            }
             return SingleImageBookContent(url: url)
         case .text:
             if url.pathExtension.lowercased() == "epub" {
@@ -61,6 +74,13 @@ public enum BookContentFactory {
         case .video:
             throw BookContentError.unsupported(category)
         }
+    }
+
+    /// ImageIO が画像として開け、1 枚以上ある（デコードはしない）。
+    static func imageIOCanOpen(_ url: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return false }
+        return CGImageSourceGetType(source) != nil && CGImageSourceGetCount(source) > 0
     }
 }
 

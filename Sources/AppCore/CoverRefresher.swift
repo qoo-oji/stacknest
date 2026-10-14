@@ -34,8 +34,23 @@ public enum CoverRefresher {
     /// 対象が数百冊になると顕著）。本体全体を `Task.detached` に包み、呼び出し元がどの actor でも
     /// 同期区間がそこに乗らないようにする（`ArchiveAdapter` 側は内部で既に detach しているため
     /// 二重 detach になるが、正当性・安全性上の問題はない）。
-    public static func extractCoverData(sourceURL: URL, preferredName: String?) async throws -> Data {
+    ///
+    /// G64: 足した拡張子の本は `addedExtensionCover` の順（StackNest が読む → Quick Look）。標準と未知の拡張子は
+    /// 今のまま（Quick Look を使わない）。
+    /// - Parameters:
+    ///   - userExtensions: 足した拡張子の一覧。既定は呼び出した時点の `shared`（detach の**外**で 1 回だけ読む）。
+    ///   - thumbnailer: Quick Look の縮小画像（テストは偽物を渡す）。
+    public static func extractCoverData(
+        sourceURL: URL,
+        preferredName: String?,
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
+        thumbnailer: any CoverThumbnailing = QuickLookCoverThumbnailer()
+    ) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
+            if let added = BookCategory.userCategory(path: sourceURL.path, userExtensions: userExtensions) {
+                return try await addedExtensionCover(sourceURL: sourceURL, category: added,
+                                                     preferredName: preferredName, thumbnailer: thumbnailer)
+            }
             if sourceURL.pathExtension.lowercased() == "pdf" {
                 guard let pdf = PDFBookContent(url: sourceURL) else { throw CoverRefreshError.unsupportedFormat }
                 // G54-S4 修正ラウンド2: 「表紙を編集」で選んだページ（`PDFCoverExtractor` が 1 始まりの
@@ -62,7 +77,7 @@ public enum CoverRefresher {
                 // 素通しにすると、名前が古くなった EPUB で「既定の表紙」が「中の適当な 1 枚目」に
                 // 劣化してしまう（EPUB の 1 枚目は表紙でないことが多い）。
                 if let name = preferredName, !name.hasPrefix("@"),
-                   let ex = ArchiveAdapter.coverExtractor(for: sourceURL),
+                   let ex = BookExtractors.coverExtractor(for: sourceURL, userExtensions: userExtensions),
                    let listing = try? await ex.listImageEntries(in: sourceURL), listing.names.contains(name) {
                     return try await ex.extractCoverImage(from: sourceURL, preferredName: name)
                 }
@@ -92,7 +107,7 @@ public enum CoverRefresher {
                     throw CoverRefreshError.unsupportedFormat
                 }
             }
-            if let extractor = ArchiveAdapter.coverExtractor(for: sourceURL) {
+            if let extractor = BookExtractors.coverExtractor(for: sourceURL, userExtensions: userExtensions) {
                 return try await extractor.extractCoverImage(from: sourceURL, preferredName: preferredName)
             }
             if Self.standaloneImageExtensions.contains(sourceURL.pathExtension.lowercased()) {
@@ -100,6 +115,50 @@ public enum CoverRefresher {
             }
             throw CoverRefreshError.unsupportedFormat
         }.value
+    }
+
+    /// G64: 足した拡張子の本の表紙。種類ごとに 1. StackNest が読む → 取れない・投げたら 2. Quick Look。
+    /// | 種類 | 1. StackNest が読む |
+    /// |---|---|
+    /// | アーカイブ | 先頭の画像（`preferredName` があればその画像）→ 無ければ中の PDF の 1 ページ目 |
+    /// | 画像 | ImageIO で読み、JPEG（長辺 1200）に書き直す（小さくても必ず） |
+    /// | 動画 | AVFoundation（`@t=` があればその場面、無ければ自動選択。拡張子の制限は外す） |
+    /// | テキスト | なし（最初から Quick Look） |
+    /// どちらも取れなければ `.unsupportedFormat`（取り込みは `coverFailures`、表紙はプレースホルダ）。
+    static func addedExtensionCover(sourceURL: URL, category: BookCategory, preferredName: String?,
+                                    thumbnailer: any CoverThumbnailing) async throws -> Data {
+        if let own = await ownCover(sourceURL: sourceURL, category: category, preferredName: preferredName) {
+            return own
+        }
+        if let thumbnail = await thumbnailer.coverJPEG(for: sourceURL, maxPixelSize: 1200) {
+            return thumbnail
+        }
+        throw CoverRefreshError.unsupportedFormat
+    }
+
+    /// 足した拡張子の本を StackNest 自身が読んで作る表紙。投げたときも nil（Quick Look へ進む）。
+    private static func ownCover(sourceURL: URL, category: BookCategory, preferredName: String?) async -> Data? {
+        do {
+            switch category {
+            case .archive:
+                // `@` 始まりは動画の場面指定などの印で、アーカイブのエントリ名ではない。
+                let name = preferredName.flatMap { $0.hasPrefix("@") ? nil : $0 }
+                return try await ArchivePDFFallback.coverData(in: sourceURL, preferredName: name,
+                                                              extractor: LibarchiveCoverExtractor())
+            case .image:
+                return CoverJPEG.fromImageData(try Data(contentsOf: sourceURL), maxPixelSize: 1200)
+            case .video:
+                if let seconds = CoverSource.videoTime(from: preferredName) {
+                    return try await VideoFrameExtractor.frameData(url: sourceURL, seconds: seconds,
+                                                                   maxPixelSize: 1200, anyExtension: true)
+                }
+                return try await VideoFrameExtractor.autoCoverData(url: sourceURL, maxPixelSize: 1200, anyExtension: true)
+            case .text, .folder:
+                return nil
+            }
+        } catch {
+            return nil
+        }
     }
 
     /// `BookCategory.classify(path:)` の `.image` 判定と同じ拡張子集合（Sources/AppCore/BookCategory.swift）。
