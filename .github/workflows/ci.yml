@@ -57,6 +57,11 @@ jobs:
           python3 -m unittest Scripts/tests/test_l10n_lint.py
           python3 Scripts/l10n-lint.py --strict --no-app-checks
 
+      # The personal-identifier guard (pre-push) must refuse rather than pass when grep or awk fails,
+      # and check commits that only another remote has. Uses a temporary list, never the real one.
+      - name: Private identifier guard tests
+        run: python3 -m unittest Scripts/tests/test_check_private_identifiers.py
+
       # A bare directory argument (`node --test web-tests/`) fails on Node 22+ ("Cannot find module");
       # let the shell expand the files so it works on every Node version.
       - name: Web tests
