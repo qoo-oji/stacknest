@@ -109,6 +109,11 @@ App の文字列カタログは **1 つの日本語キーに 1 つの英訳**し
 | ルーペの形・大きさ | Circle／Square、Small／Medium／Large | |
 | キー操作のセクション | Navigation／Zoom／Spread & Slideshow／Volume Navigation／Other | |
 | アーカイブ／画像／フォルダ／動画／テキスト | Archive／Image／Folder／Video／Text | `BookCategory`（ビューア選択の分類。本の種類ラベルとは別語彙） |
+| 拡張子 | Extension | G64。設定の行の名前は File Extensions（キー `settings.extensions.row`）、一覧の列の見出しは Extension（キー `settings.extensions.column.extension`）、文中は file extension |
+| 種類（拡張子の振り分け先） | Category | G64。`BookCategory` のこと（キー `settings.extensions.category`）。「種類ごとの外部ビューア」の per-category と同じ語で、本の種類（Type）とは別 |
+| 標準（の拡張子） | Standard | G64。StackNest が最初から知っている拡張子（29 個） |
+| 拡張子と種類 | File Extensions and Categories | G64。設定 ▸ 表示 ▸ 外部ビューアの「拡張子」から開くシートの題 |
+| Quick Look の縮小画像 | Quick Look thumbnail | G64。足した拡張子の本の表紙の最後の手段 |
 | 電子書籍 | E-Book | 見出しは E-Book、文中は e-book。EPUB 用外部ビューア未設定時の表示名。複数形 E-Books (EPUB)。「EPUB」は形式そのものを指すときだけ使う（G57）。画面・エラー・ヘルプの「EPUB」は G57 Task 6 でこの規則に統一した（ファイルの中のメタデータ・ライセンスの技術名・形式の併記・外部ビューアの形式別指定は残した） |
 | ビューア共通／画像ビューア／電子書籍ビューア | All Viewers／Image Viewer／E-Book Viewer | 設定 ▸ 内蔵ビューアの節の見出し（G57） |
 | 和文（の書体） | Japanese (Typeface) | 和文の書体 = Japanese Typeface（G57） |
@@ -239,3 +244,7 @@ App のカタログは同じ日本語キーに 1 つの訳しか持てない。�
 | 変更 | リモートのサーバ名変更シートのボタン | `remote.server.rename` | Rename | Change（ロック設定のボタン） |
 | 書籍が選択されていません | リモートの一括ダウンロードの要約文 | `remote.batch.noBooksSelected` | No books selected. | No Book Selected（詳細ペインの空状態） |
 | 未読チェック | メニュー項目すべて（6 箇所。いずれもトグル） | `menu.toggleUnread` | Toggle Unread | （使われなくなった。カタログに Mark as Unread が残る） |
+| 拡張子 | 設定 ▸ 表示 ▸ 外部ビューアの行（G64） | `settings.extensions.row` | File Extensions | （新規。下の列の見出しと分けた） |
+| 拡張子 | シート「拡張子と種類」の列の見出し（G64） | `settings.extensions.column.extension` | Extension | （新規） |
+| 種類 | シート「拡張子と種類」の列の見出しと Picker（G64） | `settings.extensions.category` | Category | Type（本の種類） |
+| 削除 | シート「拡張子と種類」の行の削除ボタン（G64・アクセシビリティのラベルとヘルプも） | `settings.extensions.remove` | Remove | Delete |

@@ -131,6 +131,7 @@ public final class UserExtensionStore: @unchecked Sendable {
     }
 
     /// 足した拡張子の種類を変える。足していない拡張子・同じ種類なら何もせず false。
+    /// `ext` は `snapshot` の鍵（正規化済み）。
     @discardableResult
     public func setCategory(_ category: BookCategory, for ext: String) -> Bool {
         precondition(UserExtensionValidator.assignableCategories.contains(category), "unassignable category")
@@ -147,6 +148,7 @@ public final class UserExtensionStore: @unchecked Sendable {
     }
 
     /// 足した拡張子を消す。足していなければ何もせず false。本は消えない（以後は未知の拡張子＝アーカイブとして扱う）。
+    /// `ext` は `snapshot` の鍵（正規化済み）。
     @discardableResult
     public func remove(_ ext: String) -> Bool {
         let changed: Bool = state.withLock { map in

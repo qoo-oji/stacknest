@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import SwiftUI
 import UniformTypeIdentifiers
-import AppCore  // BookCategory.supportedExtensions
+import AppCore  // BookCategory.registrableExtensions
 
 struct BookDropDelegate: DropDelegate {
     /// Called synchronously when the drop is accepted; returns the handler for the loaded URLs.
@@ -13,6 +13,8 @@ struct BookDropDelegate: DropDelegate {
         let providers = info.itemProviders(for: [UTType.fileURL])
         guard !providers.isEmpty else { return false }
         let onDrop = makeHandler()
+        // G64: 1 回のドロップは、落とした時点の 1 つの一覧で判定する。
+        let userExtensions = UserExtensionStore.shared.snapshot
         var urls: [URL] = []
         let group = DispatchGroup()
         for provider in providers {
@@ -25,7 +27,7 @@ struct BookDropDelegate: DropDelegate {
             }
         }
         group.notify(queue: .main) {
-            let filtered = urls.filter { Self.isAcceptable(url: $0) }
+            let filtered = urls.filter { Self.isAcceptable(url: $0, userExtensions: userExtensions) }
             if !filtered.isEmpty {
                 onDrop(filtered)
             }
@@ -37,13 +39,14 @@ struct BookDropDelegate: DropDelegate {
         info.hasItemsConforming(to: [.fileURL])
     }
 
-    private static func isAcceptable(url: URL) -> Bool {
+    /// 受け付けるか: ディレクトリは無条件、ファイルは標準（`cbt`・`tar` を含む 29 個）か足した拡張子（G64）。
+    static func isAcceptable(url: URL, userExtensions: UserExtensionMap) -> Bool {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             return false
         }
         if isDir.boolValue { return true }
         let ext = url.pathExtension.lowercased()
-        return BookCategory.supportedExtensions.contains(ext)
+        return BookCategory.registrableExtensions(userExtensions: userExtensions).contains(ext)
     }
 }

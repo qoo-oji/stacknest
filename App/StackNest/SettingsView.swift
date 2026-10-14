@@ -40,6 +40,9 @@ struct SettingsView: View {
     @State private var localControlRefresh = UUID()
     /// G60 v3: 「外部ビューア」の節の状態の行（`refreshViewerSupportLine` が入れる。nil なら出さない）。
     @State private var viewerSupportLine: String?
+    /// G64: 足した拡張子（「拡張子」の行とシート・種類ごとの行の説明）。
+    @State private var extensionsModel = UserExtensionSettingsModel()
+    @State private var showExtensionsSheet = false
 
     /// 各 row の左端ラベル幅 (px)。caption の indent もこの値+spacing で揃える。
     /// 「指定ライブラリ」(7文字) 等の最長ラベルを 1 行に収める想定で 110pt。
@@ -240,7 +243,8 @@ struct SettingsView: View {
                     ForEach(BookCategory.allCases, id: \.self) { category in
                         viewerSettingsRow(
                             label: Text(category.displayName),
-                            caption: Text(category.extensionsHint),
+                            // G64: 足した拡張子を後ろに付ける（記号と拡張子だけなので訳さない）。
+                            caption: Text(verbatim: extensionsModel.hint(for: category)),
                             path: settings.categoryViewerPaths[category],
                             onChoose: { chooseCategoryViewer(category) },
                             onReset: settings.categoryViewerPaths[category] != nil
@@ -261,6 +265,9 @@ struct SettingsView: View {
                             ? { settings.epubViewerAppPath = nil }
                             : nil
                     )
+                    // G64: 標準にない拡張子を足し、種類を選ぶ。一覧は節に並べずシートで出す
+                    // （設定の窓はタブの中身の高さに合わせて伸びるので、29 行以上を並べると画面より高くなる）。
+                    extensionsRow
                     // G60: 対応した外部ビューアと読書位置を同期する。切り替えたら 127.0.0.1 の口を組み直す
                     // （ローカルコントロールが OFF でも、ON のあいだは本専用トークンだけの形で動かす）。
                     Toggle("StackNest と読書位置を同期する（対応アプリのみ）", isOn: Binding(
@@ -380,6 +387,26 @@ struct SettingsView: View {
     }
 
     // MARK: - Row builders
+
+    /// G64: 「拡張子」の行（押すとシート「拡張子と種類」を開く）。
+    private var extensionsRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(String(localized: "settings.extensions.row", defaultValue: "拡張子"))
+                    .frame(width: labelColumnWidth, alignment: .leading)
+                Spacer(minLength: 8)
+                Button("編集…") { showExtensionsSheet = true }
+                    .controlSize(.small)
+            }
+            Text("標準にない拡張子を足し、どの種類として扱うかを選べます。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, labelColumnWidth + 8)
+        }
+        .sheet(isPresented: $showExtensionsSheet) {
+            UserExtensionsSheet(model: extensionsModel)
+        }
+    }
 
     /// G60 v3: 画像の本の外部ビューアの対応の状態を計算し直す（Info.plist と確認の記録を読む）。
     private func refreshViewerSupportLine() {

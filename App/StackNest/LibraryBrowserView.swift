@@ -319,20 +319,19 @@ struct LibraryBrowserView: View {
 
     // MARK: - Add panel
 
-    private func showAddPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        // Phase 2.5g+h+i fixup v1: 単独 image / pdf / movie / text も追加対象に。
-        // 既存 archive 系 + folder + image / pdf / movie / text の包括 UTType を許可する。
-        panel.allowedContentTypes = [
+    /// 読み込みのパネルで選べる型。Phase 2.5g+h+i fixup v1: 既存 archive 系 + folder + image / pdf / movie / text の
+    /// 包括 UTType。G64: 標準の tar（`public.tar-archive`・StackNest が宣言する cbt）と、足した拡張子ごとの型
+    /// （どのアプリも宣言していない拡張子は動的な型 `dyn.…` になり、その拡張子のファイルが選べる）を足す。
+    static func addPanelContentTypes(userExtensions: UserExtensionMap) -> [UTType] {
+        var types: [UTType] = [
             // archive
             .zip,
             UTType("app.shelfsmith.stacknest.cbz") ?? .zip,
             UTType("app.shelfsmith.stacknest.cbr") ?? .data,
             UTType("public.7z-archive") ?? .data,
             UTType("com.rarlab.rar-archive") ?? .data,
+            UTType("public.tar-archive") ?? .data,
+            UTType("app.shelfsmith.stacknest.cbt") ?? UTType(filenameExtension: "cbt") ?? .data,
             // folder
             .folder,
             // single files (B18 + B20 + B21)
@@ -342,6 +341,16 @@ struct LibraryBrowserView: View {
             .plainText,
             UTType("org.idpf.epub-container") ?? .data
         ]
+        types += userExtensions.keys.sorted().compactMap { UTType(filenameExtension: $0) }
+        return types
+    }
+
+    private func showAddPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = Self.addPanelContentTypes(userExtensions: UserExtensionStore.shared.snapshot)
         let targetShelfID = appState.removableShelfID
         if panel.runModal() == .OK {
             handleAdd(urls: panel.urls, targetShelfID: targetShelfID)

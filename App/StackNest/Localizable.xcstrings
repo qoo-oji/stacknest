@@ -700,12 +700,116 @@
         }
       }
     },
+    "StackNest が中身を読めないときは、その種類の外部ビューアで開き、表紙には Quick Look の縮小画像を使います。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If StackNest can't read the contents, the book opens in that category's external viewer, and its cover comes from the Quick Look thumbnail."
+          }
+        }
+      }
+    },
     "StackNest と読書位置を同期する（対応アプリのみ）" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sync Reading Position with StackNest (Supported Apps Only)"
+          }
+        }
+      }
+    },
+    "settings.extensions.category" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Category"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "種類"
+          }
+        }
+      }
+    },
+    "settings.extensions.column.extension" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extension"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡張子"
+          }
+        }
+      }
+    },
+    "settings.extensions.remove" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        }
+      }
+    },
+    "settings.extensions.row" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File Extensions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拡張子"
+          }
+        }
+      }
+    },
+    "「.%@」は StackNest が使うため追加できません。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“.%@” is used by StackNest and can't be added."
+          }
+        }
+      }
+    },
+    "「.%@」はもう追加されています。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“.%@” has already been added."
+          }
+        }
+      }
+    },
+    "「.%@」は標準の拡張子です（%@）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“.%@” is a standard extension (%@)."
           }
         }
       }
@@ -770,12 +874,62 @@
         }
       }
     },
+    "拡張子と種類" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File Extensions and Categories"
+          }
+        }
+      }
+    },
+    "拡張子に使えるのは半角の英数字・ハイフン・アンダースコアで、%lld 文字までです。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An extension can use letters, numbers, hyphens, and underscores, up to %lld characters."
+          }
+        }
+      }
+    },
+    "拡張子を入力してください。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a file extension."
+          }
+        }
+      }
+    },
+    "拡張子（例: avif）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extension (e.g. avif)"
+          }
+        }
+      }
+    },
     "本のページ数を読めませんでした" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "couldn't read the book's page count"
+          }
+        }
+      }
+    },
+    "標準にない拡張子を足し、どの種類として扱うかを選べます。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add file extensions that StackNest doesn't handle by default, and choose which category they belong to."
           }
         }
       }
@@ -796,6 +950,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Couldn't sync the reading position, so the book opened in the built-in viewer (%@)."
+          }
+        }
+      }
+    },
+    "足した拡張子のファイルは、選んだ種類と同じに扱います（追加・内蔵か外部か・外部ビューア）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Files with an added extension are handled like the category you choose (adding, built-in or external viewer, and which external viewer)."
+          }
+        }
+      }
+    },
+    "足した拡張子はまだありません。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No extensions added yet."
+          }
+        }
+      }
+    },
+    "足した拡張子を消しても、登録済みの本は消えません（アーカイブとして扱われます）。もう一度足すと元に戻ります。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removing an extension doesn't remove any books. They're treated as archives until you add the extension again."
+          }
+        }
+      }
+    },
+    "足す前に登録した本の表紙は「表紙を再生成」で作り直せます。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For books added before the extension, use “Regenerate Cover” to make a cover."
+          }
+        }
+      }
+    },
+    "追加できる拡張子は %lld 個までです。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You can add up to %lld extensions."
           }
         }
       }

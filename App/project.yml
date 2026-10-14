@@ -97,6 +97,17 @@ targets:
                 - cbr
               public.mime-type:
                 - "application/vnd.comicbook-rar"
+          # G64: tar の漫画（.cbt）。読み込みのパネルで選べるように型を宣言する（cbz・cbr と同じ形）。
+          - UTTypeIdentifier: app.shelfsmith.stacknest.cbt
+            UTTypeDescription: "Comic Book Tar Archive"
+            UTTypeConformsTo:
+              - public.tar-archive
+              - public.image
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - cbt
+              public.mime-type:
+                - "application/x-cbt"
           - UTTypeIdentifier: app.shelfsmith.stacknest.book-reference
             UTTypeDescription: "StackNest Book Reference"
             UTTypeConformsTo:
