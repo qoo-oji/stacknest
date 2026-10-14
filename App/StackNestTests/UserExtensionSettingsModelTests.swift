@@ -105,4 +105,20 @@ struct UserExtensionSettingsModelTests {
         #expect(model.hint(for: .text) == ".pdf / .txt / .md / .rtf + .docx")
         #expect(model.hint(for: .video) == ".mp4 / .mov / .avi / .mkv / .webm / .m4v")
     }
+
+    @Test("手で編集した 101 個でも全行を出し、足すのだけ止める")
+    func moreThanTheLimitStillDisplaysEveryRow() {
+        let name = "g64-model-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        var raw: [String: String] = [:]
+        for i in 0..<101 { raw[String(format: "x%03d", i)] = BookCategory.archive.rawValue }
+        defaults.set(raw, forKey: UserExtensionStore.defaultsKey)
+        let model = UserExtensionSettingsModel(store: UserExtensionStore(defaults: defaults))
+        #expect(model.addedRows.count == 101)
+        model.draft = "y"
+        #expect(!model.add())
+        #expect(model.errorText == "追加できる拡張子は 100 個までです。")
+        #expect(model.addedRows.count == 101)
+    }
 }

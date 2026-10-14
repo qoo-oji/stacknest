@@ -269,7 +269,7 @@ Two levels. The **quick check** looks at whether the file exists, its size, and 
 
 **Books that were fine last time but are damaged now are listed first**, so the ones worth restoring from backup are easy to find.
 
-Covers `.zip` / `.cbz` / `.rar` / `.cbr` / `.7z` / `.cbt` / `.tar` and single images. tar (`.cbt` / `.tar`) carries no CRC for its data, so the detailed check verifies that it can be read to the end. Folders, videos and PDF / EPUB carry no CRC and are recorded as out of scope — which does not mean they are intact. Archives with a file extension added in Settings are checked too; formats StackNest can't read are recorded as out of scope.
+Covers `.zip` / `.cbz` / `.rar` / `.cbr` / `.7z` / `.cbt` / `.tar` and single images. tar (`.cbt` / `.tar`) carries no CRC for its data, so the detailed check can only tell whether the file reads to the end (a tar whose tail was zero-filled by an interrupted copy reads as a shorter, intact tar, and a zero-filled `.cbt` / `.tar` is recorded as empty rather than damaged). Folders, videos and PDF / EPUB carry no CRC and are recorded as out of scope — which does not mean they are intact. Archives with a file extension added under "File Extensions" (Edit…) in Settings ▸ 表示 (Display) ▸ 外部ビューア (External Viewer) are checked too; formats StackNest can't read are recorded as out of scope.
 
 **It works over a remote connection too.** Because the job can run for many hours, **starting one requires an admin token**: the menu item is enabled only when the library is unlocked and the connection is admin. "Reveal in Finder" is unavailable remotely, since the paths belong to the server machine.
 
