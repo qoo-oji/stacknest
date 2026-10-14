@@ -286,6 +286,123 @@ struct ExternalViewerSyncWiringTests {
         #expect(state.watchNotice.notice?.text.contains("127.0.0.1") == true)
     }
 
+    // MARK: - G64: 足した拡張子の本は、読めるときだけ参照ファイルで渡す
+
+    /// `canServePages` が呼ばれた回数を数える（実物の `BookReadability` に任せる）。
+    final class ReadabilityCalls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [String] = []
+        var paths: [String] { lock.withLock { stored } }
+        func record(_ path: String) { lock.withLock { stored.append(path) } }
+    }
+
+    /// 1 冊のファイルの本（`fileName` の名前で `data` を書く）を持つローカルの書庫。一覧は `userExtensions` に固定する
+    /// （App のテストは本物の UserDefaults の上で動くので、`UserExtensionStore.shared` を書き換えない）。
+    private func makeLocalFileState(_ env: Env, fileName: String, data: Data, userExtensions: UserExtensionMap,
+                                    calls: ReadabilityCalls) throws -> (AppState, BookRow, URL) {
+        let url = env.base.appendingPathComponent(fileName)
+        try data.write(to: url)
+        let db = try Database.openInMemory()
+        try db.migrate()
+        try db.insertBook(BookRecord(
+            id: 1, title: "本の題名", author: nil, genre: nil,
+            path: url.path, dateAdded: Date(timeIntervalSince1970: 100), playDate: nil,
+            bookType: 0, fileType: 2, pages: nil, myRate: 0, unseen: true,
+            keywordA: nil, keywordB: nil, keywordC: nil, neta: nil))
+        let state = AppState(bundleURL: env.base.appendingPathComponent("g64.stacknest"))
+        state.database = db
+        state.librarySettings = try LibrarySettings(database: db)
+        state.viewerSettings = env.settings
+        state.viewerHandoff = handoff(env)
+        state.userExtensions = { userExtensions }
+        state.canServePages = { path, list in
+            calls.record(path)
+            return await BookReadability.canServePages(path: path, userExtensions: list)
+        }
+        let row = try #require(try db.fetchBook(id: 1))
+        return (state, row, url)
+    }
+
+    /// PNG 1 枚の tar（`/usr/bin/tar`）。
+    private func tarData(gzip: Bool) throws -> Data {
+        let src = FileManager.default.temporaryDirectory.appendingPathComponent("g64-wiring-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: src) }
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC")!
+            .write(to: src.appendingPathComponent("p1.png"))
+        let out = src.appendingPathComponent("out")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.environment = ["COPYFILE_DISABLE": "1"]
+        process.arguments = [gzip ? "-czf" : "-cf", out.path, "-C", src.path, "p1.png"]
+        try process.run()
+        process.waitUntilExit()
+        return try Data(contentsOf: out)
+    }
+
+    @Test func localUnreadableAddedBookOpensTheFileWithoutAToken() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let calls = ReadabilityCalls()
+        let (state, row, url) = try makeLocalFileState(
+            env, fileName: "book.g64bad", data: Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) }),
+            userExtensions: ["g64bad": .archive], calls: calls)
+
+        await state.openInExternalViewerSyncing([row])
+
+        #expect(calls.paths == [url.path])
+        #expect(launches.entries.count == 1)
+        #expect(launches.entries.first?.file.path == url.path, "参照ファイルではなく本そのもの")
+        #expect(env.tokens.allRecords().isEmpty, "鍵を出さない")
+        #expect(referenceFiles(env).isEmpty)
+        #expect(state.watchNotice.notice == nil, "お知らせを出さない")
+        #expect(state.error == nil)
+    }
+
+    @Test func localReadableAddedBookIsHandedByReference() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let calls = ReadabilityCalls()
+        let (state, row, url) = try makeLocalFileState(
+            env, fileName: "book.g64arc", data: try tarData(gzip: true), userExtensions: ["g64arc": .archive], calls: calls)
+
+        await state.openInExternalViewerSyncing([row])
+
+        #expect(calls.paths == [url.path])
+        #expect(launches.entries.first?.file.pathExtension == "stacknestbook")
+        #expect(env.tokens.allRecords().count == 1)
+    }
+
+    @Test func standardBooksAreNotCheckedBeforeTheHandOff() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let calls = ReadabilityCalls()
+        // 標準の cbt（足した一覧に cbt があっても標準が勝つ）。
+        let (state, row, _) = try makeLocalFileState(
+            env, fileName: "book.cbt", data: try tarData(gzip: false), userExtensions: ["cbt": .text], calls: calls)
+
+        await state.openInExternalViewerSyncing([row])
+
+        #expect(calls.paths.isEmpty, "標準の拡張子では読めるかを確かめない")
+        #expect(launches.entries.first?.file.pathExtension == "stacknestbook")
+
+        // フォルダの本も確かめない。
+        let (folderState, folderRow, _) = try makeLocalState(env, handoff: handoff(env))
+        folderState.userExtensions = { ["g64arc": .archive] }
+        folderState.canServePages = { path, _ in calls.record(path); return false }
+        await folderState.openInExternalViewerSyncing([folderRow])
+        #expect(calls.paths.isEmpty)
+    }
+
     // MARK: - ロック・ビューア未設定（G60 fix round 1）
 
     private func setLock(_ state: AppState, _ value: String) throws {

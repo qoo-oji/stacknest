@@ -295,7 +295,8 @@ public struct LibraryServerCore: Sendable {
     /// #2: ロック庫 unlock のブルートフォース抑止（ライブラリ単位の失敗回数＋ロックアウト）。
     public let unlockRateLimiter = UnlockRateLimiter()
     /// 本ごとの BookContent ハンドルキャッシュ（アーカイブ再オープン排除・spec §3.3）。
-    let contentCache = BookContentCache(ttlSeconds: 300)
+    /// G64: 足した拡張子の一覧は `config.userExtensions` から読む（init で作る）。
+    let contentCache: BookContentCache
     /// G8a: ライブ同期の配信ハブ。/events が subscribe し、mutation が publish する。
     /// G23 (#15): 施錠庫のイベント粒度を落とすため、init で施錠判定クロージャを注入する。
     public let eventHub: EventHub
@@ -343,6 +344,7 @@ public struct LibraryServerCore: Sendable {
                      "viewerRelay requires viewerTokenIssuer == .localEndpoint")
         self.config = config
         self.dataSource = dataSource
+        self.contentCache = BookContentCache(ttlSeconds: 300, userExtensions: config.userExtensions)
         // G23 (#15): 施錠庫の bookChanged は bookID を落として配信する（蔵書数の概算が漏れるため）。
         self.eventHub = EventHub(isLibraryLocked: { [dataSource] uuid in
             await dataSource.servedLibraries().first(where: { $0.uuid == uuid })?.isLocked ?? false
@@ -1170,7 +1172,8 @@ public struct LibraryServerCore: Sendable {
                                 atPath: coverURL(bundleURL: lib.bundleURL, bookID: dto.id).path)
                         let regenOutcome = try? await Self.regenerateThumbnail(
                             bookID: dto.id, sourceURLPath: effectiveDTO.path,
-                            preferredName: dto.coverImageName, bundleURL: lib.bundleURL, db: lib.db)
+                            preferredName: dto.coverImageName, bundleURL: lib.bundleURL, db: lib.db,
+                            userExtensions: config.userExtensions())
                         // `bookRow(from:)` reintroduced the crop the DTO carried, which was
                         // authored for the now-gone external image; left in place it would
                         // distort the auto (first-page) cover the fallback just wrote. Clear it
@@ -1213,12 +1216,13 @@ public struct LibraryServerCore: Sendable {
         // 4.2c-6b: 表紙候補（アーカイブのページ名一覧）。
         // G54-S3e（spec §2.5）: 以前は失敗を try? で握り潰し、候補が空になる原因を追えなかった。段ごとに warning を出す
         // （本の ID とエラーの要約は public、パスは private）。応答は変えない（空の 200）。
-        api.get("libraries/:lib/books/:id/cover-candidates") { request, context in
+        api.get("libraries/:lib/books/:id/cover-candidates") { [config] request, context in
             let (_, row) = try await resolver.resolveBook(request, context)
             var entries: [String] = []
             if let path = row.path {
                 let url = URL(fileURLWithPath: path)
-                if let ex = ArchiveAdapter.coverExtractor(for: url) {
+                // G64: 足したアーカイブも候補を出す（サーバの一覧で振る）。
+                if let ex = BookExtractors.coverExtractor(for: url, userExtensions: config.userExtensions()) {
                     do {
                         entries = try await ex.listImageEntries(in: url).names
                     } catch {
@@ -1247,7 +1251,7 @@ public struct LibraryServerCore: Sendable {
                 throw HTTPError(.notFound)
             }
             let url = URL(fileURLWithPath: path)
-            guard let ex = ArchiveAdapter.coverExtractor(for: url) else {
+            guard let ex = BookExtractors.coverExtractor(for: url, userExtensions: config.userExtensions()) else {
                 // G54-S3e 最終レビュー: カバー抽出器を持たない形式は正常な結果。warning ではなく info。
                 Self.logger.info("entry-image: unsupported format bookID=\(row.id, privacy: .public) path=\(path, privacy: .private)")
                 throw HTTPError(.notFound)
@@ -1280,7 +1284,7 @@ public struct LibraryServerCore: Sendable {
                 try lib.db.updateBook(id: row.id, patch: patch)
                 try await Self.regenerateThumbnail(
                     bookID: row.id, sourceURLPath: row.path, preferredName: body.coverImageName,
-                    bundleURL: lib.bundleURL, db: lib.db)
+                    bundleURL: lib.bundleURL, db: lib.db, userExtensions: config.userExtensions())
             }
             if body.setCoverCropRect {
                 try lib.db.updateBookCoverCropRect(id: row.id, json: body.coverCropRect)
@@ -1302,7 +1306,7 @@ public struct LibraryServerCore: Sendable {
             }
             try await Self.regenerateThumbnail(
                 bookID: row.id, sourceURLPath: row.path, preferredName: row.coverImageName,
-                bundleURL: lib.bundleURL, db: lib.db)
+                bundleURL: lib.bundleURL, db: lib.db, userExtensions: config.userExtensions())
             self.notifyBookChanged(lib.uuid, row.id)
             let updated = (try? lib.db.fetchBook(id: row.id)) ?? row
             return makeBookDetailDTO(from: updated)
@@ -1641,7 +1645,8 @@ public struct LibraryServerCore: Sendable {
                 try await CoverCompression.compressOversizedCovers(
                     db: lib.db, bundleURL: lib.bundleURL,
                     progress: { d, t in progress(d, t) },
-                    isCancelled: { await isCancelled() }
+                    isCancelled: { await isCancelled() },
+                    userExtensions: self.config.userExtensions()
                 )
             }
             return started ? HTTPResponse.Status.accepted : HTTPResponse.Status.conflict
@@ -1684,7 +1689,8 @@ public struct LibraryServerCore: Sendable {
                 try await withoutActuallyEscaping(isCancelled) { escapableIsCancelled in
                     let report = try await FullIntegrityScanner.scan(
                         database: lib.db, mode: mode,
-                        deps: FullIntegrityScanner.liveDependencies(libraryBundleURL: lib.bundleURL),
+                        deps: FullIntegrityScanner.liveDependencies(libraryBundleURL: lib.bundleURL,
+                                                                    userExtensions: self.config.userExtensions()),
                         progress: { d, t in progress(d, t) },
                         isCancelled: escapableIsCancelled)
                     return report.scanned
@@ -1742,7 +1748,8 @@ public struct LibraryServerCore: Sendable {
                 if !CoverSource.isExternal(updatedRow.coverImageName) {
                     _ = try? await Self.regenerateThumbnail(
                         bookID: updatedRow.id, sourceURLPath: updatedRow.path,
-                        preferredName: updatedRow.coverImageName, bundleURL: lib.bundleURL, db: lib.db)
+                        preferredName: updatedRow.coverImageName, bundleURL: lib.bundleURL, db: lib.db,
+                        userExtensions: config.userExtensions())
                 }
                 // G26 Codex Important #2: relink 先が破損していると `pageCount` は打ち切り値
                 // （40 ページ本を差し替えたつもりで 13）になる。relink は**まさに**ユーザーが
@@ -1750,7 +1757,7 @@ public struct LibraryServerCore: Sendable {
                 // 記録しない」という規則が最も要る場所で破れる。ビューア/取込経路と同じ
                 // `TruncatedReadPolicy.pageCountToWrite` を通す（nil＝書かない。修復後に
                 // 次回オープンの収束処理が正しい値を入れる）。
-                if let content = try? BookContentFactory.make(for: updatedRow),
+                if let content = try? BookContentFactory.make(for: updatedRow, userExtensions: config.userExtensions()),
                    let n = try? await content.pageCount,
                    let pages = TruncatedReadPolicy.pageCountToWrite(
                        livePageCount: n, truncated: await content.damageNote != nil) {
@@ -1847,7 +1854,8 @@ public struct LibraryServerCore: Sendable {
                 database: lib.db,
                 deps: QuickIntegrityScanner.liveDependencies(
                     archiveExtractor: LibarchiveCoverExtractor(),
-                    folderExtractor: FolderCoverExtractor()))
+                    folderExtractor: FolderCoverExtractor(),
+                    userExtensions: config.userExtensions()))
             // Important fix: 他の ~20 個の変更系ルートと違い、この経路だけ通知が無く、
             // book.pages/file_size を書いても開いている GUI ウィンドウ・SSE クライアントは
             // 再読込するまで空欄のまま残っていた。ページ数はメタデータ単位の変更ではなく
@@ -1923,6 +1931,8 @@ public struct LibraryServerCore: Sendable {
         let contentCache = self.contentCache
         api.get("libraries/:lib/books/:id/manifest") { [config] request, context in
             let (lib, row) = try await resolver.resolveBook(request, context)
+            // G64: `format` はサーバの一覧で決めた種類（archive・image・video・text。新しい値は足さない）。
+            let userExtensions = config.userExtensions()
             // Finding 2: content と etag を同じ 1 回の effectiveFileStat 呼び出しから得る
             // （content(for:) の後で独立に bookETag(for: row) を呼び直すと、フォルダ本では
             // その間にディレクトリが変化しうるため、advertise する版と実際の pageCount が
@@ -1950,7 +1960,7 @@ public struct LibraryServerCore: Sendable {
             return ManifestDTO(
                 pageCount: pageCount,
                 direction: directionString(row.pageDirection ?? config.defaultPageDirection),
-                format: formatString(BookCategory.classify(path: row.path ?? "")),
+                format: formatString(BookCategory.classify(path: row.path ?? "", userExtensions: userExtensions)),
                 etag: etag,
                 pageOverrides: pageOverrides,
                 damageNote: await content.damageNote
@@ -2436,6 +2446,7 @@ public struct LibraryServerCore: Sendable {
     @discardableResult
     static func regenerateThumbnail(
         bookID: Int, sourceURLPath: String?, preferredName: String?, bundleURL: URL, db: Database,
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
         simulateRaceBeforeWrite: (@Sendable () async -> Void)? = nil
     ) async throws -> CoverRegenOutcome {
         guard let path = sourceURLPath else {
@@ -2444,7 +2455,8 @@ public struct LibraryServerCore: Sendable {
         let sourceURL = URL(fileURLWithPath: path)
         let data: Data
         do {
-            data = try await CoverRefresher.extractCoverData(sourceURL: sourceURL, preferredName: preferredName)
+            data = try await CoverRefresher.extractCoverData(sourceURL: sourceURL, preferredName: preferredName,
+                                                             userExtensions: userExtensions)
         } catch CoverRefreshError.unsupportedFormat {
             let ext = sourceURL.pathExtension
             throw HTTPError(.badRequest, message: L10n.format("この形式（.%@）は表紙を自動生成できません", ext.isEmpty ? "?" : ext))

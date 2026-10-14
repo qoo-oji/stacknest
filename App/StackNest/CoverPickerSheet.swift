@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import LibraryStore
 import ArchiveAdapter
+import AppCore
 import CoreGraphics
 import ImageIO
 
@@ -247,20 +248,22 @@ extension CoverPickerSource {
     /// 担保していない。
     fileprivate static func local(book: BookRow) -> CoverPickerSource {
         let path = book.path
+        // G64: シートを開いている間は、開いたときの 1 つの一覧で通す（足したアーカイブも候補を出す）。
+        let list = UserExtensionStore.shared.snapshot
         return CoverPickerSource(
-            listEntries: { await LocalCoverEntryLoader.entries(path: path) },
-            thumbnail: { await LocalCoverEntryLoader.thumbnail(path: path, entry: $0) },
-            preview: { await LocalCoverEntryLoader.preview(path: path, entry: $0) }
+            listEntries: { await LocalCoverEntryLoader.entries(path: path, userExtensions: list) },
+            thumbnail: { await LocalCoverEntryLoader.thumbnail(path: path, entry: $0, userExtensions: list) },
+            preview: { await LocalCoverEntryLoader.preview(path: path, entry: $0, userExtensions: list) }
         )
     }
 }
 
 /// ローカル経路の実処理（ArchiveAdapter）。
 private enum LocalCoverEntryLoader {
-    static func entries(path: String?) async -> (entries: [String], errorMessage: String?) {
+    static func entries(path: String?, userExtensions: UserExtensionMap) async -> (entries: [String], errorMessage: String?) {
         guard let path else { return ([], String(localized: "ファイル パスが見つかりません")) }
         let url = URL(fileURLWithPath: path)
-        guard let extractor = ArchiveAdapter.coverExtractor(for: url) else {
+        guard let extractor = BookExtractors.coverExtractor(for: url, userExtensions: userExtensions) else {
             return ([], String(localized: "未対応のフォーマットです"))
         }
         do {
@@ -270,10 +273,10 @@ private enum LocalCoverEntryLoader {
         }
     }
 
-    static func thumbnail(path: String?, entry: String) async -> Image? {
+    static func thumbnail(path: String?, entry: String, userExtensions: UserExtensionMap) async -> Image? {
         guard let path else { return nil }
         let url = URL(fileURLWithPath: path)
-        guard let extractor = ArchiveAdapter.coverExtractor(for: url),
+        guard let extractor = BookExtractors.coverExtractor(for: url, userExtensions: userExtensions),
               let data = try? await extractor.extractCoverImage(from: url, preferredName: entry),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -287,10 +290,10 @@ private enum LocalCoverEntryLoader {
         return Image(decorative: cg, scale: 1.0)
     }
 
-    static func preview(path: String?, entry: String) async -> CoverPreviewLoadResult {
+    static func preview(path: String?, entry: String, userExtensions: UserExtensionMap) async -> CoverPreviewLoadResult {
         guard let path else { return .cleared }
         let url = URL(fileURLWithPath: path)
-        guard let extractor = ArchiveAdapter.coverExtractor(for: url) else { return .unchanged }
+        guard let extractor = BookExtractors.coverExtractor(for: url, userExtensions: userExtensions) else { return .unchanged }
         do {
             let data = try await extractor.extractCoverImage(from: url, preferredName: entry)
             // デコードに失敗したときは直前の preview を残す（従来挙動）。

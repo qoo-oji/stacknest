@@ -51,19 +51,23 @@ public enum FullIntegrityScanner {
         /// `fileExists` が個々の本の 1 ファイルを見るのに対し、こちらはライブラリ全体の生死を見る。
         /// 既定は常に true（既存の全テスト・呼び出しはこの分岐に入らない）。
         public let libraryReachable: @Sendable () -> Bool
+        /// G64: 足した拡張子の本か（パス → 真偽）。既定は常に false。
+        public let isUserExtension: @Sendable (String) -> Bool
 
         public init(categoryOf: @escaping @Sendable (String) -> BookCategory,
                     fileExists: @escaping @Sendable (String) -> Bool,
                     statFile: @escaping @Sendable (String) -> (Int64?, Double?),
                     verify: @escaping @Sendable (URL, @escaping @Sendable () async -> Bool) async throws -> ArchiveVerifyResult,
                     now: @escaping @Sendable () -> Int64,
-                    libraryReachable: @escaping @Sendable () -> Bool = { true }) {
+                    libraryReachable: @escaping @Sendable () -> Bool = { true },
+                    isUserExtension: @escaping @Sendable (String) -> Bool = { _ in false }) {
             self.categoryOf = categoryOf
             self.fileExists = fileExists
             self.statFile = statFile
             self.verify = verify
             self.now = now
             self.libraryReachable = libraryReachable
+            self.isUserExtension = isUserExtension
         }
     }
 
@@ -139,7 +143,9 @@ public enum FullIntegrityScanner {
                 // .uncheckedOnly に毎回残り続ける）。ただし「無条件で書く」は書き込みの値の話で、
                 // 書き込みの可否は folder と同じく既存行の有無に従う（下記 isUnassessableCategory）。
                 status = .unsupported
-                isUnassessableCategory = true
+                // G64: 足した拡張子の本は、足す前（未知の拡張子＝アーカイブ）の「破損」が残っていることがあるので、
+                // 「全件やり直し」で上書きする（簡易チェックも動画・テキストは常に「対象外」なので、失う判定は無い）。
+                isUnassessableCategory = !deps.isUserExtension(path)
             } else if category == .image {
                 // Task 2 レビュー（Important）: 単独画像を無条件で unsupported にすると、
                 // G27a の quick スキャンが 0 バイト画像に付けた damaged（QuickIntegrityCheck.swift
@@ -203,8 +209,12 @@ public enum FullIntegrityScanner {
                     // open 自体の失敗（非アーカイブ・権限拒否・ファイル不在等）。libarchive の
                     // 生エラー文字列は絶対パスを含みうるため、QuickIntegrityScanner と同じ
                     // 正規化を通す（同一モジュール内 = internal メソッドをそのまま再利用できる）。
-                    status = .damaged
-                    badEntries = [QuickIntegrityScanner.probeFailureReason(for: error)]
+                    let reason = QuickIntegrityScanner.probeFailureReason(for: error)
+                    // G64: 足した拡張子のアーカイブが開く段で「unrecognized archive format」なら、壊れているのではなく
+                    // StackNest が読めない形式なので「対象外」（アーカイブとして評価した結果なので upsert で書く）。
+                    status = category == .archive && deps.isUserExtension(path)
+                        && reason == QuickIntegrityCheck.unrecognizedFormatReason ? .unsupported : .damaged
+                    badEntries = [reason]
                 }
             }
 
@@ -302,10 +312,15 @@ extension FullIntegrityScanner {
     ///
     /// 実行器は**この Dependencies に 1 個**（＝1 回の走査に 1 個）。直列なので、ディスクイメージへの
     /// 同時要求を増やさない。
-    public static func liveDependencies(libraryBundleURL: URL) -> Dependencies {
+    ///
+    /// G64: 分類と「足した拡張子か」は、走査の始めに読んだ 1 つの一覧（`userExtensions`）で通す。
+    public static func liveDependencies(
+        libraryBundleURL: URL,
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot
+    ) -> Dependencies {
         let executor = ThrottledIOExecutor(policy: ThrottledIOExecutor.configuredPolicy())
         return Dependencies(
-            categoryOf: { BookCategory.classify(path: $0) },
+            categoryOf: { BookCategory.classify(path: $0, userExtensions: userExtensions) },
             fileExists: { FileManager.default.fileExists(atPath: $0) },
             statFile: { Database.statFile($0) },
             verify: { url, isCancelled in
@@ -318,6 +333,7 @@ extension FullIntegrityScanner {
                 }
             },
             now: { Int64(Date().timeIntervalSince1970) },
-            libraryReachable: { FileManager.default.fileExists(atPath: libraryBundleURL.path) })
+            libraryReachable: { FileManager.default.fileExists(atPath: libraryBundleURL.path) },
+            isUserExtension: { BookCategory.userCategory(path: $0, userExtensions: userExtensions) != nil })
     }
 }

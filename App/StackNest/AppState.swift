@@ -28,6 +28,13 @@ final class AppState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
+    /// G64: 足した拡張子の一覧（テストは固定の一覧を渡す。App のテストは本物の UserDefaults の上で動くので、
+    /// `UserExtensionStore.shared` を書き換えない）。
+    @ObservationIgnored var userExtensions: () -> UserExtensionMap = { UserExtensionStore.shared.snapshot }
+    /// G64: 足した拡張子の本を参照ファイルで渡す前に、StackNest がページとして読めるかを確かめる（テストは数える）。
+    @ObservationIgnored var canServePages: @Sendable (String, UserExtensionMap) async -> Bool = { path, list in
+        await BookReadability.canServePages(path: path, userExtensions: list)
+    }
     /// G10: 詳細ペインの表紙表示トグル（per-browser・このウィンドウ専用・既定 true）。
     /// ツールバーボタンで切り替え、DetailPaneView(showCover:) に注入する。
     var showDetailCover: Bool = true
@@ -1425,9 +1432,13 @@ final class AppState {
 
     /// G60: 画像の本は参照ファイルで、それ以外はファイルで、順に外部ビューアへ渡す。
     /// 参照ファイルで渡せなかった本はファイルで開き、理由を書庫の窓のお知らせ（`watchNotice` を共用）に出す。
+    /// G64: 足した拡張子の本は、StackNest が読めるときだけ参照ファイルで渡す（読めなければ鍵もお知らせも出さず、
+    /// ファイルのまま開く＝G60 v3 の「未対応のアプリ」と同じ静かな扱い）。標準の拡張子では確かめない。
     func openInExternalViewerSyncing(_ books: [BookRow]) async {
+        let userExtensions = self.userExtensions()
         for book in books {
-            if let viewer = referenceViewer(for: book) {
+            if let viewer = referenceViewer(for: book),
+               await servesPagesByReference(book, userExtensions: userExtensions) {
                 if let failure = await handOffToExternalViewer(book, viewer: viewer) {
                     if failure == .libraryLocked {
                         // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
@@ -1450,6 +1461,14 @@ final class AppState {
             }
             markAsRead(book: book)
         }
+    }
+
+    /// G64: 参照ファイルで渡してよいか。足した拡張子の本だけ、ページとして読めるかを確かめる
+    /// （読めない本を渡すと、ビューアは manifest を取れず 15 秒後に「読み込んでいません」になる）。
+    private func servesPagesByReference(_ book: BookRow, userExtensions: UserExtensionMap) async -> Bool {
+        guard let path = book.path,
+              BookCategory.userCategory(path: path, userExtensions: userExtensions) != nil else { return true }
+        return await canServePages(path, userExtensions)
     }
 
     /// G60: 1 冊を参照ファイルで渡す。開く位置は保存済みの読書位置。
@@ -1900,6 +1919,8 @@ final class AppState {
         direction: String
     ) async {
         let thumbDir = bundleURL.appending(path: "Thumbnails")
+        // G64: 一覧は操作の始めに 1 回だけ読む（本ごとに読み直さない）。
+        let userExtensions = self.userExtensions()
         for (id, patch) in entries {
             guard patch.coverImageName != nil || patch.clearCoverImageName else { continue }
             let preferredName: String? = patch.clearCoverImageName ? nil : patch.coverImageName
@@ -1913,7 +1934,7 @@ final class AppState {
             // （purge も同じ continue で飛ばされていた）。
             do {
                 let data = try await CoverRefresher.extractCoverData(
-                    sourceURL: sourceURL, preferredName: preferredName)
+                    sourceURL: sourceURL, preferredName: preferredName, userExtensions: userExtensions)
                 try CoverRefresher.regenerateFromImageData(
                     bookID: id, imageData: data, thumbnailsDirURL: thumbDir)
                 Self.coverLogger.info("prepareCoverFiles: \(direction, privacy: .public) file written, bookID=\(id, privacy: .public)")

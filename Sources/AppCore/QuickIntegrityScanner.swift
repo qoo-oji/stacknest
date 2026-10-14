@@ -35,17 +35,21 @@ public enum QuickIntegrityScanner {
         public let statFile: @Sendable (String) -> (Int64?, Double?)
         public let probe: @Sendable (URL) async -> QuickProbe
         public let now: @Sendable () -> Int64
+        /// G64: 足した拡張子の本か（パス → 真偽）。既定は常に false（既存の呼び出し・テストはこの分岐に入らない）。
+        public let isUserExtension: @Sendable (String) -> Bool
 
         public init(categoryOf: @escaping @Sendable (String) -> BookCategory,
                     fileExists: @escaping @Sendable (String) -> Bool,
                     statFile: @escaping @Sendable (String) -> (Int64?, Double?),
                     probe: @escaping @Sendable (URL) async -> QuickProbe,
-                    now: @escaping @Sendable () -> Int64) {
+                    now: @escaping @Sendable () -> Int64,
+                    isUserExtension: @escaping @Sendable (String) -> Bool = { _ in false }) {
             self.categoryOf = categoryOf
             self.fileExists = fileExists
             self.statFile = statFile
             self.probe = probe
             self.now = now
+            self.isUserExtension = isUserExtension
         }
     }
 
@@ -75,7 +79,8 @@ public enum QuickIntegrityScanner {
             }
 
             let outcome = QuickIntegrityCheck.classify(
-                category: category, exists: exists, probe: probeResult, fileSize: size)
+                category: category, exists: exists, probe: probeResult, fileSize: size,
+                isUserExtension: deps.isUserExtension(path))
 
             let entryCount: Int? = {
                 if case .enumerated(let c, _) = probeResult { return c }
@@ -121,12 +126,16 @@ extension QuickIntegrityScanner {
     ///
     /// **archive と folder で extractor が異なる**ため、URL がディレクトリかどうかで振り分ける
     /// （`CoverRefresher` / `BookContent` が archive/folder を dispatch する方法に合わせた）。
+    ///
+    /// G64: 分類と「足した拡張子か」は、走査の始めに読んだ 1 つの一覧（`userExtensions`）で通す
+    /// （以前の `categoryOf` は呼ぶたびに読んでいた）。
     public static func liveDependencies(
         archiveExtractor: any CoverImageExtractor,
-        folderExtractor: any CoverImageExtractor
+        folderExtractor: any CoverImageExtractor,
+        userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot
     ) -> Dependencies {
         Dependencies(
-            categoryOf: { BookCategory.classify(path: $0) },
+            categoryOf: { BookCategory.classify(path: $0, userExtensions: userExtensions) },
             fileExists: { FileManager.default.fileExists(atPath: $0) },
             statFile: { Database.statFile($0) },
             probe: { url in
@@ -139,7 +148,8 @@ extension QuickIntegrityScanner {
                     return .failed(reason: probeFailureReason(for: error))
                 }
             },
-            now: { Int64(Date().timeIntervalSince1970) })
+            now: { Int64(Date().timeIntervalSince1970) },
+            isUserExtension: { BookCategory.userCategory(path: $0, userExtensions: userExtensions) != nil })
     }
 
     /// probe (`listImageEntries`) が throw したエラーを、badEntries に安全に書ける

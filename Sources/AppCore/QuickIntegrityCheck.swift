@@ -25,6 +25,10 @@ public enum QuickIntegrityCheck {
         }
     }
 
+    /// G64: 開く段の「unrecognized archive format」（`QuickIntegrityScanner.probeFailureReason` の分類）。
+    /// 足した拡張子のアーカイブでこれなら、壊れているのではなく StackNest が読めない形式なので「対象外」。
+    public static let unrecognizedFormatReason = "archive unreadable: unrecognized archive format"
+
     /// 列挙（I/O）が必要な種別か。image は開かずに 1 ページと確定できる。
     public static func needsProbe(category: BookCategory) -> Bool {
         switch category {
@@ -37,8 +41,11 @@ public enum QuickIntegrityCheck {
     ///   意味を持つ）。`.image` の分類にのみ使う ―― 0 バイトや stat 失敗（nil）の単独画像を
     ///   「開かずに確定できる 1 ページ」として誤って ok にしないため（Fix4: これをしないと
     ///   `pages` が 1 で書き込まれ、`pages IS NULL OR pages = 0` の次回候補から永久に外れる）。
+    /// - Parameter isUserExtension: G64: 足した拡張子の本か。足したアーカイブを開く段で「unrecognized archive format」
+    ///   なら「対象外」にする（理由は残す）。途中の打ち切りなどそれ以外の失敗は今どおり「破損」。標準（tar を含む）と
+    ///   足していない拡張子は今どおり「破損」。
     public static func classify(category: BookCategory, exists: Bool, probe: QuickProbe?,
-                                fileSize: Int64? = nil) -> Outcome {
+                                fileSize: Int64? = nil, isUserExtension: Bool = false) -> Outcome {
         guard exists else { return Outcome(status: .missing, pageCount: nil) }
 
         switch category {
@@ -62,6 +69,9 @@ public enum QuickIntegrityCheck {
             }
             switch probe {
             case .failed(let reason):
+                if isUserExtension, category == .archive, reason == unrecognizedFormatReason {
+                    return Outcome(status: .unsupported, pageCount: nil, reason: reason)
+                }
                 return Outcome(status: .damaged, pageCount: nil, reason: reason)
             case .enumerated(let count, let truncated):
                 if truncated {

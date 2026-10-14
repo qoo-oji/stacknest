@@ -679,9 +679,12 @@ struct DetailPaneView: View {
     /// 判定すると、リモート書庫のすべての本で「表紙を編集」が押せなくなる（旧判定は「動画かどうか」で
     /// 場所が無ければ「動画でない＝有効」と扱われていたので気づかれなかった）。
     /// `remoteFileExtension` はサーバが別途返す拡張子（`BookDetailDTO.fileExtension`）を渡す。
-    static func canEditCover(path: String?, remoteFileExtension: String? = nil) -> Bool {
+    /// G64: ローカルの本は足した拡張子も含めて決める（足したアーカイブは押せる）。リモートの本は標準の表だけで決める
+    /// （手元の一覧はサーバの一覧と一致しない。ArchiveAdapter を直接引く）。
+    static func canEditCover(path: String?, remoteFileExtension: String? = nil,
+                             userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) -> Bool {
         if let path, !path.isEmpty {
-            return ArchiveAdapter.coverExtractor(for: URL(fileURLWithPath: path)) != nil
+            return BookExtractors.coverExtractor(for: URL(fileURLWithPath: path), userExtensions: userExtensions) != nil
         }
         guard let ext = remoteFileExtension else { return false }
         // 拡張子が空＝サーバ側のフォルダ本。フォルダは候補を返せるので押せるままにする

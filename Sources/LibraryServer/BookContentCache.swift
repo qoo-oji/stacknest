@@ -26,9 +26,13 @@ public actor BookContentCache {
     private var entries: [String: Entry] = [:]
     private let ttl: Duration
     private let clock = ContinuousClock()
+    /// G64: 本を作るときの足した拡張子の一覧（書庫を持つ Mac の一覧。`LibraryServerConfig.userExtensions`）。
+    private let userExtensions: @Sendable () -> UserExtensionMap
 
-    public init(ttlSeconds: Int) {
+    public init(ttlSeconds: Int,
+                userExtensions: @escaping @Sendable () -> UserExtensionMap = { UserExtensionStore.shared.snapshot }) {
         self.ttl = .seconds(ttlSeconds)
+        self.userExtensions = userExtensions
     }
 
     public func content(for row: BookRow, libraryUUID: String) throws -> any BookContent {
@@ -68,7 +72,7 @@ public actor BookContentCache {
         // 未キャッシュ、または row の content 基準（path/mtime/size）が変化した＝再構築。
         // 旧 Entry の強参照はここで落ち、ArchiveBookContent→SequentialArchiveExtractor の deinit が
         // 走って temp が即掃除される（リモート temp TTL follow-up を相乗りでカバー）。
-        let content = try BookContentFactory.make(for: row)
+        let content = try BookContentFactory.make(for: row, userExtensions: userExtensions())
         entries[key] = Entry(content: content, lastAccess: now, basis: basis)
         return (content, etag)
     }

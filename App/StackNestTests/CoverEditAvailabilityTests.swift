@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import Foundation
 import Testing
+import AppCore
 @testable import StackNest
 
 /// G54-S4: 「表紙を編集」の可否は分類ではなく**表紙候補を取り出せるか**で決まる。
@@ -49,5 +50,21 @@ struct CoverEditAvailabilityTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(DetailPaneView.canEditCover(path: dir.path) == true)
+    }
+
+    // MARK: - G64
+
+    @Test("G64: ローカルの標準の cbt と足した tgz は押せる・足していない tgz は押せない")
+    func localTarAndAddedArchive() {
+        #expect(DetailPaneView.canEditCover(path: "/tmp/a.cbt", userExtensions: [:]) == true)
+        #expect(DetailPaneView.canEditCover(path: "/tmp/a.g64arc", userExtensions: ["g64arc": .archive]) == true)
+        #expect(DetailPaneView.canEditCover(path: "/tmp/a.g64arc", userExtensions: [:]) == false)
+        #expect(DetailPaneView.canEditCover(path: "/tmp/a.docx", userExtensions: ["docx": .text]) == false)
+    }
+
+    @Test("G64: リモートの cbt は押せる・リモートの未知の拡張子は手元の一覧に関わらず押せない")
+    func remoteUsesTheStandardTableOnly() {
+        #expect(DetailPaneView.canEditCover(path: nil, remoteFileExtension: "cbt", userExtensions: [:]) == true)
+        #expect(DetailPaneView.canEditCover(path: nil, remoteFileExtension: "g64arc", userExtensions: ["g64arc": .archive]) == false)
     }
 }
