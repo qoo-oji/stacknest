@@ -141,6 +141,8 @@ public enum CoverRefresher {
         do {
             switch category {
             case .archive:
+                // 意図的に `BookExtractors` の足したアーカイブの抽出器（libarchive）と同じものを直接使う。
+                // あちらの振り分けを変えたら、ここも合わせること。
                 // `@` 始まりは動画の場面指定などの印で、アーカイブのエントリ名ではない。
                 let name = preferredName.flatMap { $0.hasPrefix("@") ? nil : $0 }
                 return try await ArchivePDFFallback.coverData(in: sourceURL, preferredName: name,

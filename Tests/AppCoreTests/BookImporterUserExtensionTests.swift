@@ -58,6 +58,22 @@ struct BookImporterUserExtensionTests {
         #expect(r.coverFailures.isEmpty)
     }
 
+    @Test("足した PDF だけのアーカイブ: 中の PDF のページ数と 1 ページ目の表紙（Quick Look は呼ばない）")
+    func addedPDFOnlyArchive() async throws {
+        let fake = FakeThumbnailer()
+        let (importer, db, dir) = try makeImporter(fake); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try G64Fixtures.copyPDFOnlyZip(to: dir.appendingPathComponent("a.foo"))
+        let r = await add(importer, url, ["foo": .archive])
+        let id = try #require(r.addedIDs.first)
+        let book = try #require(try db.fetchBook(id: id))
+        #expect(book.pages == 5)
+        #expect(book.bookType == 1)
+        let thumb = thumbnail(dir, id)
+        #expect(G64Fixtures.isJPEG(thumb) && thumb != FakeThumbnailer.marker)
+        #expect(fake.calls.isEmpty)
+        #expect(r.coverFailures.isEmpty)
+    }
+
     @Test("Quick Look も失敗したら coverFailures（取り込みは続く）")
     func quickLookFailureIsACoverFailure() async throws {
         let fake = FakeThumbnailer(result: nil)

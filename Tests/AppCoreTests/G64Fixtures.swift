@@ -30,6 +30,10 @@ enum G64Fixtures {
         return out as Data
     }
 
+    /// `makeTar` の n ページ目（n=1...3）の PNG。ページごとに大きさを変え、どのページが選ばれたかを区別できるようにする。
+    /// 1 ページ目は `png()` の既定と同じ（4x4）。
+    static func pagePNG(_ n: Int) -> Data { png(width: 3 + n, height: 3 + n) }
+
     /// でたらめなバイト（どの形式の印にも当たらない並び）。
     static let noise = Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
 
@@ -39,7 +43,7 @@ enum G64Fixtures {
         let src = url.deletingLastPathComponent().appendingPathComponent("src-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: src) }
-        for name in ["page1.png", "page2.png", "page3.png"] { try png().write(to: src.appendingPathComponent(name)) }
+        for n in 1...3 { try pagePNG(n).write(to: src.appendingPathComponent("page\(n).png")) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         process.environment = ["COPYFILE_DISABLE": "1"]   // `._` のエントリを入れない

@@ -18,7 +18,19 @@ struct UserExtensionCoverTests {
         let dir = try G64Fixtures.tempDir("cov-arc"); defer { try? FileManager.default.removeItem(at: dir) }
         let tgz = try G64Fixtures.makeTar(at: dir.appendingPathComponent("a.tgz"), gzip: true)
         let fake = FakeThumbnailer()
-        #expect(try await extract(tgz, ["tgz": .archive], fake) == G64Fixtures.png())
+        #expect(try await extract(tgz, ["tgz": .archive], fake) == G64Fixtures.pagePNG(1))
+        #expect(fake.calls.isEmpty)
+    }
+
+    @Test("足したアーカイブ: 名前なしは page1・名前指定はその画像・@ 始まりは無視して page1")
+    func addedArchiveHonoursPreferredName() async throws {
+        let dir = try G64Fixtures.tempDir("cov-name"); defer { try? FileManager.default.removeItem(at: dir) }
+        let tgz = try G64Fixtures.makeTar(at: dir.appendingPathComponent("a.tgz"), gzip: true)
+        let fake = FakeThumbnailer()
+        let added: UserExtensionMap = ["tgz": .archive]
+        #expect(try await extract(tgz, added, fake) == G64Fixtures.pagePNG(1))
+        #expect(try await extract(tgz, added, fake, preferredName: "page3.png") == G64Fixtures.pagePNG(3))
+        #expect(try await extract(tgz, added, fake, preferredName: "@t=1.0") == G64Fixtures.pagePNG(1))
         #expect(fake.calls.isEmpty)
     }
 

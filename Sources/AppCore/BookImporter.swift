@@ -147,6 +147,8 @@ public struct BookImporter: Sendable {
                             }
                             if pageCount == 0, let pdf = await ArchivePDFFallback.embeddedPDF(in: url, extractor: extractor) {
                                 pageCount = pdf.pageCount
+                                // 中の PDF は 1 回だけ取り出す（表紙もここで得る。無ければ下で Quick Look まで進む）。
+                                coverDataOverride = pdf.cover
                             }
                         }
                         addedArchiveUnreadable = pageCount == 0
@@ -155,7 +157,7 @@ public struct BookImporter: Sendable {
                     case .video, .text, .folder:
                         break
                     }
-                    if let data = try? await CoverRefresher.extractCoverData(
+                    if coverDataOverride == nil, let data = try? await CoverRefresher.extractCoverData(
                         sourceURL: url, preferredName: nil, userExtensions: userExtensions, thumbnailer: thumbnailer) {
                         coverDataOverride = CoverImageResizer.resizeJPEG(data, maxPixelSize: 1200)
                     }

@@ -7,7 +7,7 @@ import QuickLookThumbnailing
 @testable import AppCore
 
 /// G64: Quick Look の縮小画像と、白で塗る JPEG（spec §6.6）。本物の Quick Look のサービスには頼らない。
-@Suite("G64: Quick Look の表紙")
+@Suite("G64: Quick Look の表紙", .timeLimit(.minutes(1)))
 struct CoverThumbnailingTests {
     /// 生成の偽物。`image` を返す（nil なら返さない＝時間切れを作る）。取り消しを数える。
     final class FakeGenerator: QuickLookGenerating, @unchecked Sendable {
@@ -21,7 +21,7 @@ struct CoverThumbnailingTests {
         func start(_ request: QLThumbnailGenerator.Request, completion: @escaping @Sendable (CGImage?) -> Void) {
             lock.withLock { requests.append(request) }
             guard let image else { return }        // 返らない
-            DispatchQueue.global().async { completion(image) }
+            completion(image)   // 同期で返す（負荷でスレッドが遅れても時間切れに負けない）
         }
         func cancel(_ request: QLThumbnailGenerator.Request) { lock.withLock { cancelled += 1 } }
     }
@@ -73,13 +73,13 @@ struct CoverThumbnailingTests {
     @Test("返ったら取り消さず、透明を白で塗った JPEG")
     func completedImageIsWhiteBackedJPEG() async throws {
         let generator = FakeGenerator(image: halfTransparent())
-        let thumbnailer = QuickLookCoverThumbnailer(timeout: .seconds(5), generator: generator)
+        let thumbnailer = QuickLookCoverThumbnailer(timeout: .milliseconds(300), generator: generator)
         let data = try #require(await thumbnailer.coverJPEG(for: URL(fileURLWithPath: "/tmp/a.docx"), maxPixelSize: 1200))
         #expect(G64Fixtures.isJPEG(data))
         #expect(try red(in: data, x: 1, y: 1) > 230, "透明だった左は白")
         #expect(try red(in: data, x: 6, y: 1) < 40, "黒い右は黒のまま")
         // 取り消しの見張りは成功で止まる（後から発火しない）。
-        try await Task.sleep(for: .milliseconds(50))
+        try await Task.sleep(for: .milliseconds(800))   // 上限（300 ms）を十分に過ぎるまで待つ
         #expect(generator.cancelCount == 0)
     }
 
