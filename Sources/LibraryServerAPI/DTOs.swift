@@ -809,7 +809,7 @@ public struct IntegritySummaryReply: Codable, Sendable {
     /// 表示されるようにする ―― このブランチが 6 ラウンドかけて除去した「読めなかったことを
     /// 事実として断言する」欠陥（施錠庫を『破損 0 冊』と表示していた等）の再演を避けるため。
     public let lastScanAtKnown: Bool
-    /// 対象外（破損チェックの対象にしない本）の冊数。G64 のスモークで追加 ―― **古いサーバはキーを送らない**ので
+    /// 対象外（破損チェックの対象にしない本。フォルダ・動画・テキスト・電子書籍、StackNest が読めない形式）の冊数。G64 のスモークで追加 ―― **古いサーバはキーを送らない**ので
     /// nil は「不明」（0 冊ではない）。新しいサーバは常に数を送る。
     public let unsupported: Int?
 
@@ -820,7 +820,7 @@ public struct IntegritySummaryReply: Codable, Sendable {
     /// サーバ側・テスト側から直接組み立てる用。新サーバが答える値は常に「分かっている」ので
     /// `lastScanAtKnown` は既定 `true`（旧サーバのシミュレートには `init(from:)` 経由で
     /// キーを欠いた JSON を渡すこと）。
-    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int, unsupported: Int? = nil,
+    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int, unsupported: Int?,
                 lastScanAt: Int64? = nil, lastScanAtKnown: Bool = true) {
         self.checked = checked; self.unchecked = unchecked
         self.damaged = damaged; self.degraded = degraded

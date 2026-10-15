@@ -56,9 +56,10 @@ public enum QuickIntegrityCheck {
     }
 
     /// - Parameter fileSize: 呼び出し側が事前に stat したファイルサイズ（`exists` が true のときのみ
-    ///   意味を持つ）。`.image` の分類にのみ使う ―― 0 バイトや stat 失敗（nil）の単独画像を
+    ///   意味を持つ）。`.image` の分類に使う ―― 0 バイトや stat 失敗（nil）の単独画像を
     ///   「開かずに確定できる 1 ページ」として誤って ok にしないため（Fix4: これをしないと
-    ///   `pages` が 1 で書き込まれ、`pages IS NULL OR pages = 0` の次回候補から永久に外れる）。
+    ///   `pages` が 1 で書き込まれ、`pages IS NULL OR pages = 0` の次回候補から永久に外れる）。G64: アーカイブの失敗でも使い、0 バイトは「対象外」にせず（`isUnsupportedOpenFailure`）、
+    ///   保存する理由も `emptyFileReason` にする（`storedOpenFailureReason`）。
     /// - Parameter isUserExtension: G64: 足した拡張子の本か。足したアーカイブを開く段で「unrecognized archive format」
     ///   なら「対象外」にする（理由は残す）。途中の打ち切りなどそれ以外の失敗は今どおり「破損」。標準（tar を含む）と
     ///   足していない拡張子は今どおり「破損」。

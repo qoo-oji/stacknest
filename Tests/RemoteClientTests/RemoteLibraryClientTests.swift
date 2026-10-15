@@ -401,7 +401,7 @@ struct StubBackedRemoteClientTests {
 
         @Test func fetchIntegritySummaryDecodes() async throws {
             StubURLProtocol.stub = .init(status: 200, headers: [:],
-                body: try enc().encode(IntegritySummaryReply(checked: 10, unchecked: 2, damaged: 1, degraded: 0)))
+                body: try enc().encode(IntegritySummaryReply(checked: 10, unchecked: 2, damaged: 1, degraded: 0, unsupported: nil)))
             let dto = try await makeClient().fetchIntegritySummary(libraryUUID: "U", libraryToken: nil)
             #expect(StubURLProtocol.lastRequest?.httpMethod == "GET")
             #expect(StubURLProtocol.lastRequest?.url?.path.hasSuffix("/libraries/U/integrity/summary") == true)
@@ -425,7 +425,7 @@ struct StubBackedRemoteClientTests {
         @Test func fetchIntegritySummaryFromNewServerWithLastScanAtDecodes() async throws {
             StubURLProtocol.stub = .init(status: 200, headers: [:],
                 body: try enc().encode(IntegritySummaryReply(
-                    checked: 10, unchecked: 2, damaged: 1, degraded: 0, lastScanAt: 1_700_000_000)))
+                    checked: 10, unchecked: 2, damaged: 1, degraded: 0, unsupported: nil, lastScanAt: 1_700_000_000)))
             let dto = try await makeClient().fetchIntegritySummary(libraryUUID: "U", libraryToken: nil)
             #expect(dto.lastScanAtKnown == true)
             #expect(dto.lastScanAt == 1_700_000_000)

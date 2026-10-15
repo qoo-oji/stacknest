@@ -185,6 +185,7 @@ App の文字列カタログは **1 つの日本語キーに 1 つの英訳**し
 | 簡易チェック／詳細（CRC）チェック | Quick Check／Detailed (CRC) Check | |
 | 未検査をスキャン／全件やり直し／前回破損のみ再検査 | Scan Unchecked／Recheck All／Recheck Damaged Only | ヘルプも同じ語 |
 | 破損／劣化 | Damaged／Degraded | 「劣化」は前回 OK → 今回破損 |
+| 対象外 | Not applicable | 破損チェックの対象にしない本。CLI・JSON・MCP では状態の値 `unsupported` のまま |
 | バックアップ | Backup | |
 | メンテナンス | Maintenance | |
 | データベースを検査 | Check Database | |

@@ -395,7 +395,7 @@ struct RemoteIntegrityDataSourceTests {
         let client = RemoteLibraryClient(
             baseURL: URL(string: "http://127.0.0.1:1")!, deviceToken: "test-token", session: session)
         let reply = IntegritySummaryReply(
-            checked: 3, unchecked: 0, damaged: 1, degraded: 0,
+            checked: 3, unchecked: 0, damaged: 1, degraded: 0, unsupported: nil,
             lastScanAt: 1_700_000_000, lastScanAtKnown: true)
         CountingStubURLProtocol.responseBody = try JSONEncoder().encode(reply)
         CountingStubURLProtocol.requestCount = 0

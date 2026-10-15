@@ -40,7 +40,7 @@ struct IntegritySummaryReplyDTOTests {
     func encodeAlwaysIncludesTheKeyEvenWhenNil() throws {
         // `encodeIfPresent` を使っていたら nil のときキーごと消え、旧サーバの沈黙と
         // 区別できなくなる ―― ここはそれを防ぐための最重要契約なので、生 JSON を直接見る。
-        let reply = IntegritySummaryReply(checked: 0, unchecked: 5, damaged: 0, degraded: 0, lastScanAt: nil)
+        let reply = IntegritySummaryReply(checked: 0, unchecked: 5, damaged: 0, degraded: 0, unsupported: nil, lastScanAt: nil)
         let data = try JSONEncoder().encode(reply)
         let json = String(data: data, encoding: .utf8) ?? ""
         #expect(json.contains(#""lastScanAt":null"#), "nil でもキーを省略してはいけない: \(json)")
@@ -48,7 +48,7 @@ struct IntegritySummaryReplyDTOTests {
 
     @Test("encode → decode のラウンドトリップで lastScanAtKnown が true として往復する")
     func roundTripsAsKnownEvenWhenValueIsNil() throws {
-        let original = IntegritySummaryReply(checked: 1, unchecked: 1, damaged: 0, degraded: 0, lastScanAt: nil)
+        let original = IntegritySummaryReply(checked: 1, unchecked: 1, damaged: 0, degraded: 0, unsupported: nil, lastScanAt: nil)
         let data = try JSONEncoder().encode(original)
         let back = try JSONDecoder().decode(IntegritySummaryReply.self, from: data)
         #expect(back.lastScanAt == nil)
@@ -57,7 +57,7 @@ struct IntegritySummaryReplyDTOTests {
 
     @Test("値ありのラウンドトリップも往復する")
     func roundTripsWithValue() throws {
-        let original = IntegritySummaryReply(checked: 1, unchecked: 1, damaged: 0, degraded: 0, lastScanAt: 42)
+        let original = IntegritySummaryReply(checked: 1, unchecked: 1, damaged: 0, degraded: 0, unsupported: nil, lastScanAt: 42)
         let back = try JSONDecoder().decode(IntegritySummaryReply.self, from: try JSONEncoder().encode(original))
         #expect(back.lastScanAt == 42)
         #expect(back.lastScanAtKnown == true)
