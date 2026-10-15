@@ -426,4 +426,23 @@ struct IntegrityWindowLogicTests {
         #expect(IntegrityWindowLogic.badEntryText("some future reason nobody wrote a translation for")
             == "some future reason nobody wrote a translation for")
     }
+
+    // MARK: - scanFinished（G64 スモーク C: 最初の tick より前に終わるスキャン）
+
+    @Test("scanFinished の真理値表: 走行を見た or 開始に成功した直後で、ジョブが無いときだけ true",
+          arguments: [
+            (false, false, false, false),
+            (true, false, false, true),
+            (false, true, false, true),   // 最初の tick より前に終わったスキャン
+            (true, true, false, true),
+            (false, false, true, false),
+            (true, false, true, false),   // まだ走っている
+            (false, true, true, false),   // 開始直後で、まだ走っている
+            (true, true, true, false),
+          ])
+    func scanFinishedTruthTable(wasRunning: Bool, awaiting: Bool, running: Bool, expected: Bool) {
+        let status = running ? IntegrityJobProgress(job: "full-scan", done: 1, total: 2) : nil
+        #expect(IntegrityWindowLogic.scanFinished(wasRunning: wasRunning, awaitingCompletion: awaiting,
+                                                  status: status) == expected)
+    }
 }

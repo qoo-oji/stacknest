@@ -28,6 +28,14 @@ import SwiftUI
 /// 既にテスト済みなので、ここではその上に乗る「ウィンドウ固有」のロジック（要約文言・表示順・
 /// 完了メッセージ・ボタン→モードの対応）だけを扱う。
 enum IntegrityWindowLogic {
+    /// スキャンが終わったと判断してよいか（完了レポートの回収と一覧の再読み込みを行う契機）。
+    /// ポーリングが走行中を一度でも見た（`wasRunning`）か、このウィンドウが開始に成功した直後
+    /// （`awaitingCompletion`）で、いま走っているジョブが無いとき。後者が要るのは、数冊だけ・0 冊のように
+    /// 最初の tick より前に終わるスキャンを取りこぼさないため（G64 スモーク C）。
+    static func scanFinished(wasRunning: Bool, awaitingCompletion: Bool, status: IntegrityJobProgress?) -> Bool {
+        (wasRunning || awaitingCompletion) && status == nil
+    }
+
     /// 3 つのスキャンボタンと `FullScanMode` の対応。
     enum ScanAction: String, CaseIterable, Identifiable, Sendable {
         case uncheckedOnly
@@ -549,6 +557,9 @@ struct IntegrityCheckView: View {
     /// 失敗時は更新しない（画面上のデータは古い成功時点のものであり続けるため、
     /// スタンプもそれに合わせて古いままにする）。
     @State private var lastRefreshedAt: Date?
+    /// G64 スモーク: このウィンドウが `startScan` に成功し、終了をまだ見届けていない間は true。
+    /// 最初の tick より前に終わるスキャンでも、完了レポートと再読み込みを取りこぼさない。
+    @State private var awaitingCompletion = false
 
     /// `canStartScan`/`scanUnavailableReason` の初期値を `dataSource` から同期的に読むためだけの
     /// 明示的な `init`（`@State` の initial value は宣言時の定数式にできないため）。
@@ -897,7 +908,9 @@ struct IntegrityCheckView: View {
                     if status?.isIntegrityFullScan == true {
                         scanErrorText = nil
                     }
-                    if wasRunning, status == nil {
+                    if IntegrityWindowLogic.scanFinished(wasRunning: wasRunning,
+                                                         awaitingCompletion: awaitingCompletion, status: status) {
+                        awaitingCompletion = false
                         // ジョブが終わった。自分で開始していれば box に詳細レポートが入っている。
                         if let report = dataSource.takeCompletionReport() {
                             lastReport = report
@@ -916,7 +929,8 @@ struct IntegrityCheckView: View {
                 canStartScan = dataSource.canStartScan
                 scanUnavailableReason = dataSource.scanUnavailableReason
                 if Task.isCancelled { return }
-                let interval = wasRunning ? Self.activePollIntervalNanoseconds : dataSource.idlePollIntervalNanoseconds
+                let interval = (wasRunning || awaitingCompletion)
+                    ? Self.activePollIntervalNanoseconds : dataSource.idlePollIntervalNanoseconds
                 try? await Task.sleep(nanoseconds: interval)
             }
         }
@@ -956,6 +970,7 @@ struct IntegrityCheckView: View {
             do {
                 let started = try await dataSource.startScan(mode: action.mode)
                 if started {
+                    awaitingCompletion = true
                     // 次のポーリング tick を待たず、起動直後から running を即時反映する。
                     // ここでの取得失敗は無視してよい（`try?`）―― 400ms 後の `startObserving()`
                     // のポーリングが同じ失敗を検出し `progressErrorText` を立てる。
