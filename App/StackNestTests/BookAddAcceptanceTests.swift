@@ -42,5 +42,31 @@ struct BookAddAcceptanceTests {
         #expect(some.contains(try #require(UTType(filenameExtension: "tgz"))))
         // どのアプリも宣言していない拡張子は動的な型になり、その拡張子を持つ。
         #expect(some.contains { $0.preferredFilenameExtension == "djvu" || $0.tags[.filenameExtension]?.contains("djvu") == true })
+        // 存在しない型 ID の `?? .data` で「全部のファイル」を許さない（7z の ID は org.7-zip.7-zip-archive）。
+        #expect(!none.contains { $0.identifier == "public.data" })
+        let sevenZ = try #require(UTType(filenameExtension: "7z"))
+        #expect(none.contains { sevenZ.conforms(to: $0) })
+    }
+
+    @Test("読み込みのパネルの delegate: ドロップと同じ規則で有効・無効を決める")
+    func panelDelegateDecision() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("g64-panel-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tgz = try file(dir, "a.tgz"), djvu = try file(dir, "a.djvu"), avif = try file(dir, "a.avif")
+        let gp3 = try file(dir, "a.3gp"), cbz = try file(dir, "a.cbz")
+        let plain = AddPanelDelegate(userExtensions: [:])
+        #expect(!plain.panel(NSObject(), shouldEnable: tgz))
+        #expect(!plain.panel(NSObject(), shouldEnable: djvu))
+        #expect(!plain.panel(NSObject(), shouldEnable: avif))
+        #expect(!plain.panel(NSObject(), shouldEnable: gp3))
+        #expect(plain.panel(NSObject(), shouldEnable: cbz))
+        #expect(plain.panel(NSObject(), shouldEnable: dir), "ディレクトリは移動と選択のために有効")
+        let added = AddPanelDelegate(userExtensions: ["tgz": .archive, "avif": .image])
+        #expect(added.panel(NSObject(), shouldEnable: tgz))
+        #expect(added.panel(NSObject(), shouldEnable: avif))
+        #expect(!added.panel(NSObject(), shouldEnable: djvu))
+        // パネルを抜けた後の絞り込みも同じ規則。
+        #expect(plain.filter([tgz, djvu, cbz, dir]) == [cbz, dir])
     }
 }

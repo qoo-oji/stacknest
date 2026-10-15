@@ -50,3 +50,28 @@ struct BookDropDelegate: DropDelegate {
         return BookCategory.registrableExtensions(userExtensions: userExtensions).contains(ext)
     }
 }
+
+/// 読み込みのパネルの delegate（G64 スモークの修正）。パネルがドロップと同じ規則
+/// （`BookDropDelegate.isAcceptable`）で選べるものを決める。`NSOpenPanel.delegate` は weak なので、
+/// 呼び出し側が `runModal()` の間保持する。
+final class AddPanelDelegate: NSObject, NSOpenSavePanelDelegate {
+    private let userExtensions: UserExtensionMap
+
+    init(userExtensions: UserExtensionMap) {
+        self.userExtensions = userExtensions
+    }
+
+    /// パネルの判断そのもの。テストから直接呼ぶ。
+    static func shouldEnable(url: URL, userExtensions: UserExtensionMap) -> Bool {
+        BookDropDelegate.isAcceptable(url: url, userExtensions: userExtensions)
+    }
+
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        Self.shouldEnable(url: url, userExtensions: userExtensions)
+    }
+
+    /// 選ばれた URL を同じ規則で絞る。
+    func filter(_ urls: [URL]) -> [URL] {
+        urls.filter { Self.shouldEnable(url: $0, userExtensions: userExtensions) }
+    }
+}

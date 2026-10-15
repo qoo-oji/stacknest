@@ -322,16 +322,20 @@ struct LibraryBrowserView: View {
     /// 読み込みのパネルで選べる型。Phase 2.5g+h+i fixup v1: 既存 archive 系 + folder + image / pdf / movie / text の
     /// 包括 UTType。G64: 標準の tar（`public.tar-archive`・StackNest が宣言する cbt）と、足した拡張子ごとの型
     /// （どのアプリも宣言していない拡張子は動的な型 `dyn.…` になり、その拡張子のファイルが選べる）を足す。
+    ///
+    /// 解決できない型は黙って外す（`?? .data` で「全部のファイル」を許さない）。7z の型 ID は
+    /// `public.7z-archive` ではなく `org.7-zip.7-zip-archive`。`.image` と `.movie` は avif・jxl・3gp も含むため、
+    /// 受け入れの最終判断はパネルの delegate（`AddPanelDelegate`）が `BookDropDelegate.isAcceptable` で行う。
     static func addPanelContentTypes(userExtensions: UserExtensionMap) -> [UTType] {
-        var types: [UTType] = [
+        let archiveAndFolder: [UTType?] = [
             // archive
             .zip,
-            UTType("app.shelfsmith.stacknest.cbz") ?? .zip,
-            UTType("app.shelfsmith.stacknest.cbr") ?? .data,
-            UTType("public.7z-archive") ?? .data,
-            UTType("com.rarlab.rar-archive") ?? .data,
-            UTType("public.tar-archive") ?? .data,
-            UTType("app.shelfsmith.stacknest.cbt") ?? UTType(filenameExtension: "cbt") ?? .data,
+            UTType("app.shelfsmith.stacknest.cbz"),
+            UTType("app.shelfsmith.stacknest.cbr"),
+            UTType("org.7-zip.7-zip-archive"),
+            UTType("com.rarlab.rar-archive"),
+            UTType("public.tar-archive"),
+            UTType("app.shelfsmith.stacknest.cbt") ?? UTType(filenameExtension: "cbt"),
             // folder
             .folder,
             // single files (B18 + B20 + B21)
@@ -339,21 +343,32 @@ struct LibraryBrowserView: View {
             .pdf,
             .movie,           // mp4/mov/m4v を包含
             .plainText,
-            UTType("org.idpf.epub-container") ?? .data
+            UTType("org.idpf.epub-container")
         ]
+        var types = archiveAndFolder.compactMap { $0 }
         types += userExtensions.keys.sorted().compactMap { UTType(filenameExtension: $0) }
         return types
     }
 
     private func showAddPanel() {
+        // 拡張子の一覧は開く時に 1 度だけ取り、型・delegate・事後の絞り込みに同じ値を使う。
+        let userExtensions = UserExtensionStore.shared.snapshot
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = Self.addPanelContentTypes(userExtensions: UserExtensionStore.shared.snapshot)
+        panel.allowedContentTypes = Self.addPanelContentTypes(userExtensions: userExtensions)
+        // NSOpenPanel.delegate は weak。runModal() の間ローカル変数で保持する。
+        let panelDelegate = AddPanelDelegate(userExtensions: userExtensions)
+        panel.delegate = panelDelegate
         let targetShelfID = appState.removableShelfID
-        if panel.runModal() == .OK {
-            handleAdd(urls: panel.urls, targetShelfID: targetShelfID)
+        let response = panel.runModal()
+        panel.delegate = nil
+        if response == .OK {
+            // 入力したパスなどが delegate をすり抜けても、ドロップと同じ規則で絞る。
+            let urls = panelDelegate.filter(panel.urls)
+            guard !urls.isEmpty else { return }
+            handleAdd(urls: urls, targetShelfID: targetShelfID)
         }
     }
 
