@@ -277,6 +277,7 @@ enum IntegrityWindowLogic {
     /// `enumeration truncated`）も同じ badEntries 経路（quick スキャンおよび full スキャンの
     /// image 分岐）に流れる、プランの表に無かった理由文字列。同じ規律（自前の固定文言・
     /// パスを含まない）に従うため、ここに追加して訳している。
+    /// G64: `QuickIntegrityCheck.emptyFileReason`（0 バイトのアーカイブ）も同じ語彙として訳す。
     static func badEntryText(_ raw: String) -> String {
         switch raw {
         case "archive read truncated":
@@ -901,6 +902,9 @@ struct IntegrityCheckView: View {
             var wasRunning = false
             while !Task.isCancelled {
                 do {
+                    // 要求を出した時点の旗を控える: 開始より前に要求した状態が、開始後に届いて
+                    // 「終わった」と読まれないように（開始後に要求した状態だけが待ちを終わらせる）。
+                    let awaitingAtRequest = awaitingCompletion
                     let status = try await dataSource.jobProgress()
                     jobStatus = status
                     progressErrorText = nil
@@ -913,7 +917,8 @@ struct IntegrityCheckView: View {
                         scanErrorText = nil
                     }
                     if IntegrityWindowLogic.scanFinished(wasRunning: wasRunning,
-                                                         awaitingCompletion: awaitingCompletion, status: status) {
+                                                         awaitingCompletion: awaitingAtRequest && awaitingCompletion,
+                                                         status: status) {
                         awaitingCompletion = false
                         // ジョブが終わった。自分で開始していれば box に詳細レポートが入っている。
                         if let report = dataSource.takeCompletionReport() {
