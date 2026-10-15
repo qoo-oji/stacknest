@@ -29,6 +29,16 @@ public enum QuickIntegrityCheck {
     /// 足した拡張子のアーカイブでこれなら、壊れているのではなく StackNest が読めない形式なので「対象外」。
     public static let unrecognizedFormatReason = "archive unreadable: unrecognized archive format"
 
+    /// 0 バイトのアーカイブに付ける理由（コピーが途中で止まった残骸。「形式を判別できない」と区別して表示する）。
+    /// 状態は今までどおり「破損」。
+    public static let emptyFileReason = "archive file is empty"
+
+    /// 開く段の失敗で保存する理由。アーカイブで `fileSize == 0` なら `emptyFileReason`、それ以外は元の理由。
+    /// 対象外／破損の判定（`isUnsupportedOpenFailure`）は**元の理由**で行い、この値は保存と表示だけに使う。
+    static func storedOpenFailureReason(category: BookCategory, reason: String, fileSize: Int64?) -> String {
+        category == .archive && fileSize == 0 ? emptyFileReason : reason
+    }
+
     /// 開く段の失敗を「対象外」にするか（簡易・詳細の両方がこの 1 か所で決める）。足した拡張子のアーカイブで
     /// 「unrecognized archive format」のときだけ。**0 バイトのファイルは対象外にしない**（コピーが途中で止まった残骸で、
     /// 標準・未知の拡張子の 0 バイトのアーカイブや 0 バイトの画像と同じく「破損」。G64 最終レビュー m1）。
@@ -81,7 +91,8 @@ public enum QuickIntegrityCheck {
                                             reason: reason, fileSize: fileSize) {
                     return Outcome(status: .unsupported, pageCount: nil, reason: reason)
                 }
-                return Outcome(status: .damaged, pageCount: nil, reason: reason)
+                return Outcome(status: .damaged, pageCount: nil,
+                               reason: storedOpenFailureReason(category: category, reason: reason, fileSize: fileSize))
             case .enumerated(let count, let truncated):
                 if truncated {
                     // G26 の規則と同じ: 破損時は pages を書かない。

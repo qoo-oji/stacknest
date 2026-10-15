@@ -21,6 +21,13 @@ struct UserExtensionIntegrityTests {
         // G64 最終レビュー m1: 0 バイトは対象外にしない（サイズが取れなかった nil は今どおり）。
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
                                              fileSize: 0, isUserExtension: true).status == .damaged)
+        // 保存する理由は「ファイルが空」。標準の拡張子（isUserExtension: false）の 0 バイトも同じ。
+        #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
+                                             fileSize: 0, isUserExtension: true).reason == QuickIntegrityCheck.emptyFileReason)
+        #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
+                                             fileSize: 0, isUserExtension: false).reason == QuickIntegrityCheck.emptyFileReason)
+        #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
+                                             fileSize: 10, isUserExtension: false).reason == unrecognized)
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: unrecognized),
                                              fileSize: nil, isUserExtension: true).status == .unsupported)
         #expect(QuickIntegrityCheck.classify(category: .archive, exists: true, probe: .failed(reason: "archive read truncated"),
@@ -135,7 +142,21 @@ struct UserExtensionIntegrityTests {
                                                           folderExtractor: FolderCoverExtractor(), userExtensions: added)
         _ = try await QuickIntegrityScanner.scan(database: db, deps: deps)
         #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 1)?.badEntries == [QuickIntegrityCheck.emptyFileReason])
         #expect(try db.integrityRecord(bookID: 2)?.status == .unsupported, "でたらめなバイトは今どおり対象外")
+        #expect(try db.integrityRecord(bookID: 2)?.badEntries == [unrecognized])
+    }
+
+    @Test("簡易チェック: 標準の拡張子（cbz）の 0 バイトも破損で、理由は「ファイルが空」")
+    func quickScanZeroByteStandardCbz() async throws {
+        let dir = try G64Fixtures.tempDir("zero-quick-cbz"); defer { try? FileManager.default.removeItem(at: dir) }
+        let cbz = dir.appendingPathComponent("a.cbz"); try Data().write(to: cbz)
+        let db = try setupDB([cbz])
+        let deps = QuickIntegrityScanner.liveDependencies(archiveExtractor: LibarchiveCoverExtractor(),
+                                                          folderExtractor: FolderCoverExtractor(), userExtensions: [:])
+        _ = try await QuickIntegrityScanner.scan(database: db, deps: deps)
+        #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 1)?.badEntries == [QuickIntegrityCheck.emptyFileReason])
     }
 
     @Test("詳細チェック: 足したアーカイブの 0 バイトは破損（対象外にしない）")
@@ -147,6 +168,19 @@ struct UserExtensionIntegrityTests {
         let deps = FullIntegrityScanner.liveDependencies(libraryBundleURL: dir, userExtensions: added)
         _ = try await FullIntegrityScanner.scan(database: db, mode: .all, deps: deps)
         #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 1)?.badEntries == [QuickIntegrityCheck.emptyFileReason])
         #expect(try db.integrityRecord(bookID: 2)?.status == .unsupported, "でたらめなバイトは今どおり対象外")
+        #expect(try db.integrityRecord(bookID: 2)?.badEntries == [unrecognized])
+    }
+
+    @Test("詳細チェック: 標準の拡張子（cbz）の 0 バイトも破損で、理由は「ファイルが空」")
+    func fullScanZeroByteStandardCbz() async throws {
+        let dir = try G64Fixtures.tempDir("zero-full-cbz"); defer { try? FileManager.default.removeItem(at: dir) }
+        let cbz = dir.appendingPathComponent("a.cbz"); try Data().write(to: cbz)
+        let db = try setupDB([cbz])
+        let deps = FullIntegrityScanner.liveDependencies(libraryBundleURL: dir, userExtensions: [:])
+        _ = try await FullIntegrityScanner.scan(database: db, mode: .all, deps: deps)
+        #expect(try db.integrityRecord(bookID: 1)?.status == .damaged)
+        #expect(try db.integrityRecord(bookID: 1)?.badEntries == [QuickIntegrityCheck.emptyFileReason])
     }
 }

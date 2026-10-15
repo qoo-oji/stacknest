@@ -390,11 +390,12 @@ struct IntegrityWindowLogicTests {
     // 3 種（image file size is zero or unknown / probe not performed / enumeration truncated）
     // も同じ badEntries 経路に流れることが判明したため訳語を追加している（実装側コメント参照）。
 
-    @Test("プランの表 6 種すべてが訳される", arguments: [
+    @Test("プランの表の種類と G64 の 2 種がすべて訳される", arguments: [
         ("archive read truncated", "アーカイブが途中で切れています"),
         ("no image entry found", "画像が 1 枚も見つかりません"),
         ("archive unreadable: could not open archive", "アーカイブを開けません"),
-        ("archive unreadable: unrecognized archive format", "未対応のアーカイブ形式です"),
+        ("archive unreadable: unrecognized archive format", "アーカイブとして読めません（形式を判別できません）"),
+        ("archive file is empty", "ファイルが空です（0 バイト）"),
         ("archive unreadable: unexpected archive read failure", "アーカイブの読み取りに失敗しました"),
     ])
     func knownVocabularyTranslates(raw: String, expected: String) {

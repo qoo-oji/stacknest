@@ -7633,12 +7633,22 @@
         }
       }
     },
-    "未対応のアーカイブ形式です" : {
+    "アーカイブとして読めません（形式を判別できません）" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This archive format isn't supported."
+            "value" : "Can't be read as an archive (unknown format)"
+          }
+        }
+      }
+    },
+    "ファイルが空です（0 バイト）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The file is empty (0 bytes)"
           }
         }
       }

@@ -216,7 +216,8 @@ public enum FullIntegrityScanner {
                     status = QuickIntegrityCheck.isUnsupportedOpenFailure(
                         category: category, isUserExtension: deps.isUserExtension(path),
                         reason: reason, fileSize: size) ? .unsupported : .damaged
-                    badEntries = [reason]
+                    badEntries = [QuickIntegrityCheck.storedOpenFailureReason(
+                        category: category, reason: reason, fileSize: size)]
                 }
             }
 

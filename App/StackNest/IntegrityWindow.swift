@@ -273,8 +273,11 @@ enum IntegrityWindowLogic {
             return String(localized: "画像が 1 枚も見つかりません")
         case "archive unreadable: could not open archive":
             return String(localized: "アーカイブを開けません")
-        case "archive unreadable: unrecognized archive format":
-            return String(localized: "未対応のアーカイブ形式です")
+        // G64 スモーク: 「未対応」と読めると対象外の意味に取れるが、これは破損（または足した拡張子の対象外）の理由。
+        case QuickIntegrityCheck.unrecognizedFormatReason:
+            return String(localized: "アーカイブとして読めません（形式を判別できません）")
+        case QuickIntegrityCheck.emptyFileReason:
+            return String(localized: "ファイルが空です（0 バイト）")
         case "archive unreadable: unexpected archive read failure":
             return String(localized: "アーカイブの読み取りに失敗しました")
         // プランの表には無かったが、grep で見つかった同じ語彙クラスの理由文字列（上のコメント参照）。
