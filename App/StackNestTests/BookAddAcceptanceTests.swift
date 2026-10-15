@@ -46,6 +46,11 @@ struct BookAddAcceptanceTests {
         #expect(!none.contains { $0.identifier == "public.data" })
         let sevenZ = try #require(UTType(filenameExtension: "7z"))
         #expect(none.contains { sevenZ.conforms(to: $0) })
+        // ドロップが受け付ける標準の拡張子は、すべてパネルでも選べる（cb7・rtf は包括型に入らない）。
+        for ext in BookCategory.supportedExtensions.sorted() {
+            let t = try #require(UTType(filenameExtension: ext))
+            #expect(none.contains { t.conforms(to: $0) }, "\(ext) は標準なのにパネルで選べない")
+        }
     }
 
     @Test("読み込みのパネルの delegate: ドロップと同じ規則で有効・無効を決める")

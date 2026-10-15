@@ -346,7 +346,10 @@ struct LibraryBrowserView: View {
             UTType("org.idpf.epub-container")
         ]
         var types = archiveAndFolder.compactMap { $0 }
-        types += userExtensions.keys.sorted().compactMap { UTType(filenameExtension: $0) }
+        // ドロップが受け付ける拡張子（標準＋足した一覧）を、それぞれの既定の型で並べる。パネルの型の一覧が
+        // ドロップの規則と作りとして一致する（cb7・rtf のように上の包括型に入らない標準の拡張子も選べる）。
+        types += BookCategory.registrableExtensions(userExtensions: userExtensions).sorted()
+            .compactMap { UTType(filenameExtension: $0) }
         return types
     }
 
