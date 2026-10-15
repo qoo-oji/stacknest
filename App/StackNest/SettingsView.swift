@@ -390,7 +390,12 @@ struct SettingsView: View {
 
     /// G64: 「拡張子」の行（押すとシート「拡張子と種類」を開く）。
     private var extensionsRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // G64 スモーク B1: 説明を行の上に置き、通常の大きさ・通常の色にする（小さい灰色の説明が読みにくかった）。
+        // 見出しの列には揃えず、節のほかの行と同じ左端から始めて折り返す。
+        VStack(alignment: .leading, spacing: 6) {
+            Text("標準にない拡張子を足し、どの種類として扱うかを選べます。")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Text(String(localized: "settings.extensions.row", defaultValue: "拡張子"))
                     .frame(width: labelColumnWidth, alignment: .leading)
@@ -398,10 +403,6 @@ struct SettingsView: View {
                 Button("編集…") { showExtensionsSheet = true }
                     .controlSize(.small)
             }
-            Text("標準にない拡張子を足し、どの種類として扱うかを選べます。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, labelColumnWidth + 8)
         }
         .sheet(isPresented: $showExtensionsSheet) {
             UserExtensionsSheet(model: extensionsModel)
