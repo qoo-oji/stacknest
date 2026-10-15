@@ -450,7 +450,7 @@ def integrity_scan(library: str, *, library_token: str | None = None) -> Any:
 
 
 def integrity_status(library: str, *, library_token: str | None = None) -> Any:
-    """Return integrity check totals (checked / unchecked / damaged / degraded)."""
+    """Return integrity check totals (checked / unchecked / damaged / degraded / unsupported)."""
     return json.loads(_with_library(library, library_token,
         lambda tok: run(build_argv("integrity", library=library, sub="status"), library_token=tok)))
 

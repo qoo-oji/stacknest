@@ -7572,6 +7572,16 @@
         }
       }
     },
+    "最終検査: %@　未検査 %lld 冊　破損 %lld 冊　劣化 %lld 冊　対象外 %lld 冊" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last checked: %@  Unchecked %lld  Damaged %lld  Degraded %lld  Not applicable %lld"
+          }
+        }
+      }
+    },
     "最終検査: %@　未検査 %lld 冊　破損 %lld 冊　劣化 %lld 冊" : {
       "localizations" : {
         "en" : {

@@ -461,7 +461,8 @@ final class RemoteIntegrityDataSource: IntegrityDataSource {
     /// 区別する。
     static func mapSummary(_ reply: IntegritySummaryReply) -> (summary: IntegritySummary, lastScanAt: Date?, lastScanAtKnown: Bool) {
         let summary = IntegritySummary(checked: reply.checked, unchecked: reply.unchecked,
-                                        damaged: reply.damaged, degraded: reply.degraded)
+                                        damaged: reply.damaged, degraded: reply.degraded,
+                                        unsupported: reply.unsupported)
         let lastScanAt = reply.lastScanAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         return (summary, lastScanAt, reply.lastScanAtKnown)
     }

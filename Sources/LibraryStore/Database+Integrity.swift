@@ -105,10 +105,10 @@ extension Database {
         }
     }
 
-    /// 検査済/未検査/破損/劣化の件数。
+    /// 検査済/未検査/破損/劣化/対象外の件数。
     public func integritySummary() throws -> IntegritySummary {
         guard let q = queue else {
-            return IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0)
+            return IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0, unsupported: 0)
         }
         return try q.read { db in
             let total = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM book") ?? 0
@@ -120,8 +120,10 @@ extension Database {
                     SELECT COUNT(*) FROM book_integrity
                     WHERE status = 'damaged' AND prev_status = 'ok'
                     """) ?? 0
+            let unsupported = try Int.fetchOne(
+                db, sql: "SELECT COUNT(*) FROM book_integrity WHERE status = 'unsupported'") ?? 0
             return IntegritySummary(checked: checked, unchecked: max(0, total - checked),
-                                    damaged: damaged, degraded: degraded)
+                                    damaged: damaged, degraded: degraded, unsupported: unsupported)
         }
     }
 

@@ -342,6 +342,16 @@ struct RemoteIntegrityDataSourceTests {
         #expect(mapped.summary.unchecked == 5)
     }
 
+    @Test("mapSummary: unsupported は新サーバの数がそのまま、古いサーバ（キーなし）は nil")
+    func mapSummaryUnsupported() throws {
+        let withKey = try JSONDecoder().decode(IntegritySummaryReply.self, from: Data(
+            #"{"checked":3,"unchecked":0,"damaged":1,"degraded":0,"unsupported":4,"lastScanAt":null}"#.utf8))
+        #expect(RemoteIntegrityDataSource.mapSummary(withKey).summary.unsupported == 4)
+        let without = try JSONDecoder().decode(IntegritySummaryReply.self, from: Data(
+            #"{"checked":3,"unchecked":0,"damaged":1,"degraded":0,"lastScanAt":null}"#.utf8))
+        #expect(RemoteIntegrityDataSource.mapSummary(without).summary.unsupported == nil)
+    }
+
     @Test("新サーバ・検査済みは epoch から Date へ写る")
     func mapSummaryKnownDateMapsThrough() throws {
         let json = #"{"checked":3,"unchecked":0,"damaged":1,"degraded":0,"lastScanAt":1700000000}"#

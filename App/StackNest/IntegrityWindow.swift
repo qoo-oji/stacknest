@@ -91,11 +91,15 @@ enum IntegrityWindowLogic {
         return lastScanAt.map { formattedDate($0) } ?? String(localized: "未検査")
     }
 
-    /// 概要行（brief: 「最終検査 / 未検査 N 冊 / 破損 N 冊 / 劣化 N 冊」）。
+    /// 概要行（brief: 「最終検査 / 未検査 N 冊 / 破損 N 冊 / 劣化 N 冊」。G64 で「対象外 N 冊」を足した）。
     static func summaryLine(
         summary: IntegritySummary, lastScanAt: Date?, lastScanAtIsKnown: Bool = true, now: Date = Date()
     ) -> String {
         let last = lastScanText(lastScanAt, isKnown: lastScanAtIsKnown)
+        // G64 スモーク C5: 対象外の冊数も出す。nil（数を送らない古いサーバ）は今までの行のまま。
+        if let unsupported = summary.unsupported {
+            return String(localized: "最終検査: \(last)　未検査 \(summary.unchecked) 冊　破損 \(summary.damaged) 冊　劣化 \(summary.degraded) 冊　対象外 \(unsupported) 冊")
+        }
         return String(localized: "最終検査: \(last)　未検査 \(summary.unchecked) 冊　破損 \(summary.damaged) 冊　劣化 \(summary.degraded) 冊")
     }
 
@@ -515,7 +519,7 @@ struct IntegrityCheckView: View {
     /// `IntegrityWindowContainer` から渡される（`.local` では re-resolve の概念が無いので nil）。
     let refreshDataSource: (@MainActor () async -> IntegrityDataSource?)?
 
-    @State private var summary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0)
+    @State private var summary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0, unsupported: nil)
     @State private var lastScanAt: Date?
     @State private var rows: [IntegrityRow] = []
     // G27b 最終レビュー Fix2/Fix4: ウィンドウは `MaintenanceJobRegistry` の状態を**観測**するだけで、

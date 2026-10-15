@@ -809,18 +809,22 @@ public struct IntegritySummaryReply: Codable, Sendable {
     /// 表示されるようにする ―― このブランチが 6 ラウンドかけて除去した「読めなかったことを
     /// 事実として断言する」欠陥（施錠庫を『破損 0 冊』と表示していた等）の再演を避けるため。
     public let lastScanAtKnown: Bool
+    /// 対象外（破損チェックの対象にしない本）の冊数。G64 のスモークで追加 ―― **古いサーバはキーを送らない**ので
+    /// nil は「不明」（0 冊ではない）。新しいサーバは常に数を送る。
+    public let unsupported: Int?
 
     private enum CodingKeys: String, CodingKey {
-        case checked, unchecked, damaged, degraded, lastScanAt
+        case checked, unchecked, damaged, degraded, lastScanAt, unsupported
     }
 
     /// サーバ側・テスト側から直接組み立てる用。新サーバが答える値は常に「分かっている」ので
     /// `lastScanAtKnown` は既定 `true`（旧サーバのシミュレートには `init(from:)` 経由で
     /// キーを欠いた JSON を渡すこと）。
-    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int,
+    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int, unsupported: Int? = nil,
                 lastScanAt: Int64? = nil, lastScanAtKnown: Bool = true) {
         self.checked = checked; self.unchecked = unchecked
         self.damaged = damaged; self.degraded = degraded
+        self.unsupported = unsupported
         self.lastScanAt = lastScanAt; self.lastScanAtKnown = lastScanAtKnown
     }
 
@@ -830,6 +834,7 @@ public struct IntegritySummaryReply: Codable, Sendable {
         unchecked = try c.decode(Int.self, forKey: .unchecked)
         damaged = try c.decode(Int.self, forKey: .damaged)
         degraded = try c.decode(Int.self, forKey: .degraded)
+        unsupported = try c.decodeIfPresent(Int.self, forKey: .unsupported)
         // `contains` で「キーが存在するか」を明示的に見る。`decodeIfPresent` だけでは
         // 「キー欠落」と「値が null」を区別できず、旧サーバの沈黙を「未検査」と誤読しかねない。
         if c.contains(.lastScanAt) {
@@ -847,6 +852,7 @@ public struct IntegritySummaryReply: Codable, Sendable {
         try c.encode(unchecked, forKey: .unchecked)
         try c.encode(damaged, forKey: .damaged)
         try c.encode(degraded, forKey: .degraded)
+        try c.encodeIfPresent(unsupported, forKey: .unsupported)
         // Codex レビュー(Important): 復号は「キーが無い＝旧サーバが知らない」と
         // 「キーはあるが null＝新サーバが答えたうえで未検査」を区別しているのに、
         // 符号化が `lastScanAtKnown` を無視して常にキーを出していた。

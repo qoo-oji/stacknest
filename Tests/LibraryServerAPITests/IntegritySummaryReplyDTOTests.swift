@@ -62,4 +62,24 @@ struct IntegritySummaryReplyDTOTests {
         #expect(back.lastScanAt == 42)
         #expect(back.lastScanAtKnown == true)
     }
+
+    // MARK: G64 スモーク C5: 対象外の冊数
+
+    @Test("unsupported が往復する・値があればキーを出す")
+    func unsupportedRoundTrips() throws {
+        let original = IntegritySummaryReply(checked: 3, unchecked: 0, damaged: 1, degraded: 0, unsupported: 2, lastScanAt: 5)
+        let data = try JSONEncoder().encode(original)
+        #expect((String(data: data, encoding: .utf8) ?? "").contains(#""unsupported":2"#))
+        let back = try JSONDecoder().decode(IntegritySummaryReply.self, from: data)
+        #expect(back.unsupported == 2)
+    }
+
+    @Test("古いサーバの JSON（unsupported のキーなし）は nil に復号され、再符号化してもキーを足さない")
+    func missingUnsupportedKeyDecodesToNil() throws {
+        let json = #"{"checked":1,"unchecked":1,"damaged":0,"degraded":0,"lastScanAt":null}"#
+        let reply = try JSONDecoder().decode(IntegritySummaryReply.self, from: Data(json.utf8))
+        #expect(reply.unsupported == nil)
+        let again = String(data: try JSONEncoder().encode(reply), encoding: .utf8) ?? ""
+        #expect(!again.contains("unsupported"), "不明を 0 冊として送り直してはいけない: \(again)")
+    }
 }

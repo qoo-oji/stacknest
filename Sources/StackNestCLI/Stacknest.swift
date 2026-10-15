@@ -845,7 +845,7 @@ struct IntegrityScanCmd: ParsableCommand {
 
 struct IntegrityStatusCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "status", abstract: L10n.text("検査済/未検査/破損/劣化の件数を表示する"))
+        commandName: "status", abstract: L10n.text("検査済/未検査/破損/劣化/対象外の件数を表示する"))
     @OptionGroup var common: CommonOptions
     func run() throws { try mappingAPIErrors {
         let ep = try resolveEndpoint(common: common); let client = APIClient(endpoint: ep)

@@ -1827,6 +1827,7 @@ public struct LibraryServerCore: Sendable {
             let lastScanAt = try lib.db.integrityLastCheckedAt()
             return IntegritySummaryReply(checked: s.checked, unchecked: s.unchecked,
                                          damaged: s.damaged, degraded: s.degraded,
+                                         unsupported: s.unsupported,
                                          lastScanAt: lastScanAt)
         }
 

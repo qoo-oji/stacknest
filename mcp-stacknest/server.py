@@ -346,7 +346,9 @@ def stacknest_integrity_scan(library: str, library_token: str | None = None) -> 
 
 @mcp.tool()
 def stacknest_integrity_status(library: str, library_token: str | None = None) -> Any:
-    """Return integrity check totals (checked / unchecked / damaged / degraded).
+    """Return integrity check totals (checked / unchecked / damaged / degraded / unsupported).
+    unsupported counts books the check does not look at (video, text and e-books, formats StackNest cannot read);
+    it is absent when an older server does not report it.
     degraded means a book that was ok last time and is damaged this time — suspected decay on disk."""
     return cli.integrity_status(library, library_token=library_token)
 

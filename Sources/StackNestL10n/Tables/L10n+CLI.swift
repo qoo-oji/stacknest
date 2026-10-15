@@ -120,7 +120,7 @@ extension L10nTable {
         "重複スキャンを実行する": L10nEntry("Run a duplicate scan"),
         "ファイルの破損を検査する": L10nEntry("Check files for corruption"),
         "pages 未取得の本を開いて分類する（簡易チェック）": L10nEntry("Open books with no page count yet and classify them (quick check)"),
-        "検査済/未検査/破損/劣化の件数を表示する": L10nEntry("Show counts of checked/unchecked/damaged/degraded books"),
+        "検査済/未検査/破損/劣化/対象外の件数を表示する": L10nEntry("Show counts of checked/unchecked/damaged/degraded/unsupported books"),
         "指定した状態の本を一覧する": L10nEntry("List books in the given state"),
         "ok / damaged / empty / missing / unsupported（既定: damaged）": L10nEntry("ok / damaged / empty / missing / unsupported (default: damaged)"),
         "全冊 CRC 検証を非同期ジョブとして開始する（数千冊規模で数十時間かかりうる・完走は待たない）": L10nEntry("Start a full CRC verification as a background job (can take tens of hours at a scale of thousands of books; does not wait for completion)"),

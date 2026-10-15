@@ -172,6 +172,18 @@ struct IntegrityStoreTests {
         #expect(s.degraded == 1, "劣化は 1 のみ（2 は前回が無いので劣化ではない）")
     }
 
+    @Test("summary が対象外（unsupported）の冊数を数える")
+    func summaryCountsUnsupported() throws {
+        let db = try setupDB()
+        for id in 1...4 { try db.insertBook(book(id: id, title: "t\(id)", path: "/tmp/\(id).mp4", pages: nil)) }
+        try db.upsertIntegrity(record(bookID: 1, status: .unsupported, checkedAt: 100))
+        try db.upsertIntegrity(record(bookID: 2, status: .unsupported, checkedAt: 100))
+        try db.upsertIntegrity(record(bookID: 3, status: .ok, checkedAt: 100))
+        let s = try db.integritySummary()
+        #expect(s.unsupported == 2)
+        #expect(s.checked == 3, "対象外も検査済みに含まれる（行がある）")
+    }
+
     @Test("status を指定して本と結果を一覧できる")
     func listByStatus() throws {
         let db = try setupDB()

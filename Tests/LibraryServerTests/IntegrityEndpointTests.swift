@@ -4,6 +4,7 @@ import Foundation
 import Hummingbird
 import HummingbirdTesting
 import LibraryServerAPI
+import LibraryStore
 @testable import LibraryServer
 
 @Suite("integrity endpoints (G27a)")
@@ -39,6 +40,30 @@ struct IntegrityEndpointTests {
                 // 判別材料になるため、値が nil でも省略してはいけない ―― DTOs.swift 参照）。
                 #expect(reply.lastScanAtKnown == true)
                 #expect(reply.lastScanAt == nil, "一度も検査していないので最終検査時刻は無いはず")
+                #expect(reply.unsupported == 0, "G64: 対象外の冊数も必ず送る（0 でも省略しない）")
+            }
+        }
+    }
+
+    @Test("summary は対象外（unsupported）の冊数を返す")
+    func summaryReportsUnsupported() async throws {
+        let fixture = try TestLibraryFixture(name: "IntegUnsupported", bookCount: 3)
+        defer { fixture.cleanup() }
+        for id in [1, 2] {
+            try fixture.db.upsertIntegrity(IntegrityRecord(
+                bookID: id, status: .unsupported, method: .quick, checkedAt: 100, fileSize: nil, fileMtime: nil,
+                entryCount: nil, badEntries: [], prevStatus: nil, prevCheckedAt: nil))
+        }
+        let lib = fixture.servedLibrary()
+        let app = makeApp(fixture: fixture)
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/api/v1/libraries/\(lib.uuid)/integrity/summary",
+                method: .get, headers: [.authorization: "Bearer R"]
+            ) { response in
+                #expect(response.status == .ok)
+                let reply = try JSONDecoder().decode(IntegritySummaryReply.self, from: Data(buffer: response.body))
+                #expect(reply.unsupported == 2)
             }
         }
     }

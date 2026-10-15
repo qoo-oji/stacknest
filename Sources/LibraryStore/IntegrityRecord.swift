@@ -80,11 +80,15 @@ public struct IntegritySummary: Sendable, Equatable {
     public let unchecked: Int    // まだ行が無い本
     public let damaged: Int
     public let degraded: Int     // prev_status='ok' かつ status='damaged'
+    /// 対象外（status='unsupported'）の冊数。破損チェックの対象にしない本（動画・テキスト・電子書籍、
+    /// StackNest が読めない形式）。nil は「不明」（この項目を送らない古いサーバ）。
+    public let unsupported: Int?
 
-    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int) {
+    public init(checked: Int, unchecked: Int, damaged: Int, degraded: Int, unsupported: Int?) {
         self.checked = checked
         self.unchecked = unchecked
         self.damaged = damaged
         self.degraded = degraded
+        self.unsupported = unsupported
     }
 }

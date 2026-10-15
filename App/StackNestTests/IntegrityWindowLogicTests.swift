@@ -78,7 +78,7 @@ struct IntegrityWindowLogicTests {
 
     @Test("読み込みエラーが無ければ summaryLine と同じ文字列を返す")
     func summaryLineTextReturnsLineWhenNoError() {
-        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1)
+        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1, unsupported: nil)
         let text = IntegrityWindowLogic.summaryLineText(summary: summary, lastScanAt: nil, loadErrorText: nil)
         #expect(text == IntegrityWindowLogic.summaryLine(summary: summary, lastScanAt: nil))
     }
@@ -87,7 +87,7 @@ struct IntegrityWindowLogicTests {
     func summaryLineTextSuppressedWhenLoadFailed() {
         // reload() のフォールバック規律どおり、失敗時の summary は初回だと全 0 になる。
         // その状態でエラーが立っているとき、summaryLineText は「破損 0 冊」を出してはいけない。
-        let zeroSummary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0)
+        let zeroSummary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0, unsupported: nil)
         let text = IntegrityWindowLogic.summaryLineText(
             summary: zeroSummary, lastScanAt: nil, loadErrorText: "この庫は施錠されています。")
         #expect(text == nil)
@@ -104,7 +104,7 @@ struct IntegrityWindowLogicTests {
     @Test("読み込みエラーがあれば、前回値の実数が残っていても nil を返す（古い数字を現在として描かない）")
     func summaryLineTextSuppressedEvenWhenStaleCountsAreNonZero() {
         // 直前の成功で得ていた実数がそのまま残っている状況。
-        let staleSummary = IntegritySummary(checked: 120, unchecked: 5, damaged: 3, degraded: 1)
+        let staleSummary = IntegritySummary(checked: 120, unchecked: 5, damaged: 3, degraded: 1, unsupported: nil)
         let text = IntegrityWindowLogic.summaryLineText(
             summary: staleSummary, lastScanAt: Date(timeIntervalSince1970: 1_700_000_000),
             loadErrorText: "読み込みに失敗しました。")
@@ -159,7 +159,7 @@ struct IntegrityWindowLogicTests {
 
     @Test("未検査（一度もスキャンしていない）の要約文言")
     func summaryLineWhenNeverScanned() {
-        let summary = IntegritySummary(checked: 0, unchecked: 10, damaged: 0, degraded: 0)
+        let summary = IntegritySummary(checked: 0, unchecked: 10, damaged: 0, degraded: 0, unsupported: nil)
         let line = IntegrityWindowLogic.summaryLine(summary: summary, lastScanAt: nil)
         #expect(line.contains("最終検査: 未検査"))
         #expect(line.contains("未検査 10 冊"))
@@ -167,9 +167,22 @@ struct IntegrityWindowLogicTests {
         #expect(line.contains("劣化 0 冊"))
     }
 
+    @Test("対象外の冊数があれば行の末尾に出る・nil（古いサーバ）なら出さない")
+    func summaryLineShowsUnsupportedWhenKnown() {
+        let known = IntegritySummary(checked: 5, unchecked: 0, damaged: 1, degraded: 0, unsupported: 7)
+        let line = IntegrityWindowLogic.summaryLine(summary: known, lastScanAt: nil)
+        #expect(line.hasSuffix("劣化 0 冊　対象外 7 冊"))
+        let zero = IntegritySummary(checked: 5, unchecked: 0, damaged: 1, degraded: 0, unsupported: 0)
+        #expect(IntegrityWindowLogic.summaryLine(summary: zero, lastScanAt: nil).hasSuffix("対象外 0 冊"))
+        let unknown = IntegritySummary(checked: 5, unchecked: 0, damaged: 1, degraded: 0, unsupported: nil)
+        let old = IntegrityWindowLogic.summaryLine(summary: unknown, lastScanAt: nil)
+        #expect(!old.contains("対象外"))
+        #expect(old.hasSuffix("劣化 0 冊"))
+    }
+
     @Test("検査済みなら最終検査日時が入り、各件数がそのまま反映される")
     func summaryLineWhenScanned() {
-        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1)
+        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1, unsupported: nil)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let line = IntegrityWindowLogic.summaryLine(summary: summary, lastScanAt: date)
         #expect(!line.contains("最終検査: 未検査"))
@@ -207,7 +220,7 @@ struct IntegrityWindowLogicTests {
     func summaryLineDoesNotClaimNeverScannedWhenRemoteUnknown() {
         // レビューが指摘した具体例の再現: リモートで検査済み/破損/劣化が非ゼロなのに
         // lastScanAt が取得できない（isKnown: false）ケース。
-        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1)
+        let summary = IntegritySummary(checked: 90, unchecked: 10, damaged: 3, degraded: 1, unsupported: nil)
         let line = IntegrityWindowLogic.summaryLine(summary: summary, lastScanAt: nil, lastScanAtIsKnown: false)
         #expect(!line.contains("最終検査: 未検査"), "「不明」であって「未検査」ではない")
         #expect(line.contains("最終検査: 不明"))
@@ -216,7 +229,7 @@ struct IntegrityWindowLogicTests {
 
     @Test("summaryLineText も lastScanAtIsKnown をそのまま summaryLine へ渡す")
     func summaryLineTextPassesThroughLastScanAtIsKnown() {
-        let summary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0)
+        let summary = IntegritySummary(checked: 0, unchecked: 0, damaged: 0, degraded: 0, unsupported: nil)
         let text = IntegrityWindowLogic.summaryLineText(
             summary: summary, lastScanAt: nil, lastScanAtIsKnown: false, loadErrorText: nil)
         #expect(text?.contains("最終検査: 不明") == true)
