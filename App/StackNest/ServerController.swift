@@ -143,6 +143,7 @@ final class ServerController {
         // Codex 2nd review Fix3: `maintenanceEventFanout` も併せて注入する ―― これが無いと
         // このコア（ネットワーク共有。`/events` は他機の `RemoteLibraryState` が実際に購読する）
         // の eventHub へ進捗/完了 SSE が一切配信されない回帰になる。
+        // G62: データソースは ServedLibraryPublisher.directory（プロセスで 1 つ）を読むだけ。
         let core = LibraryServerCore(config: config, dataSource: AppStateLibraryDataSource(),
                                      maintenanceRegistry: maintenanceRegistry,
                                      maintenanceEventFanout: maintenanceEventFanout)
@@ -210,25 +211,16 @@ final class ServerController {
     }
 }
 
-/// 「現在開いている ∧ リモート共有 ON」のライブラリを ServedLibrary に変換する。
-/// LibraryServerDataSource は任意 executor から呼ばれるため、MainActor へホップして
-/// activeInstances / librarySettings を読む。
+/// 「現在開いている ∧ リモート共有 ON」のライブラリを ServedLibrary として返す。
+/// G62（spec §6.1）: スナップショットを読むだけ（MainActor を待たない）。
 struct AppStateLibraryDataSource: LibraryServerDataSource {
+    let directory: ServedLibraryDirectory
+
+    init(directory: ServedLibraryDirectory = ServedLibraryPublisher.directory) {
+        self.directory = directory
+    }
+
     func servedLibraries() async -> [ServedLibrary] {
-        await MainActor.run {
-            AppState.activeInstances.allObjects.compactMap { state in
-                guard let db = state.database,
-                      let settings = state.librarySettings,
-                      settings.remoteSharingEnabled else { return nil }
-                let uuid = settings.ensureLibraryUUID()
-                return ServedLibrary(
-                    uuid: uuid,
-                    name: settings.resolvedName(fallback: state.bundleURL.deletingPathExtension().lastPathComponent),
-                    bundleURL: state.bundleURL,
-                    db: db,
-                    isLocked: settings.lockPasswordHash != nil
-                )
-            }
-        }
+        directory.libraries(sharedRemotelyOnly: true)
     }
 }

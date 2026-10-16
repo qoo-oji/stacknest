@@ -56,13 +56,14 @@ struct AccessTierTests {
         let f = try TestLibraryFixture(name: "TierAdmin", bookCount: 1); defer { f.cleanup() }
         let lib = f.servedLibrary()
         try await makeApp(admin: true, f).test(.router) { client in
-            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
-                body: ByteBuffer(string: #"{"password":"x"}"#)) { r in #expect(r.status == .noContent) }
             // G12b-3a: watch-config PUT は admin トークンで成功する。
+            // G62: 施錠より前に呼ぶ（施錠した後は書庫の鍵が要る。この試験が見たいのは admin の tier だけ）。
             try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/watch-config", method: .put,
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: ByteBuffer(string: #"{"enabled":false,"folders":[]}"#)) { r in #expect(r.status == .ok) }
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
+                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                body: ByteBuffer(string: #"{"password":"x"}"#)) { r in #expect(r.status == .noContent) }
         }
     }
     @Test func deleteTrashRequiresAdmin() async throws {

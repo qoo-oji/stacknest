@@ -17,6 +17,23 @@ struct LockEndpointTests {
         ).buildApplication()
     }
 
+    private struct UnlockReply: Decodable { let libraryToken: String }
+
+    /// G62: 施錠した後に同じ書庫の施錠を見る道を呼ぶときは、解錠して書庫の鍵を付ける
+    /// （施錠の門は DB を読む。スナップショットの古い「未施錠」では通らない）。
+    private func unlock(_ client: some TestClientProtocol, _ uuid: String, password: String) async throws -> String {
+        var token = ""
+        try await client.execute(
+            uri: "/api/v1/libraries/\(uuid)/unlock", method: .post,
+            headers: [.authorization: "Bearer W", .contentType: "application/json"],
+            body: .init(string: #"{"password":"\#(password)"}"#)
+        ) { response in
+            #expect(response.status == .ok)
+            token = try JSONDecoder().decode(UnlockReply.self, from: Data(buffer: response.body)).libraryToken
+        }
+        return token
+    }
+
     /// POST /lock sets lock_password_hash in DB.
     @Test func postLockSetsHash() async throws {
         let fixture = try TestLibraryFixture(name: "LockSet", bookCount: 0)
@@ -42,12 +59,10 @@ struct LockEndpointTests {
     }
 
     /// DELETE /lock removes hash and salt when the correct current password is supplied.
-    /// Note: POST the lock through the app first so the served library is captured
-    /// as unlocked (isLocked is snapshotted at servedLibrary() time). Pre-seeding the
-    /// hash before servedLibrary() would mark the library locked and the resolver would
-    /// require a library token, which is out of scope for this test.
+    /// G62: the lock gate reads the lock from the DB (not the snapshot's isLocked), so after
+    /// POSTing the lock the test unlocks and presents the library token on the DELETE.
     /// G27a Task6: DELETE now requires currentPassword whenever a lock already exists
-    /// (checked live against the DB, independent of the stale isLocked snapshot above).
+    /// (checked live against the DB).
     @Test func deleteLockRemovesHash() async throws {
         let fixture = try TestLibraryFixture(name: "LockDel", bookCount: 0)
         defer { fixture.cleanup() }
@@ -65,11 +80,12 @@ struct LockEndpointTests {
             ) { response in
                 #expect(response.status == .noContent)
             }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             // Then remove it via DELETE, supplying the current password.
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock",
                 method: .delete,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(removeBody))
             ) { response in
                 #expect(response.status == .noContent)
@@ -114,11 +130,15 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(lockBody))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .delete,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(wrongRemoveBody))
-            ) { response in #expect(response.status == .forbidden) }
+            ) { response in
+                #expect(response.status == .forbidden)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)   // G62: 門ではなくパスワードの照合で断る
+            }
         }
         let hashAfter = try fixture.db.getLibrarySetting(key: "lock_password_hash")
         let saltAfter = try fixture.db.getLibrarySetting(key: "lock_password_salt")
@@ -142,12 +162,16 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(lockBody))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             // Old-style bare DELETE with no body at all — this is the exact request shape
             // that used to succeed before G27a Task6 and constituted the vulnerability.
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .delete,
-                headers: [.authorization: "Bearer W"]
-            ) { response in #expect(response.status == .forbidden) }
+                headers: [.authorization: "Bearer W", .init("X-Library-Token")!: token]
+            ) { response in
+                #expect(response.status == .forbidden)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)   // G62: 門ではなくパスワードの照合で断る
+            }
         }
         let hashAfter = try fixture.db.getLibrarySetting(key: "lock_password_hash")
         let saltAfter = try fixture.db.getLibrarySetting(key: "lock_password_salt")
@@ -173,9 +197,10 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(initial))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(change))
             ) { response in #expect(response.status == .noContent) }
         }
@@ -202,11 +227,15 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(initial))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(change))
-            ) { response in #expect(response.status == .forbidden) }
+            ) { response in
+                #expect(response.status == .forbidden)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)   // G62: 門ではなくパスワードの照合で断る
+            }
         }
         let hashAfter = try fixture.db.getLibrarySetting(key: "lock_password_hash")
         let saltAfter = try fixture.db.getLibrarySetting(key: "lock_password_salt")
@@ -232,11 +261,15 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(initial))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(change))
-            ) { response in #expect(response.status == .forbidden) }
+            ) { response in
+                #expect(response.status == .forbidden)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)   // G62: 門ではなくパスワードの照合で断る
+            }
         }
         let hashAfter = try fixture.db.getLibrarySetting(key: "lock_password_hash")
         let saltAfter = try fixture.db.getLibrarySetting(key: "lock_password_salt")
@@ -378,10 +411,7 @@ struct LockEndpointTests {
     @Test func postLockChangeSucceedsRightAfterLazyPBKDF2Upgrade() async throws {
         let fixture = try TestLibraryFixture(name: "LockUpgradeThenChange", bookCount: 0)
         defer { fixture.cleanup() }
-        // ServedLibrary.isLocked は servedLibrary() 呼び出し時点のスナップショットで、resolver は
-        // それが true だと X-Library-Token を要求する（他テストの注記どおり）。したがって
-        // servedLibrary()/makeApp が両方とも「未施錠」を見た**後**に、DB へ直接旧形式ハッシュを
-        // 仕込む（TestLibraryFixture の locked: は常に現行 PBKDF2 形式を使うため手動で再現する）。
+        // 旧形式（SHA-256）のハッシュは DB へ直接書いて再現する（TestLibraryFixture の locked: は常に現行 PBKDF2 形式を使うため）。
         let lib = fixture.servedLibrary()
         let app = makeApp(fixture: fixture, adminTier: true)
         let salt = LibraryLock.generateSalt()
@@ -391,9 +421,12 @@ struct LockEndpointTests {
 
         let change = try JSONEncoder().encode(LockRequest(password: "newpassword", currentPassword: "secret123"))
         try await app.test(.router) { client in
+            // G62: 施錠の門は DB を読むので、旧形式のハッシュの書庫も先に解錠する（遅延移行はこの解錠で起きる）。
+            // 変更は移行後のハッシュを条件にした compare-and-set で成功すること（誤って 409 にしない）。
+            let token = try await unlock(client, lib.uuid, password: "secret123")
             try await client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(change))
             ) { response in
                 #expect(response.status == .noContent,
@@ -414,8 +447,7 @@ struct LockEndpointTests {
     /// これが finding #1 の TOCTOU が実際に閉じたことの最も直接的な証拠になる
     /// （他のテストは「検証済みの古い値」を手で用意する準統合テストだが、これは本物の並行リクエスト）。
     @Test func postLockConcurrentChangesExactlyOneWinsAndLoserGets409() async throws {
-        // ServedLibrary.isLocked のスナップショット問題（上のテスト参照）を避けるため、
-        // 未施錠で snapshot させてから、実 POST でロックを設定する（他テストと同じ確立された作法）。
+        // 実 POST でロックを設定し、G62 以降は施錠の門が DB を読むので、解錠して書庫の鍵を 2 本とも付ける。
         let fixture = try TestLibraryFixture(name: "LockConcurrent", bookCount: 0)
         defer { fixture.cleanup() }
         let lib = fixture.servedLibrary()
@@ -430,15 +462,16 @@ struct LockEndpointTests {
                 headers: [.authorization: "Bearer W", .contentType: "application/json"],
                 body: .init(bytes: Array(initial))
             ) { response in #expect(response.status == .noContent) }
+            let token = try await unlock(client, lib.uuid, password: "secret123")
 
             async let respA = client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(changeA))
             ) { $0.status }
             async let respB = client.execute(
                 uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
-                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                headers: [.authorization: "Bearer W", .contentType: "application/json", .init("X-Library-Token")!: token],
                 body: .init(bytes: Array(changeB))
             ) { $0.status }
             let (statusA, statusB) = try await (respA, respB)
@@ -451,6 +484,7 @@ struct LockEndpointTests {
             //   - 2 本が本当に重なった場合: 後発は compare-and-set が弾いて **409**
             //   - 直列化された場合: 後発の現パスワードは既に古いので **403**
             //     （`LibraryServerCore.swift:1345-1347` の `verifiedCredential` が nil を返す経路）
+            //     G62 以降は、勝った方の変更で書庫の鍵が失効し、施錠の門が 403 を返すこともある
             // ローカルでは重なって 409 になるが、CI ランナーでは直列化して 403 になった。
             // **重なりを強制する手段がテスト側に無い以上、409 を要求するのは実行順序への依存**であり、
             // 不変条件そのものではない。拒否されたことだけを縛る。

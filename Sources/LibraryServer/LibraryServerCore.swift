@@ -346,8 +346,11 @@ public struct LibraryServerCore: Sendable {
         self.dataSource = dataSource
         self.contentCache = BookContentCache(ttlSeconds: 300, userExtensions: config.userExtensions)
         // G23 (#15): 施錠庫の bookChanged は bookID を落として配信する（蔵書数の概算が漏れるため）。
+        // G62（spec §6.2）: 施錠は DB から読む（スナップショットの isLocked に頼らない）。読めなければ施錠として扱う。
+        // 配信していない書庫は今どおり false（丸めない）。
         self.eventHub = EventHub(isLibraryLocked: { [dataSource] uuid in
-            await dataSource.servedLibraries().first(where: { $0.uuid == uuid })?.isLocked ?? false
+            guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else { return false }
+            do { return try lib.readLockCredential() != nil } catch { return true }
         })
         if let maintenanceRegistry {
             self.maintenanceRegistry = maintenanceRegistry
@@ -593,9 +596,12 @@ public struct LibraryServerCore: Sendable {
         }
         api.get("libraries") { _, context in
             let libs = await dataSource.servedLibraries().filter { context.scope.allows($0.uuid) }
-            return libs.map {
-                LibraryDTO(id: $0.uuid, name: $0.name, locked: $0.isLocked,
-                           bookCount: (try? $0.db.fetchBookCount()) ?? 0)
+            return libs.map { lib in
+                // G62（spec §6.2）: 施錠は DB から読む。読めなければ施錠として扱う。
+                let locked: Bool
+                do { locked = try lib.readLockCredential() != nil } catch { locked = true }
+                return LibraryDTO(id: lib.uuid, name: lib.name, locked: locked,
+                                  bookCount: (try? lib.db.fetchBookCount()) ?? 0)
             }
         }
         // ロック庫の解錠: パスワード照合に成功したら短命ライブラリトークンを発行。

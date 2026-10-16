@@ -81,7 +81,7 @@ public final class LibrarySettings {
     /// ライブラリの表示名（per-library）。空（空白のみ含む）ならファイル名にフォールバックする。
     /// 解決には `resolvedName(fallback:)` を使う。
     public var displayName: String {
-        didSet { persistDisplayName() }
+        didSet { persistDisplayName(); onServedIdentityChange?() }
     }
     /// 命名フォーマットのプリセット集合（per-library）。`filenameFormat` は既定プリセットの format ミラー。
     public var filenameFormatPresets: [FilenameFormatPreset] {
@@ -134,7 +134,7 @@ public final class LibrarySettings {
     /// 個別に代入できると salt/hash が別トランザクションで書かれ、世代混在（どのパスワードでも
     /// 解錠できない庫）が再発する。型として「必ず同世代」を保証するための制約。
     public private(set) var lockPasswordHash: String? {
-        didSet { persistLockHash() }
+        didSet { persistLockHash(); onServedIdentityChange?() }
     }
     public private(set) var lockPasswordSalt: String? {
         didSet { persistLockSalt() }
@@ -175,7 +175,7 @@ public final class LibrarySettings {
     }
     /// このライブラリをアプリ内蔵サーバ経由でリモート共有するか（per-library）。既定 OFF（明示オプトイン）。
     public var remoteSharingEnabled: Bool {
-        didSet { persistRemoteSharingEnabled() }
+        didSet { persistRemoteSharingEnabled(); onServedIdentityChange?() }
     }
     /// 監視フォルダ機能の有効/無効（per-library）。既定 OFF。
     public var folderWatchEnabled: Bool {
@@ -765,6 +765,13 @@ public final class LibrarySettings {
         syncingFromDatabase { lockPasswordHash = upgraded }
         return true
     }
+
+    /// G62（spec §6.1）: 配信の一覧に載る値（表示名・施錠・共有）が変わった**後**に呼ぶ。`AppState` が開いたときに付け、
+    /// 配信中の書庫の一覧（`ServedLibraryDirectory`）をその場で作り直す。`setLock`・`clearLock`・`reloadLockSettings`・
+    /// `reloadGeneralSettings` も上の 3 つへの代入を通る（`syncingFromDatabase` の中でも didSet は走る）ので、
+    /// 経路ごとの手当ては要らない。`@ObservationIgnored`: UI が観測する値ではない。
+    @ObservationIgnored
+    public var onServedIdentityChange: (@MainActor () -> Void)?
 
     /// G25c: **DB を真として読み直した値をメモリへ反映する**間だけ true にする。
     /// 本クラスは `didSet` で永続化するため、メモリへの代入はすべて「無条件の書き込み」になる。

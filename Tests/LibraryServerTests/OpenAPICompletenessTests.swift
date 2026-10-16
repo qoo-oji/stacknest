@@ -7,7 +7,7 @@ import Foundation
 @Suite("G65: openapi.yaml の各操作の欠け")
 struct OpenAPICompletenessTests {
     static let tiers: Set<String> = ["none", "read", "edit", "admin", "relay"]
-    static let responseNames: Set<String> = ["Unauthorized", "Forbidden", "LibraryLocked", "ForbiddenOrLocked", "NotFound"]
+    static let responseNames: Set<String> = ["Unauthorized", "Forbidden", "LibraryLocked", "ForbiddenOrLocked", "NotFound", "LibraryUnavailable"]
 
     @Test func everyOperationCarriesTheRequiredItems() throws {
         let problems = try Self.problems(in: OpenAPISpecReader.specText())
@@ -62,6 +62,10 @@ struct OpenAPICompletenessTests {
             if lockChecked, op.securityLines != twoAlternatives {
                 problems.append("\(op.key): 施錠を見る操作は security に bearerAuth+libraryToken と bearerAuth の 2 通りを並べる")
             }
+            // G62（spec §6.9・Q6）: 施錠を見る操作は、施錠の状態を読めないとき 503 を返す。
+            if lockChecked, op.responses["503"] != "LibraryUnavailable" {
+                problems.append("\(op.key): 施錠を見る操作は 503 に LibraryUnavailable を書く")
+            }
             // `security:` の下の行（block の形）だけでなく、1 行の flow の形（`security: [{bearerAuth: []}]`）も見る。
             if !lockChecked, tier != "none", op.fields["security"] != nil {
                 problems.append("\(op.key): 施錠を見ない操作は security を書かない（既定の bearerAuth）")
@@ -105,6 +109,32 @@ struct OpenAPICompletenessTests {
         """ + "\n" + Self.badBase
         let problems = try Self.problems(in: yaml)
         #expect(problems.contains { $0.contains("404 に NotFound が無い") })
+    }
+
+    /// G62: 施錠を見る操作に 503 が無ければ報告する。
+    @Test func lockCheckedOperationWithout503IsReported() throws {
+        let yaml = """
+        paths:
+          /libraries/{lib}/x:
+            get:
+              summary: s
+              tags: [T]
+              operationId: x
+              x-stacknest-tier: read
+              security:
+                - bearerAuth: []
+                  libraryToken: []
+                - bearerAuth: []
+              responses:
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+                '403':
+                  $ref: '#/components/responses/LibraryLocked'
+                '404':
+                  $ref: '#/components/responses/NotFound'
+        """ + "\n" + Self.badBase
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("503 に LibraryUnavailable") }, Comment(rawValue: problems.joined(separator: "\n")))
     }
 
     @Test func undeclaredTagAndDanglingRefsAreReported() throws {

@@ -11,13 +11,25 @@ public struct ServedLibrary: Sendable {
     public let name: String           // 表示名（バンドル名）
     public let bundleURL: URL
     public let db: Database
-    public let isLocked: Bool         // lock_password_hash が存在するか
+    public let isLocked: Bool         // 作った時点の lock_password_hash の有無。G62: 情報として残すだけで、施錠の門には使わない
     public init(uuid: String, name: String, bundleURL: URL, db: Database, isLocked: Bool) {
         self.uuid = uuid
         self.name = name
         self.bundleURL = bundleURL
         self.db = db
         self.isLocked = isLocked
+    }
+
+    /// G62（spec §6.2）: 施錠の世代（`lock_password_hash`）を DB から 1 回読む。施錠していなければ nil。
+    /// **DB が閉じていれば投げる**（`currentLockCredential()` のように nil＝「施錠なし」に化けない）。
+    /// 施錠の門（`LibraryResolver.resolve`・`GET /libraries`・EventHub の丸め）はこれだけで判定する。
+    public func readLockCredential() throws -> String? {
+        try db.getLibrarySettingRequiringOpen(key: "lock_password_hash")
+    }
+
+    /// G62: `isLocked` だけを差し替えたコピー（`resolve` が DB で判定した結果を返すため）。
+    public func withLockState(_ locked: Bool) -> ServedLibrary {
+        ServedLibrary(uuid: uuid, name: name, bundleURL: bundleURL, db: db, isLocked: locked)
     }
 
     /// ロック庫のパスワード照合（headless 可・LibraryLock 再利用）。

@@ -60,44 +60,56 @@ struct LibraryResolver: Sendable {
     let dataSource: any LibraryServerDataSource
     let tokenStore: LibraryTokenStore
 
-    /// uuid からライブラリを引き、ロック庫なら X-Library-Token を検証する。
-    /// 見つからない / スコープ外 → nil（404 相当）、ロック未解錠 → LibraryAccessError.locked（403）。
+    /// uuid からライブラリを引き、施錠していれば鍵を検証する。
+    /// 見つからない / スコープ外 → nil（404 相当）、ロック未解錠 → LibraryAccessError.locked（403）、
+    /// 施錠の状態を読めない → LibraryAccessError.unavailable（503）。
+    /// G62（spec §6.2）: 施錠の有無はスナップショットの `isLocked` ではなく **DB から 1 回読んだ値**で決め、
+    /// 照合にもその値を使う（検証した値を使う規則・G25d）。返す書庫の `isLocked` はこの判定の結果にする。
     func resolve(uuid: String, libraryToken: String?, scope: GrantScope = .all,
                  viewerAccess: ViewerBookAccess? = nil) async throws -> ServedLibrary? {
         guard scope.allows(uuid) else { return nil }
         guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else {
             return nil
         }
-        if lib.isLocked {
+        let credential: String?
+        do {
+            credential = try lib.readLockCredential()
+        } catch {
+            throw LibraryAccessError.unavailable
+        }
+        if let credential {
             if let viewerAccess {
                 // G60: 本専用トークンは、その本に限って書庫のトークンなしで読める（ビューアに書庫の
                 // トークンまで渡さないため）。ただし発行時に解錠していたロックの世代が今も現行であること。
                 // パスワードを変えた・施錠前に発行した、のどちらでも通さない。
                 guard viewerAccess.libraryUUID == uuid,
                       let issued = viewerAccess.lockFingerprint,
-                      issued == ViewerTokenStore.lockFingerprint(for: lib.currentLockCredential()) else {
+                      issued == ViewerTokenStore.lockFingerprint(for: credential) else {
                     throw LibraryAccessError.locked
                 }
             } else {
                 // G25d: 発行時に認証した世代が今も現行であることを要求する。
                 guard let t = libraryToken,
-                      await tokenStore.isValid(t, for: uuid, currentCredential: lib.currentLockCredential()) else {
+                      await tokenStore.isValid(t, for: uuid, currentCredential: credential) else {
                     throw LibraryAccessError.locked
                 }
             }
         }
-        return lib
+        return lib.withLockState(credential != nil)
     }
 }
 
-/// ロック庫アクセスエラー。HTTPResponseError 適合により router が自動で 403 を返す
+/// ロック庫アクセスエラー。HTTPResponseError 適合により router が自動で応答を返す
 /// （resolver を共有する全ルートハンドラで写像が効く）。
 enum LibraryAccessError: Error, HTTPResponseError {
     case locked
+    /// G62（spec §6.9・Q6 (a)）: 施錠の状態を DB から読めない（書庫を閉じた直後・読み取りの失敗）。503。
+    case unavailable
 
     var status: HTTPResponse.Status {
         switch self {
         case .locked: .forbidden
+        case .unavailable: .serviceUnavailable
         }
     }
 
@@ -105,8 +117,11 @@ enum LibraryAccessError: Error, HTTPResponseError {
         // G25d: 施錠ゲートによる 403 であることをクライアントへ伝える。権限不足の 403 と区別が付かないと、
         // クライアントは「失効したライブラリトークンを捨てて解錠し直す」判断ができない
         // （逆に権限不足で捨てると、権限が無いだけの利用者を解錠フォームへ飛ばしてしまう）。
+        // G62: 503 には付けない（施錠していない書庫で解錠の画面を出させない）。
         var headers = HTTPFields()
-        headers[.init("X-Library-Locked")!] = "1"
+        if case .locked = self {
+            headers[.init("X-Library-Locked")!] = "1"
+        }
         return Response(status: status, headers: headers)
     }
 }

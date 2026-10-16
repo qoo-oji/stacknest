@@ -188,6 +188,10 @@ final class AppState {
     /// Browser pane distinct-value lists to re-fetch immediately.
     var booksDataVersion: Int = 0
 
+    /// G62（spec §6.1）: `closeBundle()` の入口で true。配信の一覧から DB を閉じる前に外すために使う
+    /// （`finishOpening` で false に戻す）。UI が観測する値ではない。
+    @ObservationIgnored private(set) var isClosing = false
+
     // MARK: - Phase 2.8 B22: DB preventive safety
 
     /// B22: 開いた時点の file change counter。閉じる時にこれと比較して編集有無を判定する。
@@ -347,7 +351,8 @@ final class AppState {
 
     /// migrate 済みの DB を受け取り、state をロードして UI を初期化する。
     /// 通常オープンと B22 復元後オープンの両方から呼ぶ。
-    private func finishOpening(db: Database) throws {
+    /// G62: テストが in-memory の DB で開けるよう internal にした。
+    func finishOpening(db: Database) throws {
         self.favoritesShelfID = try db.ensureFavoritesShelf()
         self.database = db
         self.librarySettings = try LibrarySettings(database: db)
@@ -362,7 +367,11 @@ final class AppState {
         try refreshDisplayedBooks()
         // B22: セッションガードをリセットし、終了時バックアップ用に自身を登録する。
         self.didBackupThisSession = false
+        self.isClosing = false
         Self.activeInstances.add(self)
+        // G62（spec §6.1）: 配信中の書庫の一覧へ載せ、名前・施錠・共有の変化でその場で作り直す。
+        librarySettings?.onServedIdentityChange = { ServedLibraryPublisher.republish() }
+        ServedLibraryPublisher.republish()
         // Phase 4.2d-1: 監視フォルダウォッチャーを起動する。
         reloadFolderWatcher()
         // Phase 4.2c-2: ローカル resume 意図を 1 回だけ消費する。本ライブラリの bundlePath と
@@ -499,6 +508,11 @@ final class AppState {
     }
 
     func closeBundle() {
+        // G62（spec §6.1）: DB を閉じる（下の `database?.close()`）前に、配信中の書庫の一覧から外す。
+        // 閉じ始めた書庫を新しいリクエストに出さない。
+        isClosing = true
+        librarySettings?.onServedIdentityChange = nil
+        ServedLibraryPublisher.republish()
         // G27b 最終レビュー Fix3: 走査中（整合性フルスキャン等）のライブラリを閉じると、DB の
         // queue が nil になり、以後の永続化が全部 `DatabaseError.libraryClosed` で失敗するだけの
         // 空回りになる（FullIntegrityScanner 側で loop-fatal として打ち切るようにしたのが本体の

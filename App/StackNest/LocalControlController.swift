@@ -230,6 +230,7 @@ final class LocalControlController {
         // 行わない ―― 購読されない publish は文字どおりの no-op である。よって
         // `maintenanceEventFanout` を注入しても、このコアの eventHub 経由でイベントが漏れる・
         // 蓄積する副作用は生じない。
+        // G62: データソースは ServedLibraryPublisher.directory（プロセスで 1 つ）を読むだけ。
         let core = LibraryServerCore(config: config, dataSource: AllOpenLibrariesDataSource(),
                                      maintenanceRegistry: maintenanceRegistry,
                                      maintenanceEventFanout: maintenanceEventFanout)

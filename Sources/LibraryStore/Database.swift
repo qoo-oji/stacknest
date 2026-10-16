@@ -1695,6 +1695,16 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    /// G62（spec §6.2）: `getLibrarySetting(key:)` と同じ読み取りだが、**閉じた DB では nil ではなく
+    /// `DatabaseError.libraryClosed` を投げる**。「設定が無い」と「DB が閉じている」を区別したい施錠の判定だけが使う
+    /// （ほかの呼び出し元は今のまま・spec §13-5）。
+    public func getLibrarySettingRequiringOpen(key: String) throws -> String? {
+        guard let q = queue else { throw DatabaseError.libraryClosed }
+        return try q.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM library_settings WHERE key = ?", arguments: [key])
+        }
+    }
+
     /// Inserts or updates the value for the given key (UPSERT semantics).
     /// G25c: 複数の設定キーを**単一の read transaction**で読む。
     ///

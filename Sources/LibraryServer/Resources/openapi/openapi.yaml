@@ -14,7 +14,7 @@ info:
       - 本専用の鍵（外部ビューア用）: その本の 4 つの道（manifest・pages・cover・progress）だけに通る。ヘッダだけで、`?token=` では通らない。
       - 中継の鍵: 127.0.0.1 の口の `/relay/{relayID}/` の 4 つの道だけに通る。ほかの鍵は read・edit・admin でも 403。
     - **渡し方。** ヘッダ `Authorization: Bearer <token>` が優先。`?token=<token>` も受け付け、セッションの鍵として引けなければグラント・固定の鍵として扱う（既存のクライアントとの互換）。`/api/v1/server/info` は認証不要。
-    - **書庫の鍵。** 施錠した書庫の道は、`POST /libraries/{lib}/unlock` で得た鍵を `X-Library-Token`（または `?lt=`）で渡さないと 403 とヘッダ `X-Library-Locked: 1` を返す。例外として、本専用の鍵は、発行時の施錠の世代が今も同じなら、書庫の鍵なしでその本の道を通る。
+    - **書庫の鍵。** 施錠した書庫の道は、`POST /libraries/{lib}/unlock` で得た鍵を `X-Library-Token`（または `?lt=`）で渡さないと 403 とヘッダ `X-Library-Locked: 1` を返す。例外として、本専用の鍵は、発行時の施錠の世代が今も同じなら、書庫の鍵なしでその本の道を通る。施錠の状態は毎回書庫の DB から読み、読めない（書庫を閉じた直後・読み取りの失敗）ときは 503（`X-Library-Locked` は付かない。送り直せば通ることがある）。
     - **範囲外の書庫は 404。** path に書庫を持つ道では、scope の外の書庫は、在るか無いかを漏らさないため 403 ではなく 404。例外: `GET /viewer-tokens/{tokenID}` は scope の外の書庫の記録に 403。グラントの作成・更新で、呼び手の権限を超える scope・tier を指定したら 403（在るグラントが scope の外なら 404）。
     - **tier の確認は書庫の解決より先。** 低い tier の鍵には、書庫や本の有無を返さない。
     - **`/local/*` の口。** 127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（admin。タグ `Local` を参照）。
@@ -84,6 +84,10 @@ components:
             enum: ['1']
     NotFound:
       description: 書庫・本などが無い、または鍵の scope の外（在るか無いかを漏らさないため 403 ではなく 404）
+    LibraryUnavailable:
+      description: |
+        書庫の施錠の状態を DB から読めなかった（書庫を閉じた直後・読み取りの失敗）。一時的なもので、送り直せば通ることがある。
+        `X-Library-Locked` は付かない（書庫の鍵を捨てて解錠し直す必要はない）。
 
   schemas:
     ServerCapabilities:
@@ -148,7 +152,7 @@ components:
           description: ライブラリ名
         locked:
           type: boolean
-          description: パスワードロックされているか
+          description: パスワードロックされているか（書庫の DB から読む。読めなければ true）
         bookCount:
           type: integer
           description: 書籍数
@@ -1553,7 +1557,7 @@ paths:
   /libraries:
     get:
       summary: 配信中ライブラリ一覧
-      description: サーバが配信しているライブラリの一覧を返す。ロック庫も含む（locked=true）。
+      description: サーバが配信しているライブラリの一覧を返す。ロック庫も含む（locked=true）。施錠は書庫の DB から読み、読めなければ locked=true にする。
       tags: [Libraries]
       operationId: listLibraries
       x-stacknest-tier: read
@@ -1661,6 +1665,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: 照らしたパスワード（または未施錠という前提）が、同時に入った別の変更で古くなった
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     delete:
       summary: 書庫の施錠の解除（admin）
       description: |
@@ -1700,6 +1706,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: 照らしたパスワードが、同時に入った別の変更で古くなった
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/counts:
     get:
@@ -1734,6 +1742,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books:
     parameters:
@@ -1838,6 +1848,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     post:
       summary: 書籍を追加（サーバローカルパス・in-place・admin 必須）
       description: |
@@ -1870,6 +1882,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/shelves:
     get:
@@ -1906,6 +1920,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     post:
       summary: シェルフの作成（edit 以上）
       description: |
@@ -1950,6 +1966,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: 手動の棚に conditions を付けた
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/shelves/{id}:
     patch:
@@ -2003,6 +2021,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: お気に入りの棚の名前を変えようとした・手動の棚に条件を付けた
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     delete:
       summary: シェルフの削除（edit 以上）
       description: |
@@ -2041,6 +2061,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: お気に入りの棚は消せない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/shelves/{id}/conditions:
     get:
@@ -2085,6 +2107,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: スマートシェルフでない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: スマートシェルフの条件の設定（edit 以上）
       description: |
@@ -2135,6 +2159,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: スマートシェルフでない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/shelves/{id}/books:
     post:
@@ -2183,6 +2209,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: スマートシェルフには足せない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     delete:
       summary: 手動の棚から本を外す（edit 以上）
       description: |
@@ -2229,6 +2257,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: スマートシェルフからは外せない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/facets/{field}:
     get:
@@ -2302,6 +2332,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/detail:
     get:
@@ -2339,6 +2371,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}:
     patch:
@@ -2385,6 +2419,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     delete:
       summary: 書籍削除（エントリ＋サムネ・edit 以上、`?trash=true` は admin）
       description: |
@@ -2431,6 +2467,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '501':
           description: ゴミ箱機能が未サポート（Linux/ヘッドレス環境）
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/restore:
     post:
@@ -2477,6 +2515,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/relink:
     post:
@@ -2520,6 +2560,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/stamp-definitions:
     get:
@@ -2553,6 +2595,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: スタンプ定義置換（edit 以上）
       description: |
@@ -2592,6 +2636,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/stamp:
     post:
@@ -2634,6 +2680,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/cover-candidates:
     get:
@@ -2672,6 +2720,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/entry-image:
     get:
@@ -2725,6 +2775,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/cover:
     get:
@@ -2772,6 +2824,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: 表紙更新（coverImageName / cropRect・edit 以上）
       description: |
@@ -2817,6 +2871,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/cover/regenerate:
     post:
@@ -2859,6 +2915,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/cover-image:
     put:
@@ -2915,6 +2973,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '413':
           description: 本文が 30 MB を超えた
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/label-settings:
     get:
@@ -2948,6 +3008,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: ラベルカスタマイズ保存（edit 以上）
       description: |
@@ -2986,6 +3048,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/watch-config:
     get:
@@ -3021,6 +3085,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: 監視フォルダの設定の変更（admin）
       description: |
@@ -3063,6 +3129,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/watch/scan-now:
     post:
@@ -3093,6 +3161,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/watch/import-existing:
     post:
@@ -3132,6 +3202,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/import-config:
     get:
@@ -3166,6 +3238,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: 書庫ごとの取り込みの設定の変更（admin）
       description: |
@@ -3207,6 +3281,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/general-settings:
     get:
@@ -3241,6 +3317,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: 書庫の一般の設定の変更（admin）
       description: |
@@ -3282,6 +3360,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/presets:
     get:
@@ -3316,6 +3396,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
     put:
       summary: ファイル名の書式のプリセットの変更（admin）
       description: |
@@ -3357,6 +3439,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /import-config:
     get:
@@ -3451,6 +3535,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/manifest:
     get:
@@ -3490,6 +3576,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/pages/{n}:
     get:
@@ -3547,6 +3635,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           description: 描画失敗
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/progress:
     post:
@@ -3611,6 +3701,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/viewer-token:
     post:
@@ -3662,6 +3754,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '501':
           description: このサーバでは発行できない
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /viewer-tokens/{tokenID}:
     get:
@@ -3933,6 +4027,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/direction:
     post:
@@ -3982,6 +4078,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/page-layout:
     post:
@@ -4026,6 +4124,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/rating:
     post:
@@ -4075,6 +4175,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/unseen:
     post:
@@ -4120,6 +4222,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/books/{id}/file:
     get:
@@ -4164,6 +4268,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/integrity-check:
     get:
@@ -4199,6 +4305,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/backup-now:
     post:
@@ -4232,6 +4340,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           description: スナップショットを作れなかった
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/maintenance/complete-metadata:
     post:
@@ -4265,6 +4375,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: この書庫で別の保守のジョブが走っている
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/maintenance/compress-covers:
     post:
@@ -4298,6 +4410,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: この書庫で別の保守のジョブが走っている
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/maintenance/cancel:
     post:
@@ -4329,6 +4443,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/maintenance/status:
     get:
@@ -4363,6 +4479,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/integrity/full-scan:
     post:
@@ -4405,6 +4523,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: この書庫で別の保守のジョブが走っている
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/duplicates/scan:
     post:
@@ -4440,6 +4560,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/integrity/summary:
     get:
@@ -4474,6 +4596,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/integrity/list:
     get:
@@ -4518,6 +4642,8 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/integrity/scan:
     post:
@@ -4553,6 +4679,8 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /events:
     get:
@@ -4561,7 +4689,7 @@ paths:
         書庫の変化を Server-Sent Events（`text/event-stream`）で流し続ける。鍵の scope の外の書庫のイベントは流さない。
         EventSource はヘッダを付けられないので、`POST /session` で得たセッションの鍵を `?token=` で渡す。
         約 5 秒ごとに心拍（`: ping` のコメント行）を送る。グラントのモードでは心拍ごとにグラントを確かめ直し、グラントが消えた・scope が変わったら流れを閉じる（tier だけの変更では閉じない。消えたグラントで繋ぎ直すと 401）。
-        施錠を見ない（書庫の鍵は要らない）。施錠中の書庫の `bookChanged` は、本の ID から蔵書数の目安が漏れないよう `bookId` を落とした `structureChanged` に丸める。
+        施錠を見ない（書庫の鍵は要らない）。施錠中の書庫の `bookChanged` は、本の ID から蔵書数の目安が漏れないよう `bookId` を落とした `structureChanged` に丸める。施錠は書庫の DB から読み、読めなければ施錠中として丸める。
         イベントの名前（`event:`）と `data:` の JSON:
         - `bookChanged` `{"library": "<UUID>", "bookId": 1}`: 本のメタデータ・表紙・評価・未読・方向・見開きの上書きなどが変わった
         - `structureChanged` `{"library": "<UUID>"}`: 本の追加・削除・復元・再リンク、棚の所属、整合性の検査、保守のジョブの終わりなどで一覧が変わった
@@ -4821,6 +4949,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '501':
           description: この口にはファイル名を変える仕組みが無い
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
 tags:
   - name: Server
