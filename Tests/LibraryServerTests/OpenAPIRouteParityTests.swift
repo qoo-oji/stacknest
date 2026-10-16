@@ -78,20 +78,6 @@ struct OpenAPIRouteParityTests {
 
     /// まだ openapi.yaml に書いていない操作（G65 Task 3〜5 が書いて削る。Task 5 で空にして消す）。
     static let undocumented: Set<String> = [
-        // Task 4
-        "POST /libraries/{lib}/integrity/full-scan", "POST /libraries/{lib}/duplicates/scan",
-        "GET /libraries/{lib}/integrity/summary", "GET /libraries/{lib}/integrity/list", "POST /libraries/{lib}/integrity/scan",
-        "GET /libraries/{lib}/integrity-check", "POST /libraries/{lib}/backup-now",
-        "POST /libraries/{lib}/maintenance/complete-metadata", "POST /libraries/{lib}/maintenance/compress-covers",
-        "POST /libraries/{lib}/maintenance/cancel", "GET /libraries/{lib}/maintenance/status",
-        "GET /libraries/{lib}/watch-config", "PUT /libraries/{lib}/watch-config",
-        "POST /libraries/{lib}/watch/scan-now", "POST /libraries/{lib}/watch/import-existing",
-        "GET /libraries/{lib}/import-config", "PUT /libraries/{lib}/import-config",
-        "GET /libraries/{lib}/general-settings", "PUT /libraries/{lib}/general-settings",
-        "GET /import-config", "PUT /import-config",
-        "GET /libraries/{lib}/presets", "PUT /libraries/{lib}/presets",
-        "POST /libraries/{lib}/books/{id}/relink", "POST /libraries/{lib}/books/restore",
-        "POST /libraries/{lib}/books/{id}/cover/regenerate", "PUT /libraries/{lib}/books/{id}/cover-image",
         // Task 5
         "POST /local/libraries/open", "POST /local/libraries/close",
         "GET /local/libraries/{uuid}/finder-tags", "PUT /local/libraries/{uuid}/finder-tags",
@@ -99,8 +85,8 @@ struct OpenAPIRouteParityTests {
     ]
 
     @Test func undocumentedListShrinksAsOperationsAreWritten() {
-        // 書いた操作を消すたびにこの数も直す（Task 1 で 50・Task 3 で 33。Task 5 でこの試験ごと消す）。
-        #expect(Self.undocumented.count == 33)
+        // 書いた操作を消すたびにこの数も直す（Task 1 で 50・Task 3 で 33・Task 4 で 6。Task 5 でこの試験ごと消す）。
+        #expect(Self.undocumented.count == 6)
     }
 
     @Test func everyRouteIsDocumentedAndEveryDocumentedOperationExists() throws {

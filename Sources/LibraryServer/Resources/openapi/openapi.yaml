@@ -982,6 +982,338 @@ components:
           enum: [0, 1, null]
           description: 0＝見開きにする・1＝単ページにする。省くか null で上書きを消す（自動の判定に戻す）。ほかの値は 400
 
+    FullScanStartRequest:
+      type: object
+      description: 整合性のフルスキャンの開始（POST /libraries/{lib}/integrity/full-scan の本文）
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [unchecked, all, damaged]
+          description: unchecked はフルスキャンをまだしていない本（中断からの再開）、all はすべての本、damaged は前回 damaged だった本。ほかの値は 400
+
+    DuplicateScanReply:
+      type: object
+      description: 重複の検査の結果
+      required: [exact, possible, candidateCount, hashedCount, missingCount]
+      properties:
+        exact:
+          type: array
+          items:
+            $ref: '#/components/schemas/DuplicateGroupDTO'
+          description: 中身（SHA-256）が同じ本の組
+        possible:
+          type: array
+          items:
+            $ref: '#/components/schemas/DuplicateGroupDTO'
+          description: シリーズと巻が同じ本の組（全員が 1 つの exact の組に入るものは除く）
+        candidateCount:
+          type: integer
+          description: 調べた本の数（ファイルがあるもの。フォルダは除く）
+        hashedCount:
+          type: integer
+          description: 今回ハッシュを計算した本の数（同じ大きさのファイルが他にあり、保存したハッシュが古いか無いもの）
+        missingCount:
+          type: integer
+          description: ファイルが見つからなかった本の数
+
+    DuplicateGroupDTO:
+      type: object
+      description: 重複の組 1 つ
+      required: [kind, key, members]
+      properties:
+        kind:
+          type: string
+          enum: [exact, possibleSeriesVolume]
+        key:
+          type: string
+          description: 組の鍵（exact はハッシュ、possibleSeriesVolume はシリーズと巻から作る）
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookListItemDTO'
+
+    IntegritySummaryReply:
+      type: object
+      description: 整合性の検査の集計（G27a）
+      required: [checked, unchecked, damaged, degraded]
+      properties:
+        checked:
+          type: integer
+          description: 検査の記録がある本の数
+        unchecked:
+          type: integer
+          description: まだ検査の記録が無い本の数
+        damaged:
+          type: integer
+          description: 壊れている（damaged）本の数
+        degraded:
+          type: integer
+          description: 前回は ok で今回 damaged になった（ディスクの上で劣化した疑いのある）本の数
+        lastScanAt:
+          type: integer
+          format: int64
+          nullable: true
+          description: 最後に検査した時刻（epoch 秒）。今のサーバは常にキーを送り、1 冊も検査していなければ null。古いサーバはキーを送らない（「未検査」と「分からない」を区別するため）
+        unsupported:
+          type: integer
+          description: 検査の対象外（フォルダ・動画・テキスト・電子書籍、StackNest が読めない形式）の本の数（G64）。今のサーバは常に送る。古いサーバはキーを送らないので、無いときは 0 冊ではなく「分からない」
+
+    IntegrityListReply:
+      type: object
+      description: 整合性の記録の一覧
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrityItemDTO'
+
+    IntegrityItemDTO:
+      type: object
+      description: 本 1 冊の整合性の記録
+      required: [bookID, title, status, checkedAt, badEntries, degraded]
+      properties:
+        bookID:
+          type: integer
+        title:
+          type: string
+        filename:
+          type: string
+          description: ファイル名だけ（パスは伏せる）。パスの無い本はキー省略
+        status:
+          type: string
+          enum: [ok, damaged, empty, missing, unsupported]
+          description: ok は全部読めた、damaged は CRC の不一致・途中で壊れている、empty は画像が 1 枚も無い、missing はファイルが無い、unsupported は検査の対象外
+        checkedAt:
+          type: integer
+          format: int64
+          description: 検査した時刻（epoch 秒）
+        entryCount:
+          type: integer
+          description: 読めた中身の数。分からなければキー省略
+        badEntries:
+          type: array
+          items:
+            type: string
+          description: 読めなかった中身の名前
+        degraded:
+          type: boolean
+          description: 前回 ok で今回 damaged か
+
+    IntegrityScanReply:
+      type: object
+      description: 簡易の整合性の検査の結果。ok＋damaged＋empty＋missing＋unsupported＋persistenceFailures＝scanned
+      required: [scanned, ok, damaged, empty, missing, unsupported, pagesUpdated, persistenceFailures]
+      properties:
+        scanned:
+          type: integer
+          description: 調べた本の数
+        ok:
+          type: integer
+        damaged:
+          type: integer
+        empty:
+          type: integer
+        missing:
+          type: integer
+        unsupported:
+          type: integer
+        pagesUpdated:
+          type: integer
+          description: ページ数を書き込んだ本の数
+        persistenceFailures:
+          type: integer
+          description: 結果を DB に書けなかった本の数
+
+    IntegrityCheckDTO:
+      type: object
+      description: SQLite の integrity_check の結果
+      required: [healthy, rows]
+      properties:
+        healthy:
+          type: boolean
+          description: rows がちょうど ["ok"] のとき true
+        rows:
+          type: array
+          items:
+            type: string
+          description: integrity_check が返した行。検査そのものが失敗したら ["(error)"]（訳さない値）
+
+    MaintenanceStatusReply:
+      type: object
+      description: 保守のジョブの進み。走っていなければ running だけ（ほかのキーは省く）
+      required: [running]
+      properties:
+        running:
+          type: boolean
+        job:
+          type: string
+          enum: [complete-metadata, compress-covers, full-scan]
+        done:
+          type: integer
+        total:
+          type: integer
+        startedAt:
+          type: integer
+          format: int64
+          description: 始めた時刻（epoch 秒）
+
+    WatchConfigDTO:
+      type: object
+      description: 監視フォルダの設定（GET の応答・PUT の本文と応答）
+      required: [enabled, folders]
+      properties:
+        enabled:
+          type: boolean
+          description: 監視フォルダ全体の ON・OFF
+        folders:
+          type: array
+          items:
+            $ref: '#/components/schemas/WatchedFolderDTO'
+        presets:
+          type: array
+          items:
+            $ref: '#/components/schemas/FilenameFormatPresetDTO'
+          description: 応答だけ。書庫のファイル名の書式のプリセット（id と name だけ。format は省く）。PUT の本文では読まない
+
+    WatchedFolderDTO:
+      type: object
+      description: 監視フォルダ 1 件。応答では baseline と subfolderMode を常に含む
+      required: [id, path, enabled]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+          description: サーバの上のフォルダの絶対パス
+        enabled:
+          type: boolean
+        presetID:
+          type: string
+          nullable: true
+          description: 取り込みに使うファイル名の書式のプリセット
+        baseline:
+          type: array
+          items:
+            type: string
+          description: 足した時点で既にあったファイルのパス（取り込まない）。サーバが持つ値で、PUT の本文の値は使わない
+        subfolderMode:
+          type: string
+          enum: [topLevelOnly, archive, recurse]
+          default: topLevelOnly
+          description: サブフォルダの扱い（topLevelOnly は直下だけ、archive はサブフォルダを 1 冊として、recurse は中まで）
+
+    FilenameFormatPresetDTO:
+      type: object
+      description: ファイル名の書式のプリセット 1 件
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        format:
+          type: string
+          nullable: true
+          description: 書式（例 `@title`）。監視フォルダの設定の応答では省く。プリセットの設定（PUT）では空なら 400
+
+    ImportExistingRequest:
+      type: object
+      description: 監視フォルダの既にあるファイルの取り込み（POST /libraries/{lib}/watch/import-existing の本文）
+      required: [folderID]
+      properties:
+        folderID:
+          type: string
+          description: 監視フォルダの id
+
+    ImportConfigDTO:
+      type: object
+      description: 書庫ごとの取り込みの設定。キーが無い（null）項目は全体の既定（GET /import-config）に従う
+      properties:
+        autoClassifyEnabled:
+          type: boolean
+          nullable: true
+          description: 取り込みのときに種類を自動で分けるか
+        thickBookThreshold:
+          type: integer
+          nullable: true
+          description: 厚い本とみなすページ数（保存するときに 5〜100 に収める）
+        preferEPUBTitle:
+          type: boolean
+          nullable: true
+          description: EPUB に題名があればそれを使うか（G54-S4）
+
+    GlobalImportConfigDTO:
+      type: object
+      description: 取り込みの全体の既定（書庫に属さない）。応答では 3 項目を常に含む
+      required: [autoClassifyEnabled, thickBookThreshold]
+      properties:
+        autoClassifyEnabled:
+          type: boolean
+        thickBookThreshold:
+          type: integer
+          description: 厚い本とみなすページ数（5〜100 に収める）
+        preferEPUBTitle:
+          type: boolean
+          description: EPUB に題名があればそれを使うか。PUT の本文で省くと false として保存する
+
+    GeneralSettingsDTO:
+      type: object
+      description: 書庫の一般の設定
+      required: [displayName, backupEnabled, backupGenerations]
+      properties:
+        displayName:
+          type: string
+          description: 書庫の表示名。空ならバンドルの名前を使う
+        backupEnabled:
+          type: boolean
+          description: 自動バックアップをするか（未設定なら true）
+        backupGenerations:
+          type: integer
+          minimum: 1
+          maximum: 20
+          description: 残すバックアップの世代数（未設定なら 5。保存するときに 1〜20 に収める）
+
+    PresetSetDTO:
+      type: object
+      description: ファイル名の書式のプリセットの集まりと既定の id
+      required: [presets, defaultID]
+      properties:
+        presets:
+          type: array
+          items:
+            $ref: '#/components/schemas/FilenameFormatPresetDTO'
+        defaultID:
+          type: string
+          description: 既定のプリセットの id（presets に無い id なら、サーバが presets の中の id に直す）
+
+    RelinkRequest:
+      type: object
+      description: 本のファイルの付け直し（POST /libraries/{lib}/books/{id}/relink の本文）
+      required: [newPath]
+      properties:
+        newPath:
+          type: string
+          description: 新しいファイルのサーバの上の絶対パス。空なら 400、許したルートの外なら 403
+
+    RestoreResultDTO:
+      type: object
+      description: 削除の取り消し（POST /libraries/{lib}/books/restore）の結果
+      required: [restored, requested, restoredIDs]
+      properties:
+        restored:
+          type: integer
+          description: 戻した冊数
+        requested:
+          type: integer
+          description: 本文にあった冊数
+        restoredIDs:
+          type: array
+          items:
+            type: integer
+          description: 戻した本の ID（ID が他の本に使われていて戻せなかった本は含まない）。やり直し（再削除）はこの ID だけを対象にする
+
 paths:
   /server/info:
     get:
@@ -2039,6 +2371,95 @@ paths:
         '501':
           description: ゴミ箱機能が未サポート（Linux/ヘッドレス環境）
 
+  /libraries/{lib}/books/restore:
+    post:
+      summary: 削除した本を戻す（admin）
+      description: |
+        `DELETE /libraries/{lib}/books/{id}` が返した行（`BookRestoreDTO`）の配列を受け取り、同じ ID で書庫に戻す（リモートの取り消し）。
+        ID が他の本に使われていたら、その行は飛ばして続ける。パスは、このサーバが消したときに記録したものを優先し、記録が無ければ許したルート（書庫のバンドル・監視フォルダ・今ある本のフォルダ）の中のときだけ使う（外なら行は戻すがパスは落とす）。
+        ゴミ箱に送ったファイルは、サーバが記録した元の場所へ戻す（本文のパスは使わない）。消したときに表紙があった本は表紙を作り直す。
+        1 冊でも戻したら `structureChanged` イベントを出す。**admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Books]
+      operationId: restoreBook
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/BookRestoreDTO'
+      responses:
+        '200':
+          description: 戻した結果（戻せなかった行があれば restored < requested）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreResultDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/books/{id}/relink:
+    post:
+      summary: 本のファイルの付け直し（edit 以上）
+      description: |
+        本のファイルのパスを付け直す（内容のハッシュは消す）。自動の表紙は新しいファイルから作り直し、ページ数も新しいファイルの数にする（手動・外部の表紙はそのまま。作り直しの失敗は付け直しの失敗にしない）。
+        新しいパスが許したルート（書庫のバンドル・監視フォルダ・今ある本のフォルダ）の外なら 403（施錠による 403 ではないので `X-Library-Locked` は付かない）。
+        `structureChanged` イベントを出す。**edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Books]
+      operationId: relinkBook
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelinkRequest'
+      responses:
+        '204':
+          description: 付け直した
+        '400':
+          description: 本文が読めない・newPath が空
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /libraries/{lib}/stamp-definitions:
     get:
       summary: スタンプ定義取得（read 以上）
@@ -2336,6 +2757,104 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /libraries/{lib}/books/{id}/cover/regenerate:
+    post:
+      summary: 表紙の作り直し（edit 以上）
+      description: |
+        1 冊の表紙（サムネイル）を今のファイルから作り直す。中のページを表紙に選んでいればそのページから作る。
+        外部の画像の表紙（`PUT …/cover-image` で差し替えたもの）は作り直さず、今の詳細をそのまま返す。
+        ファイルが無い・表紙を作れない形式・画像が 1 枚も無い本は 400。作り直したら `bookChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Cover]
+      operationId: regenerateCover
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 作り直した後の書籍詳細
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookDetailDTO'
+        '400':
+          description: 本のファイルが無い・表紙を作れない形式・画像が無い
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/books/{id}/cover-image:
+    put:
+      summary: 表紙を画像で差し替える（edit 以上）
+      description: |
+        本文の画像（そのままのバイト列・上限 30 MB）を表紙にする。サーバは `Content-Type` を見ず、画像として読めるかで判断する（読めない・空なら 400）。
+        長い辺を 1200 ピクセル以内にした JPEG で保存し、表紙を外部の画像（`coverImageName` が `@external`）にする。
+        `?crop=` に切り抜きの矩形の JSON を付けるとそれを設定し、付けなければ切り抜きを外す。
+        `bookChanged` イベントを出す。**edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Cover]
+      operationId: replaceCoverImage
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: crop
+          in: query
+          schema:
+            type: string
+          description: 切り抜きの矩形の JSON（省くと切り抜きを外す）
+      requestBody:
+        required: true
+        content:
+          image/*:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: 差し替えた後の書籍詳細
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookDetailDTO'
+        '400':
+          description: 本文が空・画像として読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          description: 本文が 30 MB を超えた
+
   /libraries/{lib}/label-settings:
     get:
       summary: ラベルカスタマイズ取得（read 以上）
@@ -2406,6 +2925,423 @@ paths:
           $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/watch-config:
+    get:
+      summary: 監視フォルダの設定の取得
+      description: |
+        監視フォルダの ON・OFF と、フォルダの一覧（サーバの上の絶対パス・取り込まない既存のファイルのパス〔baseline〕を含む）を返す。
+        書庫のファイル名の書式のプリセット（id と name）も添える。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: getWatchConfig
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 監視フォルダの設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchConfigDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: 監視フォルダの設定の変更（admin）
+      description: |
+        監視フォルダの設定を id で突き合わせて置き換える。既にある id は baseline をサーバの値のまま残して他の項目を変え、新しい id はパスが実在するフォルダか確かめて（違えば 400）今の中身を baseline にし、本文に無い id は消す。
+        本文の `presets` と baseline は使わない。応答は保存した後の設定（GET と同じ形）。
+        サーバの上のフォルダを読み書きの対象にする設定なので admin。`settingsChanged` イベントを出す。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: setWatchConfig
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchConfigDTO'
+      responses:
+        '200':
+          description: 保存した後の監視フォルダの設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchConfigDTO'
+        '400':
+          description: 本文が読めない・新しいフォルダのパスが実在するフォルダでない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/watch/scan-now:
+    post:
+      summary: 監視フォルダを今すぐ走査（admin）
+      description: |
+        サーバを動かすアプリに、この書庫の監視フォルダを今すぐ走査するよう頼む（終わるのは待たない。頼む先の無い口では何もしない）。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: scanWatchFoldersNow
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '204':
+          description: 頼んだ
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/watch/import-existing:
+    post:
+      summary: 監視フォルダの既にあるファイルを取り込む（admin）
+      description: |
+        指定した監視フォルダの baseline（足した時点で既にあったので取り込まないファイル）を空にし、走査を頼む。既に書庫にあるファイルは取り込みの重複の判定で飛ばされる。
+        その id の監視フォルダが無ければ 404。`settingsChanged` イベントを出す。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: importExistingWatchFiles
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportExistingRequest'
+      responses:
+        '204':
+          description: baseline を空にして走査を頼んだ
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/import-config:
+    get:
+      summary: 書庫ごとの取り込みの設定の取得
+      description: |
+        書庫ごとの取り込みの設定を返す。書庫で決めていない項目はキーを省く（全体の既定〔`GET /import-config`〕に従う）。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: getLibraryImportConfig
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 書庫ごとの取り込みの設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportConfigDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: 書庫ごとの取り込みの設定の変更（admin）
+      description: |
+        書庫ごとの取り込みの設定を置き換える。値のある項目は書庫の設定にし、省いた（null の）項目は書庫の設定を消して全体の既定に戻す。
+        `thickBookThreshold` は 5〜100 に収めて保存するが、応答は本文をそのまま返す（収める前の値）。`settingsChanged` イベントを出す。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: setLibraryImportConfig
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportConfigDTO'
+      responses:
+        '200':
+          description: 本文と同じ設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportConfigDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/general-settings:
+    get:
+      summary: 書庫の一般の設定の取得
+      description: |
+        書庫の表示名とバックアップの設定を返す。未設定の項目は既定の値（表示名は空・バックアップは ON・世代は 5）。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: getGeneralSettings
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 書庫の一般の設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneralSettingsDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: 書庫の一般の設定の変更（admin）
+      description: |
+        書庫の表示名とバックアップの設定を保存する。`backupGenerations` は 1〜20 に収めて保存し、応答も収めた後の値を返す。
+        `settingsChanged` イベントを出す。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: setGeneralSettings
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GeneralSettingsDTO'
+      responses:
+        '200':
+          description: 保存した設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeneralSettingsDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/presets:
+    get:
+      summary: ファイル名の書式のプリセットの取得
+      description: |
+        書庫のファイル名の書式のプリセットと既定の id を返す。プリセットが 1 つも無ければ、書庫の書式（未設定なら `(@genre) [@keywordB] [@author] @title`）を持つ id `default` の 1 件を返す。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: getPresets
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: プリセットの集まり
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetSetDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: ファイル名の書式のプリセットの変更（admin）
+      description: |
+        プリセットの集まりを置き換える。プリセットが 1 つも無い・format が空のプリセットがあるなら 400（何も保存しない）。
+        `defaultID` が集まりに無ければサーバが直す。応答は保存した集まり。`settingsChanged` イベントを出す。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Settings]
+      operationId: setPresets
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetSetDTO'
+      responses:
+        '200':
+          description: 保存したプリセットの集まり
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetSetDTO'
+        '400':
+          description: 本文が読めない・プリセットが無い・format が空のプリセットがある
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /import-config:
+    get:
+      summary: 取り込みの全体の既定の取得
+      description: |
+        書庫に属さない、取り込みの全体の既定を返す（書庫ごとの設定が無い項目に使う）。
+        ハンドラに tier の確かめは無く、グラント・固定の鍵ならどれでも（書庫を限ったグラントでも）読める。
+      tags: [Settings]
+      operationId: getGlobalImportConfig
+      x-stacknest-tier: read
+      responses:
+        '200':
+          description: 取り込みの全体の既定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalImportConfigDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      summary: 取り込みの全体の既定の変更（admin）
+      description: |
+        取り込みの全体の既定を保存し、保存した値を返す（`thickBookThreshold` は 5〜100 に収める）。書庫の scope は見ない。
+        **admin の tier が必要。**
+      tags: [Settings]
+      operationId: setGlobalImportConfig
+      x-stacknest-tier: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlobalImportConfigDTO'
+      responses:
+        '200':
+          description: 保存した全体の既定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalImportConfigDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /libraries/{lib}/books/{id}/adjacent:
     get:
@@ -3163,6 +4099,395 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/integrity-check:
+    get:
+      summary: DB の整合性の検査（admin）
+      description: |
+        書庫の DB に SQLite の `integrity_check` をかけ、結果の行を返す（何も書き換えない）。
+        検査そのものが失敗したら `rows` は `["(error)"]`・`healthy` は false（200 のまま）。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: runDatabaseIntegrityCheck
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 検査の結果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityCheckDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/backup-now:
+    post:
+      summary: 今すぐバックアップ（admin）
+      description: |
+        書庫の DB のスナップショットをバンドルの中（`Backups/`）に作り、一般の設定の世代数（未設定なら 5）を超えた古いものを消す（自動バックアップの ON・OFF に依らない）。
+        古いものを消すのに失敗しても成功として返す。スナップショットを作れなければ 500。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: backupNow
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '204':
+          description: バックアップを作った
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          description: スナップショットを作れなかった
+
+  /libraries/{lib}/maintenance/complete-metadata:
+    post:
+      summary: メタデータの補完のジョブを始める（admin）
+      description: |
+        シリーズ・巻が空の本に、題名・ファイル名から推した値を入れる保守のジョブを始め、すぐに 202 を返す（空欄だけを埋め、書き込む直前に読み直すので他の編集を上書きしない）。
+        書庫で別の保守のジョブが走っていれば 409。進みは `GET …/maintenance/status` と SSE の `maintenanceProgress`、終わりは `maintenanceFinished`（続けて `structureChanged`）。中断は `POST …/maintenance/cancel`。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: startCompleteMetadata
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '202':
+          description: ジョブを始めた
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: この書庫で別の保守のジョブが走っている
+
+  /libraries/{lib}/maintenance/compress-covers:
+    post:
+      summary: 表紙の圧縮のジョブを始める（admin）
+      description: |
+        大きすぎる表紙（サムネイル）を作り直して縮める保守のジョブを始め、すぐに 202 を返す。終わりの `count` は実際に縮んだ数。
+        書庫で別の保守のジョブが走っていれば 409。進み・終わり・中断は complete-metadata と同じ（`maintenance/status`・SSE・`maintenance/cancel`）。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: startCompressCovers
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '202':
+          description: ジョブを始めた
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: この書庫で別の保守のジョブが走っている
+
+  /libraries/{lib}/maintenance/cancel:
+    post:
+      summary: 保守のジョブの中断（admin）
+      description: |
+        この書庫で走っている保守のジョブ（complete-metadata・compress-covers・full-scan）に中断を頼む。走っていなければ何もしない。
+        止まると SSE の `maintenanceFinished` が outcome `cancelled` で届く。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: cancelMaintenance
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '204':
+          description: 中断を頼んだ（走っていなければ何もしない）
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/maintenance/status:
+    get:
+      summary: 保守のジョブの進み（admin）
+      description: |
+        この書庫で走っている保守のジョブの名前・進み・始めた時刻を返す（SSE を張らずに長いジョブを確かめる用）。走っていなければ `{"running": false}` だけ。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Maintenance]
+      operationId: getMaintenanceStatus
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: ジョブの進み
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceStatusReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/integrity/full-scan:
+    post:
+      summary: 整合性のフルスキャンのジョブを始める（admin）
+      description: |
+        本の中身を全部読んで CRC を確かめる保守のジョブ（full-scan）を始め、すぐに 202 を返す。大きな書庫では何十時間もかかる。
+        対象は `mode` で選ぶ（知らない値は 400）。結果は整合性の記録に書き、`integrity/summary`・`integrity/list` で読む。
+        書庫で別の保守のジョブが走っていれば 409。進みは `GET …/maintenance/status` と SSE、中断は `POST …/maintenance/cancel`。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Integrity]
+      operationId: startFullIntegrityScan
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FullScanStartRequest'
+      responses:
+        '202':
+          description: ジョブを始めた
+        '400':
+          description: 本文が読めない・mode が unchecked・all・damaged のどれでもない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: この書庫で別の保守のジョブが走っている
+
+  /libraries/{lib}/duplicates/scan:
+    post:
+      summary: 重複の検査（edit 以上）
+      description: |
+        書庫の本のファイルを調べ、中身が同じ組（exact）とシリーズ・巻が同じ組（possible）を返す。終わるまで待って返す。
+        同じ大きさのファイルが他にある本だけハッシュ（SHA-256）を計算し、本の行に保存する（大きさ・更新時刻が変わっていなければ保存した値を使う）。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Integrity]
+      operationId: scanDuplicates
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 重複の検査の結果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DuplicateScanReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/integrity/summary:
+    get:
+      summary: 整合性の検査の集計
+      description: |
+        保存した整合性の記録を数えて返す（検査はしない）。最後に検査した時刻と、検査の対象外の冊数も返す。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Integrity]
+      operationId: getIntegritySummary
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 整合性の検査の集計
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegritySummaryReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/integrity/list:
+    get:
+      summary: 整合性の記録の一覧
+      description: |
+        指定した状態（既定は damaged）の本の整合性の記録を題名の順に返す（検査はしない）。
+        read の鍵でも読めるので、パスはファイル名だけに伏せて返す（フォルダの構成を漏らさない）。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Integrity]
+      operationId: listIntegrityRecords
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ok, damaged, empty, missing, unsupported]
+            default: damaged
+          description: 状態（ほかの値は 400）
+      responses:
+        '200':
+          description: 整合性の記録の一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityListReply'
+        '400':
+          description: status が知らない値
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /libraries/{lib}/integrity/scan:
+    post:
+      summary: 簡易の整合性の検査（edit 以上）
+      description: |
+        ページ数が分からない（null・0）本だけを開いて分類し（ok・damaged・empty・missing・unsupported）、結果とページ数を保存する。本文は読まない（本を選べない）。終わるまで待って返す。
+        1 冊ずつ保存し、壊れた本があっても続ける。1 冊でも保存できたら `structureChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Integrity]
+      operationId: scanIntegrity
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 検査の結果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityScanReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
         '404':
           $ref: '#/components/responses/NotFound'
 
