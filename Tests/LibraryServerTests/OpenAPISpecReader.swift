@@ -180,6 +180,34 @@ enum OpenAPISpecReader {
             .map { "l.\($0.line): $ref の先が無い: \($0.section)/\($0.name)" }
     }
 
+    /// OpenAPI 3.1 の null の書き方から外れた行（Codex 指摘・G65）。
+    /// - `nullable:` は 3.0 の書き方で、3.1（JSON Schema 2020-12）では効かない。null を許すなら `type: [X, 'null']`、
+    ///   `$ref` なら `oneOf:` に `- $ref: …` と `- type: 'null'` を並べる。
+    /// - `type` の値の裸の `null`（引用符なし・`~` も）は YAML の null になり、型の名前 "null" にならない。
+    /// enum の値としての裸の null は正しい（値の null）ので見ない。注釈の行は見ない。
+    static func nullHandlingProblems(in yaml: String) -> [String] {
+        // 鍵の位置（行頭・列の項目の `- ` の後・flow の `{` か `,` の後）にある鍵だけを見る。説明文の中の語は拾わない。
+        let nullableKey = /(?:^|^-\s+|[{,]\s*)nullable\s*:/
+        let typeValue = /(?:^|^-\s+|[{,]\s*)type\s*:\s*(\[[^\]]*\]|[^,}\s]+)/
+        var problems: [String] = []
+        for (index, raw) in yaml.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.contains(nullableKey) {
+                problems.append("l.\(index + 1): nullable は OpenAPI 3.1 では効かない（type: [X, 'null'] と書く。$ref なら oneOf に - type: 'null' を並べる）")
+            }
+            for match in trimmed.matches(of: typeValue) {
+                let names = match.1.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+                    .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                // YAML では `null`・`Null`・`NULL`・`~` がどれも null になる。
+                if names.contains(where: { ["null", "~"].contains($0.lowercased()) }) {
+                    problems.append("l.\(index + 1): type の null は 'null' と引用符で囲む（裸の null は YAML の null で、型の名前にならない）")
+                }
+            }
+        }
+        return problems
+    }
+
     /// 最上位 `tags:` に宣言した名前。
     static func declaredTags(in yaml: String) -> Set<String> {
         var inTags = false

@@ -74,6 +74,7 @@ struct OpenAPICompletenessTests {
             problems.append("components.responses に \(name) が無い")
         }
         problems += OpenAPISpecReader.unresolvedRefs(in: yaml)
+        problems += OpenAPISpecReader.nullHandlingProblems(in: yaml)
         return problems
     }
 
@@ -230,6 +231,53 @@ struct OpenAPICompletenessTests {
         #expect(problems.contains { $0.contains("GET /free-block: 施錠を見ない操作は security を書かない") })
         #expect(problems.contains { $0.contains("GET /free-flow: 施錠を見ない操作は security を書かない") })
         #expect(!problems.contains { $0.hasPrefix("GET /none:") }, Comment(rawValue: problems.joined(separator: "\n")))
+    }
+
+    /// OpenAPI 3.1 では `nullable:` は効かない（3.0 の書き方）。block の形でも flow の形でも報告する。
+    /// type の並びの裸の `null`（引用符なし）は YAML の null になり型の名前にならないので、これも報告する。
+    /// 引用符付きの `'null'`・oneOf の `- type: 'null'`・enum の値としての null は通す。
+    @Test func nullableAndBareNullTypeAreReported() throws {
+        let yaml = """
+        paths:
+          /a:
+            get:
+              summary: s
+              tags: [T]
+              operationId: x
+              x-stacknest-tier: read
+              responses:
+                '200':
+                  description: ok
+                  content:
+                    application/json:
+                      schema:
+                        type: object
+                        properties:
+                          blockNullable:
+                            type: string
+                            nullable: true
+                          flowNullable: { type: integer, nullable: true }
+                          bareNullInUnion:
+                            type: [string, null]
+                          bareNullScalar: { type: null }
+                          bareTilde: { type: [integer, ~] }
+                          quotedUnion:
+                            type: [string, 'null']
+                            enum: [x, null]
+                          refOrNull:
+                            oneOf:
+                              - $ref: '#/components/schemas/A'
+                              - type: 'null'
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+        """ + "\n" + Self.badBase
+        let problems = try Self.problems(in: yaml)
+        let all = Comment(rawValue: problems.joined(separator: "\n"))
+        // 1 つの行に 1 つずつ。数で比べ、通すべき行（quotedUnion・refOrNull）が報告されていないことも確かめる。
+        #expect(problems.filter { $0.contains("nullable は OpenAPI 3.1 では効かない") }.count == 2, all)
+        #expect(problems.filter { $0.contains("type の null は 'null' と引用符で囲む") }.count == 3, all)
+        // badBase に無い共通の応答の報告を除けば、この 5 つだけ。
+        #expect(problems.filter { !$0.hasPrefix("components.responses に") }.count == 5, all)
     }
 
     @Test func responseRefIntoAnotherSectionThrows() {

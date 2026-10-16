@@ -163,81 +163,59 @@ components:
         title:
           type: string
         author:
-          type: string
-          nullable: true
+          type: [string, 'null']
         genre:
-          type: string
-          nullable: true
+          type: [string, 'null']
         path:
-          type: string
-          nullable: true
+          type: [string, 'null']
         dateAdded:
           type: number
         playDate:
-          type: number
-          nullable: true
+          type: [number, 'null']
         bookType:
           type: integer
         fileType:
           type: integer
         pages:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         rating:
           type: integer
         unseen:
           type: boolean
         keywordA:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordB:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordC:
-          type: string
-          nullable: true
+          type: [string, 'null']
         neta:
-          type: string
-          nullable: true
+          type: [string, 'null']
         memo:
-          type: string
-          nullable: true
+          type: [string, 'null']
         series:
-          type: string
-          nullable: true
+          type: [string, 'null']
         volume:
-          type: number
-          nullable: true
+          type: [number, 'null']
         coverImageName:
-          type: string
-          nullable: true
+          type: [string, 'null']
         coverCropX:
-          type: number
-          nullable: true
+          type: [number, 'null']
         coverCropY:
-          type: number
-          nullable: true
+          type: [number, 'null']
         coverCropW:
-          type: number
-          nullable: true
+          type: [number, 'null']
         coverCropH:
-          type: number
-          nullable: true
+          type: [number, 'null']
         pageDirection:
-          type: string
-          nullable: true
+          type: [string, 'null']
         contentHash:
-          type: string
-          nullable: true
+          type: [string, 'null']
         fileSize:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         fileMtime:
-          type: number
-          nullable: true
+          type: [number, 'null']
         hasCover:
-          type: boolean
-          nullable: true
+          type: [boolean, 'null']
           description: 削除時点で表紙があったか（restore がサムネイルを作り直すかの判断に使う）
 
     UnlockReply:
@@ -271,13 +249,11 @@ components:
       required: [firstUsedAt, viewer]
       properties:
         firstUsedAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
           description: 初めて認証に通った日時（許可された道を通った要求だけを数える）
         viewer:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 初めて通った要求の `X-StackNest-Viewer`（印字できる ASCII だけ・最長 200 文字）。ヘッダが無ければ null
 
     BookListItemDTO:
@@ -290,15 +266,12 @@ components:
         title:
           type: string
         author:
-          type: string
-          nullable: true
+          type: [string, 'null']
         series:
-          type: string
-          nullable: true
+          type: [string, 'null']
         volume:
-          type: number
+          type: [number, 'null']
           format: double
-          nullable: true
         rating:
           type: integer
           minimum: 0
@@ -309,56 +282,44 @@ components:
           type: integer
           description: 書籍種別コード（0-5）
         pages:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         lastPage:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
           description: 最終閲覧ページ（未読は null）
         lastReadAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         dateAdded:
           type: string
           format: date-time
         hasCover:
           type: boolean
         coverVersion:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 表紙差し替え追跡用バージョン文字列（mtime+size 由来）
         coverCropRectJSON:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 表紙クロップ矩形 JSON（クロップ無しは null）
         filename:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: サーバ側ファイルの basename（フルパスではない）。path を持たない本は null（G15 V3。Web は S3d から使う）
         genre:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=genre 要求時のみ返る"
         neta:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=neta 要求時のみ返る"
         keywordA:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=keywordA 要求時のみ返る"
         keywordB:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=keywordB 要求時のみ返る"
         keywordC:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=keywordC 要求時のみ返る"
         memo:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: "&fields=memo 要求時のみ返る（先頭 200 字に切詰）"
 
     BookPageDTO:
@@ -408,37 +369,31 @@ components:
         title:
           type: string
         author:
-          type: string
-          nullable: true
+          type: [string, 'null']
         genre:
-          type: string
-          nullable: true
+          type: [string, 'null']
         path:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 常に null（パスはサーバ秘匿）
         dateAdded:
           type: string
           format: date-time
         playDate:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         bookType:
           type: integer
         fileType:
           type: integer
         pages:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         lastPage:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         epubLocator:
-          nullable: true
           description: EPUB の読書位置（viewer state 由来・G48-2）。EPUB 以外・未読・壊れた値はキー省略
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/EPUBLocatorDTO'
+            - type: 'null'
         rating:
           type: integer
           minimum: 0
@@ -446,101 +401,75 @@ components:
         unseen:
           type: boolean
         keywordA:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordB:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordC:
-          type: string
-          nullable: true
+          type: [string, 'null']
         neta:
-          type: string
-          nullable: true
+          type: [string, 'null']
         memo:
-          type: string
-          nullable: true
+          type: [string, 'null']
         series:
-          type: string
-          nullable: true
+          type: [string, 'null']
         volume:
-          type: number
+          type: [number, 'null']
           format: double
-          nullable: true
         coverImageName:
-          type: string
-          nullable: true
+          type: [string, 'null']
         coverCropRectJSON:
-          type: string
-          nullable: true
+          type: [string, 'null']
         pageDirection:
-          type: string
-          nullable: true
+          type: [string, 'null']
           enum: [rtl, ltr, null]
           description: '"rtl" | "ltr" | null（本ごと未設定時は null）'
         fileExtension:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: ファイル拡張子（"zip"/"rar"/"pdf"/"" など）。パス秘匿のため拡張子のみ返す。
         filename:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 表示用のファイル名（拡張子込み・パスは含まない）。旧サーバには無い（G12b-3a）
         previous:
-          nullable: true
           description: PATCH 応答だけに付く、今回変更したフィールドの更新前の値（変更外は null）。他のエンドポイントではキー省略（G16 A2）
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/BookPatchDTO'
+            - type: 'null'
 
     BookPatchDTO:
       type: object
       description: PATCH /books/:id のリクエスト（null フィールドは変更しない）
       properties:
         title:
-          type: string
-          nullable: true
+          type: [string, 'null']
         author:
-          type: string
-          nullable: true
+          type: [string, 'null']
         genre:
-          type: string
-          nullable: true
+          type: [string, 'null']
         neta:
-          type: string
-          nullable: true
+          type: [string, 'null']
         memo:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordA:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordB:
-          type: string
-          nullable: true
+          type: [string, 'null']
         keywordC:
-          type: string
-          nullable: true
+          type: [string, 'null']
         rating:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
           minimum: 0
           maximum: 5
         unseen:
-          type: boolean
-          nullable: true
+          type: [boolean, 'null']
         series:
-          type: string
-          nullable: true
+          type: [string, 'null']
         volume:
-          type: number
+          type: [number, 'null']
           format: double
-          nullable: true
         bookType:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         pageDirection:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: '"rtl" | "ltr" | null（変更しない場合は省略）'
         clearSeries:
           type: boolean
@@ -579,12 +508,10 @@ components:
           type: string
           description: 対象フィールド（genre / neta / keyword_a / keyword_b / keyword_c）
         value:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 適用する値（append モード）
         clear:
-          type: boolean
-          nullable: true
+          type: [boolean, 'null']
           description: true でフィールドを空にクリア
         bookIDs:
           type: array
@@ -612,8 +539,7 @@ components:
             type: string
           description: アーカイブ内の画像エントリ名一覧
         current:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 現在の coverImageName（未設定は null）
 
     CoverUpdateRequest:
@@ -621,16 +547,14 @@ components:
       description: 表紙更新リクエスト
       properties:
         coverImageName:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 設定する表紙エントリ名（null = 自動先頭ページ）
         setCoverImageName:
           type: boolean
           default: false
           description: true で coverImageName を更新＋サムネイル再生成
         coverCropRect:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: クロップ矩形 JSON（null = クロップ解除）
         setCoverCropRect:
           type: boolean
@@ -662,9 +586,9 @@ components:
       required: [book]
       properties:
         book:
-          nullable: true
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/BookListItemDTO'
+            - type: 'null'
 
     EPUBLocatorDTO:
       type: object
@@ -673,8 +597,8 @@ components:
       properties:
         spine: { type: integer, description: spine index（0 始まり） }
         progress: { type: number, description: spine 内の進行率 0…1 }
-        cfi: { type: string, nullable: true, description: 同じ engine のときだけ復元に使う補助 }
-        engine: { type: string, nullable: true, description: cfi を出したエンジン名（washi / foliate） }
+        cfi: { type: [string, 'null'], description: 同じ engine のときだけ復元に使う補助 }
+        engine: { type: [string, 'null'], description: cfi を出したエンジン名（washi / foliate） }
 
     ManifestDTO:
       type: object
@@ -717,8 +641,7 @@ components:
             type: string
           description: 追加するファイルのサーバローカル絶対パス一覧
         presetID:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: ファイル名フォーマットプリセット ID（省略時は既定フォーマット）
 
     AddBooksReplyDTO:
@@ -814,14 +737,11 @@ components:
       description: グラントの更新（PATCH /grants/{id} の本文）。省いた項目（null を含む）は変えない。鍵は変わらない
       properties:
         label:
-          type: string
-          nullable: true
+          type: [string, 'null']
         tier:
-          type: string
-          nullable: true
+          type: [string, 'null']
           enum: [read, edit, admin, null]
         scope:
-          nullable: true
           description: 全書庫は空のオブジェクト、決めた書庫だけなら libraries にその UUID の配列。呼び手の scope を超えたら 403
           oneOf:
             - type: object
@@ -834,6 +754,7 @@ components:
                   type: array
                   items:
                     type: string
+            - type: 'null'
 
     SmartShelfConditions:
       type: object
@@ -896,23 +817,22 @@ components:
           type: boolean
           description: true でスマートシェルフ（conditions が要る。無ければ 400）。false で手動の棚（conditions を付けたら 409）
         conditions:
-          nullable: true
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/SmartShelfConditions'
+            - type: 'null'
 
     ShelfUpdateRequest:
       type: object
       description: シェルフの更新（PATCH /libraries/{lib}/shelves/{id} の本文）。省いた項目は変えない
       properties:
         title:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 新しい名前。お気に入りの棚の名前は変えられない（409）
         conditions:
-          nullable: true
           description: 新しい条件。スマートシェルフでなければ 409
-          allOf:
+          oneOf:
             - $ref: '#/components/schemas/SmartShelfConditions'
+            - type: 'null'
 
     ShelfBooksRequest:
       type: object
@@ -934,8 +854,7 @@ components:
           type: string
           description: 新しいパスワード（空なら 400）
         currentPassword:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 今のパスワード。既に施錠した書庫のパスワードを変えるときだけ要る（無い・違うときは 403）
 
     LockRemoveRequest:
@@ -943,8 +862,7 @@ components:
       description: 書庫の施錠の解除（DELETE /libraries/{lib}/lock の本文）。施錠していない書庫では本文ごと省いてよい
       properties:
         currentPassword:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 今のパスワード。施錠した書庫では要る（無い・違うときは 403）
 
     LibraryCountsDTO:
@@ -972,8 +890,7 @@ components:
           minimum: 0
           description: ページ番号（0 始まり）。ページ数以上は 400
         mode:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
           enum: [0, 1, null]
           description: 0＝見開きにする・1＝単ページにする。省くか null で上書きを消す（自動の判定に戻す）。ほかの値は 400
 
@@ -1046,9 +963,8 @@ components:
           type: integer
           description: 前回は ok で今回 damaged になった（ディスクの上で劣化した疑いのある）本の数
         lastScanAt:
-          type: integer
+          type: [integer, 'null']
           format: int64
-          nullable: true
           description: 最後に検査した時刻（epoch 秒）。今のサーバは常にキーを送り、1 冊も検査していなければ null。古いサーバはキーを送らない（「未検査」と「分からない」を区別するため）
         unsupported:
           type: integer
@@ -1185,8 +1101,7 @@ components:
         enabled:
           type: boolean
         presetID:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 取り込みに使うファイル名の書式のプリセット
         baseline:
           type: array
@@ -1209,8 +1124,7 @@ components:
         name:
           type: string
         format:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 書式（例 `@title`）。監視フォルダの設定の応答では省く。プリセットの設定（PUT）では空なら 400
 
     ImportExistingRequest:
@@ -1227,16 +1141,13 @@ components:
       description: 書庫ごとの取り込みの設定。キーが無い（null）項目は全体の既定（GET /import-config）に従う
       properties:
         autoClassifyEnabled:
-          type: boolean
-          nullable: true
+          type: [boolean, 'null']
           description: 取り込みのときに種類を自動で分けるか
         thickBookThreshold:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
           description: 厚い本とみなすページ数（保存するときに 5〜100 に収める）
         preferEPUBTitle:
-          type: boolean
-          nullable: true
+          type: [boolean, 'null']
           description: EPUB に題名があればそれを使うか（G54-S4）
 
     GlobalImportConfigDTO:
@@ -1354,8 +1265,7 @@ components:
       description: Finder タグの同期する項目の変更（PUT /local/libraries/{uuid}/finder-tags の本文）
       properties:
         field:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 同期する項目の列名（genre・author・neta・keyword_a・keyword_b・keyword_c）。null・空なら同期をやめる。ほかの名前は 400
 
     FinderTagResyncReply:
@@ -1406,12 +1316,10 @@ components:
             type: integer
           description: 本の ID
         presetID:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 使うファイル名の書式のプリセット（format と両方は 400。どちらも無ければ書庫の既定のプリセット）
         format:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: 使う書式そのもの（presetID と両方は 400）
         apply:
           type: boolean
@@ -4011,12 +3919,10 @@ paths:
                   format: double
                   description: 章内の読書進捗率（0.0〜1.0・範囲外はクランプ）
                 cfi:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   description: EPUB CFI（任意・エンジンが対応する場合のみ）
                 engine:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   description: 生成元のレンダリングエンジン識別子（任意）
       responses:
         '200':
@@ -4062,8 +3968,7 @@ paths:
               type: object
               properties:
                 direction:
-                  type: string
-                  nullable: true
+                  type: [string, 'null']
                   enum: [rtl, ltr, null]
                   description: '"rtl" | "ltr" | null（null/空でクリア）'
       responses:
