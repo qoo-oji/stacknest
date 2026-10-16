@@ -383,7 +383,7 @@ components:
     ShelfDTO:
       type: object
       description: 棚（ユーザー棚・スマート棚）の 1 件
-      required: [id, title, kind, isSmart]
+      required: [id, title, kind, isSmart, bookCount]
       properties:
         id:
           type: integer
@@ -1271,9 +1271,7 @@ components:
           description: 自動バックアップをするか（未設定なら true）
         backupGenerations:
           type: integer
-          minimum: 1
-          maximum: 20
-          description: 残すバックアップの世代数（未設定なら 5。保存するときに 1〜20 に収める）
+          description: 残すバックアップの世代数（未設定なら 5）。範囲の外の値も 400 にはせず、保存するときに 1〜20 に収める（応答は収めた後の値）
 
     PresetSetDTO:
       type: object
@@ -1764,7 +1762,7 @@ paths:
       summary: 書庫の施錠の解除（admin）
       description: |
         書庫のパスワードを消す。施錠した書庫では、書庫の鍵（`X-Library-Token`）に加えて本文の今のパスワード（`currentPassword`）が要り、無い・違うなら 403（`X-Library-Locked` は付かない）。
-        施錠していない書庫では何もせず 204（本文は読まない）。解除すると、それまでに出した書庫の鍵は使えなくなる。同時に別の変更が先に入ったら 409。
+        施錠していない書庫では、本文を読まずに 204（消すものは無いが、`settingsChanged` イベントは出る）。解除すると、それまでに出した書庫の鍵は使えなくなる。同時に別の変更が先に入ったら 409。
         `settingsChanged` イベントを出す。**admin の tier が必要。**
       tags: [Libraries]
       operationId: clearLibraryLock
@@ -4759,13 +4757,6 @@ paths:
   /local/libraries/{uuid}/finder-tags:
     servers:
       - url: /
-    parameters:
-      - name: uuid
-        in: path
-        required: true
-        schema:
-          type: string
-        description: ライブラリ UUID
     get:
       summary: Finder タグの同期の状態（ローカル・admin）
       description: |
@@ -4776,6 +4767,13 @@ paths:
       operationId: getFinderTagSync
       x-stacknest-tier: admin
       x-stacknest-lock: none
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
       responses:
         '200':
           description: Finder タグの同期の状態
@@ -4802,6 +4800,13 @@ paths:
       operationId: setFinderTagSyncField
       x-stacknest-tier: admin
       x-stacknest-lock: none
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
       requestBody:
         required: true
         content:
