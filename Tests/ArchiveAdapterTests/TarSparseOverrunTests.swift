@@ -100,8 +100,10 @@ struct TarSparseOverrunTests {
         #expect(listing.names.count == 3 && listing.truncated == false)
     }
 
-    /// mac-ext を切っているので、`._x.png` は AppleDouble として食われず、普通のエントリとして並ぶ。
-    @Test("`._` のエントリは普通のエントリとして見える（mac-ext を切っている）")
+    /// mac-ext を切っているので、`._x.png` は libarchive に食われず、エントリとして届く（メモリの穴を塞ぐ設定の確認）。
+    /// G64 Codex fix: ただし画像の一覧・数には入れない（`TarAppleDoubleTests`）。ここでは libarchive が返すことを
+    /// 検査器の数（`entryCount`）で確かめる。
+    @Test("`._` のエントリは libarchive から普通のエントリとして届く（mac-ext を切っている）")
     func appleDoubleEntryIsOrdinary() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("g64-mac-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -109,6 +111,15 @@ struct TarSparseOverrunTests {
         let url = dir.appendingPathComponent("mac.cbt")
         try (Self.entry("._x.png", Data("AAAA".utf8)) + Self.entry("x.png", Data("xx".utf8)) + Data(count: 1024)).write(to: url)
         let listing = try await LibarchiveCoverExtractor().listImageEntries(in: url)
-        #expect(listing.names == ["._x.png", "x.png"])
+        #expect(listing.names == ["x.png"])   // 画像の候補からは外す
+        // 食われていない証拠: 生の libarchive が `._x.png` と `x.png` の 2 つのヘッダを返す（mac-ext が入っていれば 1 つ）。
+        let raw = archive_read_new()!
+        defer { archive_read_free(raw) }
+        LibarchiveFormats.enable(raw, for: url)
+        #expect(url.path.withCString { archive_read_open_filename(raw, $0, 16384) } == ARCHIVE_OK)
+        var headers = 0
+        var e: OpaquePointer?
+        while archive_read_next_header(raw, &e) == ARCHIVE_OK { headers += 1; archive_read_data_skip(raw) }
+        #expect(headers == 2)
     }
 }

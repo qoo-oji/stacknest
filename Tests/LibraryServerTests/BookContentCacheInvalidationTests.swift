@@ -287,11 +287,14 @@ struct BookContentCacheInvalidationTests {
         #expect(try await first.content.pageCount == 3)
         #expect(first.userExtensions == ["tgz": .archive])
 
-        // 登録を外す（=この本は対応外になる）。古い content を返し続けてはならない。
+        // 登録を外す（足していない .tgz は圧縮 tar を読めない）。古い content を返し続けてはならない。
         box.map = [:]
-        var threw = false
-        do { _ = try await cache.contentAndETag(for: row, libraryUUID: "L") } catch { threw = true }
-        #expect(threw, "拡張子の登録を外したのに古い content を返した")
+        let unregistered = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let stale = (first.content as AnyObject) === (unregistered.content as AnyObject)
+        #expect(!stale, "拡張子の登録を外したのに古い content を返した")
+        #expect(unregistered.userExtensions.isEmpty)
+        let pages = try? await unregistered.content.pageCount
+        #expect(pages == nil || pages == 0, "登録を外した .tgz が圧縮 tar として読めてしまう")
 
         // 登録し直すと読める。返ったスナップショットは今の一覧。
         box.map = ["tgz": .archive]
