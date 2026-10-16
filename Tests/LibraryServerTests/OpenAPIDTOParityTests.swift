@@ -376,6 +376,7 @@ struct OpenAPIDTOParityTests {
     // MARK: - G65: 文書のスキーマが、どれもこの試験で確かめているか、理由付きで除いてあること
 
     /// 応答に出ない（要求の本文だけに使う）スキーマ。この試験は DTO が応答に出すキーを見るので対象外。
+    /// そのため、要求のスキーマの property の誤字（文書の鍵の名前と `Codable` の鍵の食い違い）はこの試験では見つからない（Backlog）。
     static let requestBodyOnly = "要求の本文だけに使う（応答には出ない）"
 
     /// 確かめないスキーマ → 理由。新しい応答のスキーマを文書に足して試験を書かなければ、下の試験が落ちる。
@@ -416,11 +417,19 @@ struct OpenAPIDTOParityTests {
         return names
     }
 
-    /// この試験のソースで `expectKeys`・`expectNestedKeys` に渡しているスキーマの名前（呼び出しの `in:` の文字列）。
+    /// この試験のソースで `expectKeys`・`expectNestedKeys` に渡しているスキーマの名前（呼び出しの `in: "…", spec:` の文字列）。
     /// 手で書いた一覧と違い、試験を書かずに名前だけ足すことができない。
+    /// コメントの行は読まない（コメントに `in: "X", spec:` と書いても、確かめたことにはならない）。
+    /// 呼び出しは 2 行に折ることがある（`in:` が次の行）ので、`expectKeys(` のある行には絞らない。
     private func schemasCheckedHere() throws -> Set<String> {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath), encoding: .utf8)
-        return Set(source.components(separatedBy: "in: \"").dropFirst().map { String($0.prefix(while: { $0 != "\"" })) })
+        let code = source.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        return Set(code.components(separatedBy: "in: \"").dropFirst().compactMap { rest -> String? in
+            let name = rest.prefix(while: { $0 != "\"" })
+            return rest.dropFirst(name.count).hasPrefix("\", spec:") ? String(name) : nil
+        })
     }
 
     @Test func everySchemaIsCheckedOrExcludedWithAReason() throws {

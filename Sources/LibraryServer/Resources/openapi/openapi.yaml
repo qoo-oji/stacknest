@@ -8,7 +8,7 @@ info:
     **認証:**
     - 操作に要る権限（tier）は read < edit < admin の 3 段。操作ごとの必要な tier は各操作の `x-stacknest-tier` と説明にある。足りなければ 403。
     - **鍵の種類。**
-      - グラントの鍵: tier と scope（全書庫、または決めた書庫だけ）を持つ。共有サーバはグラントのモードで動く。
+      - グラントの鍵: tier と scope（全書庫、または決めた書庫だけ）を持つ。共有サーバはグラントのモードで動く。最初の鍵は、サーバを動かしているアプリのメニュー「共有」→「サーバ設定…」の「共有トークン」の節（アプリではグラントを共有トークンと呼ぶ）で「＋ 共有トークンを追加」から作り、その行の「トークンコピー」で写す（Web の画面は同じ行の「QR」を読むと、URL の `#token=` で鍵を受け取る）。API からは admin の鍵で `POST /grants`。
       - 固定の鍵（読み取り用と編集用）: グラントの無い口だけで照らす。共有サーバの昔の固定の鍵は、起動時にグラントへ移してある。127.0.0.1 の口では CLI の鍵がこれに当たり、admin の口なので admin になる。
       - セッションの鍵: `POST /session` に `Authorization: Bearer` で鍵を出して引き換える 30 分の鍵。`?token=` で渡したときだけ効く（ヘッダで出してもセッションとしては引かれない）。
       - 本専用の鍵（外部ビューア用）: その本の 4 つの道（manifest・pages・cover・progress）だけに通る。ヘッダだけで、`?token=` では通らない。
@@ -702,14 +702,9 @@ components:
           type: string
           description: 破損などで全ページを読めなかったときの注意文（G26）。全ページ読めたならキー省略
         epubLocator:
-          type: object
           description: format が epub のときの読書位置（未保存ならキー省略）。POST /epub-progress と同じ形
-          required: [spine, progress]
-          properties:
-            spine: { type: integer, description: spine index（0 始まり） }
-            progress: { type: number, description: spine 内の進行率 0…1 }
-            cfi: { type: string, nullable: true, description: 同じ engine のときだけ復元に使う補助 }
-            engine: { type: string, nullable: true, description: cfi を出したエンジン名（washi / foliate） }
+          allOf:
+            - $ref: '#/components/schemas/EPUBLocatorDTO'
 
     AddBooksRequestDTO:
       type: object
@@ -1844,7 +1839,7 @@ paths:
       summary: 書籍一覧（ページング・検索・ソート・フィルタ）
       description: |
         ライブラリの書籍一覧をページング形式で返す。
-        ロック庫は `X-Library-Token` ヘッダが必要。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
       tags: [Books]
       operationId: listBooks
       x-stacknest-tier: read
@@ -1939,8 +1934,8 @@ paths:
       summary: 書籍を追加（サーバローカルパス・in-place・admin 必須）
       description: |
         サーバローカルの絶対パスのファイルをライブラリに追加する（in-place。コピーはしない）。
-        **admin の tier が必要。** ロック庫は `X-Library-Token` ヘッダも必要。
-        追加後は `onLibraryStructureChanged` コールバックが発火する。
+        **admin の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+        1 冊でも追加したら `structureChanged` イベントを出す。
       tags: [Books]
       operationId: addBooks
       x-stacknest-tier: admin
@@ -1973,8 +1968,8 @@ paths:
       summary: 棚一覧（ユーザー棚・スマート棚）
       description: |
         ライブラリの棚（ユーザー棚・スマート棚）一覧を返す。
-        ロック庫は `X-Library-Token` ヘッダが必要。
-      tags: [Libraries]
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
       operationId: listShelves
       x-stacknest-tier: read
       security:
@@ -2332,7 +2327,7 @@ paths:
       summary: ファセット値一覧（列の distinct 値）
       description: |
         指定フィールドの distinct 値リストを返す。ブラウズ UI 用。
-        ロック庫は `X-Library-Token` ヘッダが必要。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
         `field` は許可リスト（genre / neta / keyword_a / keyword_b / keyword_c など）に限定。
       tags: [Books]
       operationId: listFacetValues
@@ -2404,7 +2399,7 @@ paths:
     get:
       summary: 書籍詳細（フルメタデータ）
       description: |
-        書籍のフルメタデータを返す。ロック庫は `X-Library-Token` ヘッダが必要。
+        書籍のフルメタデータを返す。施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
       tags: [Books]
       operationId: getBookDetail
       x-stacknest-tier: read
@@ -2444,7 +2439,7 @@ paths:
         書籍のメタデータを部分更新する。null フィールドは変更しない。
         `clear*` フラグが true のフィールドは NULL 化する。
         **edit 以上の tier が必要。**
-        更新後は `onBookChanged` コールバックが発火し Mac UI がリアルタイム反映される。
+        更新したら `bookChanged` イベントを出す。
       tags: [Books]
       operationId: updateBook
       x-stacknest-tier: edit
@@ -2488,7 +2483,7 @@ paths:
         書籍エントリとサムネイルを削除する。
         `?trash=true` を付けると実ファイルをゴミ箱に送る（サーバが trashFile をサポートしている場合のみ）。このときは admin の tier が要る（edit では 403）。
         **edit 以上の tier が必要。**
-        削除後は `onLibraryStructureChanged` コールバックが発火する。
+        削除したら `structureChanged` イベントを出す。
       tags: [Books]
       operationId: deleteBook
       x-stacknest-tier: edit
@@ -2623,7 +2618,7 @@ paths:
       summary: スタンプ定義取得（read 以上）
       description: |
         ライブラリのスタンプ定義マップを返す。
-        ロック庫は `X-Library-Token` ヘッダが必要。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
       tags: [Stamps]
       operationId: getStampDefinitions
       x-stacknest-tier: read
@@ -2656,7 +2651,7 @@ paths:
         スタンプ定義マップ全体を置換する。
         許可カラム（genre / neta / keyword_a / keyword_b / keyword_c）のみ保存。
         **edit 以上の tier が必要。**
-        変更後は `onLibrarySettingsChanged` コールバックが発火する。
+        `settingsChanged` イベントを出す。
       tags: [Stamps]
       operationId: setStampDefinitions
       x-stacknest-tier: edit
@@ -2696,7 +2691,7 @@ paths:
       description: |
         指定書籍 ID リストに対して、指定フィールドへ値を append またはクリアする。
         **edit 以上の tier が必要。**
-        変更後は各書籍の `onBookChanged` コールバックが発火する。
+        本文の `bookIDs` の 1 冊ごとに `bookChanged` イベントを出す。
       tags: [Stamps]
       operationId: applyStamp
       x-stacknest-tier: edit
@@ -2876,7 +2871,7 @@ paths:
         `setCoverImageName=true` のとき coverImageName を更新してサムネイルを再生成する。
         `setCoverCropRect=true` のとき coverCropRect を更新する。
         **edit 以上の tier が必要。**
-        変更後は `onBookChanged` コールバックが発火する。
+        `bookChanged` イベントを出す。
       tags: [Cover]
       operationId: setCover
       x-stacknest-tier: edit
@@ -3018,7 +3013,7 @@ paths:
       summary: ラベルカスタマイズ取得（read 以上）
       description: |
         ライブラリのフィールドラベル・bookType ラベルのカスタマイズ設定を返す。
-        未設定キーは空マップ。ロック庫は `X-Library-Token` ヘッダが必要。
+        未設定キーは空マップ。施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
       tags: [Labels]
       operationId: getLabelSettings
       x-stacknest-tier: read
@@ -3050,7 +3045,7 @@ paths:
       description: |
         フィールドラベル・bookType ラベルのカスタマイズ設定を保存する。
         空文字値は除外される。**edit 以上の tier が必要。**
-        変更後は `onLibrarySettingsChanged` コールバックが発火する。
+        `settingsChanged` イベントを出す。
       tags: [Labels]
       operationId: setLabelSettings
       x-stacknest-tier: edit
@@ -3652,7 +3647,7 @@ paths:
         本専用の鍵でも通る（その本に限る）。
         閲覧進行状況（last_page）を書き込み、mark-as-read（unseen=false / play_date=now）を実行する。
         **read の tier でも可（共有閲覧状態の更新）。**
-        変更後は `onBookChanged` コールバックが発火し Mac UI がリアルタイム反映される。
+        サーバを動かしているアプリの画面には反映するが、SSE（`GET /events`）のイベントは出さない。
 
         **破損（部分読み）本の保護（G26）:** 全ページを読めない本（manifest の `damageNote` が
         非 null）では、クライアントの表示位置が読める範囲の末尾へクランプされる。この値をそのまま
@@ -3719,7 +3714,7 @@ paths:
         発行した口（共有サーバ／127.0.0.1 の口）でだけ使え、`Authorization: Bearer` のヘッダでだけ受け付ける。
         発行元のグラントを削除する（またはその書庫を scope から外す）と、そのグラントで発行したトークンは 401 になる。
         サーバはトークンのハッシュ（SHA-256）だけを保存する。
-        **read の tier でも可。ただし本専用の鍵では 403。** ロック庫は解錠済み（`X-Library-Token`）でなければ発行できない。
+        **read の tier でも可。ただし本専用の鍵では 403。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
         発行したトークンは、その本に限ってライブラリトークンなしで読める（解錠に使ったパスワードの世代に結び付き、
         パスワードが変わると読めなくなる）。
         応答の `tokenID`（秘密ではない）で、発行した主体が `GET /viewer-tokens/{tokenID}` から使われたかを確かめられる。
@@ -3979,8 +3974,8 @@ paths:
       description: |
         EPUB の読書位置（spine index・進捗率・任意で CFI/engine）を後勝ちで書き込み、
         mark-as-read（unseen=false / play_date=now）を実行する。**read の tier でも可**
-        （`/progress` と同じく共有閲覧状態の更新）。変更後は `onBookChanged` コールバックが
-        発火し Mac UI がリアルタイム反映される。`spine` は 0 未満を 0 に、`progress` は範囲外
+        （`/progress` と同じく共有閲覧状態の更新）。`/progress` と同じく、サーバを動かしているアプリの画面には
+        反映するが、SSE（`GET /events`）のイベントは出さない。`spine` は 0 未満を 0 に、`progress` は範囲外
         （0 未満・1 超）を [0, 1] にクランプする（値型が丸めるため 400 にはならない）。
       tags: [Viewer]
       operationId: saveEpubProgress
@@ -4040,7 +4035,7 @@ paths:
         Web リーダーでの方向変更を本ごとの DB に反映する。
         `direction: null` または空文字で本ごと設定をクリア（ライブラリ既定に戻る）。
         **read の tier でも可。**
-        変更後は `onBookChanged` コールバックが発火する。
+        `bookChanged` イベントを出す。
       tags: [Viewer]
       operationId: setPageDirection
       x-stacknest-tier: read
@@ -4133,7 +4128,7 @@ paths:
       description: |
         書籍の評価（0–5）を更新する。
         **read の tier でも可（共有評価）。**
-        変更後は `onBookChanged` コールバックが発火する。
+        `bookChanged` イベントを出す。
       tags: [Books]
       operationId: setRating
       x-stacknest-tier: read
@@ -4182,7 +4177,7 @@ paths:
       description: |
         書籍の未読フラグを更新する。
         **read の tier でも可（共有閲覧状態）。**
-        変更後は `onBookChanged` コールバックが発火する。
+        `bookChanged` イベントを出す。
       tags: [Books]
       operationId: setUnseen
       x-stacknest-tier: read
@@ -4223,9 +4218,10 @@ paths:
 
   /libraries/{lib}/books/{id}/file:
     get:
-      summary: 原本ファイルダウンロード（octet-stream）
+      summary: 原本ファイルダウンロード
       description: |
         書籍の原本ファイルをバイナリで返す（オフラインダウンロード用）。
+        `Content-Type` は、拡張子が `epub` なら `application/epub+zip`、ほかは `application/octet-stream`（G48-3）。
         ETag 付き。ファイルが存在しない場合は 404。
       tags: [Books]
       operationId: downloadBookFile
@@ -4250,6 +4246,10 @@ paths:
           description: 原本ファイルバイナリ
           content:
             application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/epub+zip:
               schema:
                 type: string
                 format: binary
@@ -4727,6 +4727,7 @@ paths:
       description: |
         127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
         UUID で指した書庫の窓をアプリで閉じる。アプリで開いていなければ 404、閉じたことを確かめられなければ 500、閉じる仕組みの無い口では 501。
+        閉じる仕組みが「アプリの起動が終わっていない」と答えたときは、開くとき（500）と違って 400（今のアプリは閉じるときにこれを返さない）。
         施錠は見ない。**admin の tier が必要**（127.0.0.1 の口では CLI の鍵が admin）。本専用の鍵は通らない。
       tags: [Local]
       operationId: closeLocalLibrary
@@ -4742,7 +4743,7 @@ paths:
         '204':
           description: 閉じた
         '400':
-          description: 本文が読めない
+          description: 本文が読めない・アプリの起動が終わっていない
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4922,7 +4923,7 @@ tags:
   - name: Auth
     description: 認証・鍵の確認
   - name: Libraries
-    description: ライブラリ一覧・棚・解錠
+    description: ライブラリ一覧・施錠・解錠・件数
   - name: Books
     description: 書籍一覧・詳細・追加・削除・メタデータ編集
   - name: Cover

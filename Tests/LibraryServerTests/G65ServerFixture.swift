@@ -26,12 +26,14 @@ enum G65ServerFixture {
 
     // サーバの設定のうち、道を増やすもの（/local・中継など）は、すべてこの fixture で有効にする。
     // 有効にし忘れた道は突き合わせの試験に見えず、文書に無くても通ってしまう。
-    static func core(repo: InMemoryGrantRepository = makeRepo()) -> LibraryServerCore {
+    // viewerTokens: 本専用の鍵の置き場。省くと viewer-token の 2 つの道は tier を見る前に 501 で止まる（道そのものは登録される）。
+    static func core(repo: InMemoryGrantRepository = makeRepo(), viewerTokens: ViewerTokenStore? = nil) -> LibraryServerCore {
         LibraryServerCore(
             config: .init(port: 0, token: "G65-UNUSED", editToken: nil,
                           apiOnly: true, adminTier: false,
                           grantRepository: repo,
                           enableLocalLibraryControl: true,
+                          viewerTokens: viewerTokens,
                           // 省くと LibraryServerCore.init の precondition でプロセスが落ちる。
                           viewerTokenIssuer: .localEndpoint,
                           viewerRelay: ViewerRelayConfig(registry: ViewerRelayRegistry())),
