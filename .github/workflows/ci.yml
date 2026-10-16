@@ -28,7 +28,8 @@ jobs:
 
       # Cheap and independent of the build: report a YAML syntax error before the long steps.
       - name: OpenAPI document parses as YAML
-        run: ruby -ryaml -e 'YAML.load_file(ARGV[0]); puts "openapi.yaml: ok"' Sources/LibraryServer/Resources/openapi/openapi.yaml
+        run: |
+          ruby -ryaml -e 'YAML.load_file(ARGV[0]); puts "openapi.yaml: ok"' Sources/LibraryServer/Resources/openapi/openapi.yaml
 
       - name: Install libarchive (Phase 2.5b ArchiveAdapter build-time headers)
         run: brew install libarchive
