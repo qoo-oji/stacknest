@@ -2384,7 +2384,12 @@ final class AppState {
         }
         let start = ContinuousClock.now
         if structureChanged {
-            try? refreshDisplayedBooks()
+            do {
+                try refreshDisplayedBooks()
+            } catch {
+                // 黙って飲まない（fetchBooks の失敗と同じくログに残す）。一覧は前のまま。次の構造の変化か操作で読み直す。
+                Self.logger.error("G62: refreshDisplayedBooks failed: \(error.localizedDescription, privacy: .public)")
+            }
         } else if !bookIDs.isEmpty {
             let found: [Int: BookRow]
             do {
@@ -2412,13 +2417,11 @@ final class AppState {
     /// G4c / G62: リモート由来の変更で表紙が差し替わっている可能性があるため、変わった本のサムネイルの
     /// メモリキャッシュを捨ててから `coverVersionByBook` を**1 回の代入**で上げる（1 冊ずつ上げると、
     /// そのたびに表紙の版を読む View が全部評価し直される）。onBookChanged は変更の種類を持たないので一律に行う。
-    /// purge の後に上げるので、再取得は新しい thumbnail を読む。
+    /// purge の後に上げるので、再取得は新しい thumbnail を読む。purge はまとめた本全部を 1 回の actor 呼び出しで行う。
     private func purgeCoversAndBumpVersions(_ ids: Set<Int>) {
         let loader = thumbnailLoader
         Task { @MainActor [weak self] in
-            if let loader {
-                for id in ids { await loader.purge(bookID: id) }
-            }
+            await loader?.purge(bookIDs: ids)
             guard let self else { return }
             var next = self.coverVersionByBook
             for id in ids { next[id, default: 0] &+= 1 }

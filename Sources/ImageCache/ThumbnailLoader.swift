@@ -64,6 +64,12 @@ public actor ThumbnailLoader {
         }
     }
 
+    /// G62: Removes the in-memory cache entries for several books in one actor call
+    /// (one hop for a coalesced batch instead of one per book). Same entries as `purge(bookID:)`.
+    public func purge(bookIDs: Set<Int>) {
+        for bookID in bookIDs { purge(bookID: bookID) }
+    }
+
     /// Clears the entire in-memory cache (used on library close / bulk operations).
     public func purge() {
         cache.removeAllObjects()

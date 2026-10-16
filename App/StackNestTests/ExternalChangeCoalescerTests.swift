@@ -48,17 +48,23 @@ struct ExternalChangeCoalescerTests {
         try #require(state.database).updateBook(id: id, patch: patch)
     }
 
-    /// 本 100 冊の通知 → 反映は「最初の 1 回＋間隔ごとに 1 回」以下で、100 冊の値が全部入る。
+    /// 本 100 冊の通知 → 反映は 2 回以下で、100 冊の値が全部入る。
+    ///
+    /// 2 回の根拠: 100 件の `note` は MainActor 上の同期のループで積み終わる（ループの中に await が無い）。
+    /// 最初の 1 件で始まった反映は、貯まった分（1 冊以上）を取り出してから MainActor を待つので、配達はループの後になる。
+    /// その間の通知は全部「次の回」に貯まり、1 回目の反映が終わったところで 1 回だけ予約され、残りを全部持っていく。
+    /// それ以後に通知は無いので 3 回目は起きない。この上限は時間に依らないので、MainActor が混んでも緩まない
+    /// （前の `elapsed / interval` の上限は、全体の実行で 43 秒かかると 432 回まで許してしまい、意味が無かった）。
+    /// まとめが効かなければ（通知ごとに反映すると）、ループの間に始まった反映がそれぞれ 1 冊ずつ持っていくので 2 回を大きく超える
+    /// （`noteArrived` が常に `.flushNow` を返す変異で 100 回になり、この主張が落ちることを確かめた）。
     @Test func aHundredNotesBecomeAFewDeliveriesAndAllValuesLand() async throws {
         let (state, uuid) = try openState()
         defer { state.closeBundle() }
         let log = Deliveries()
-        let interval: Duration = .milliseconds(100)
-        let co = ExternalChangeCoalescer(interval: interval, deliver: { batches in
+        let co = ExternalChangeCoalescer(interval: .milliseconds(100), deliver: { batches in
             log.batches.append(batches)
             ExternalChangeCoalescer.deliver(batches, to: [state], bridge: { _ in })
         })
-        let t0 = ContinuousClock.now
         for id in 1...100 {
             try setSeries(state, id, "G62-\(id)")
             co.note(book: id, in: uuid, origin: .sharedServer)
@@ -66,9 +72,7 @@ struct ExternalChangeCoalescerTests {
         try await waitUntil {
             (1...100).allSatisfy { id in state.displayedBooks.first { $0.id == id }?.series == "G62-\(id)" }
         }
-        let elapsed = t0.duration(to: .now)
-        #expect(log.count <= Int(elapsed / interval) + 2)
-        #expect(log.count < 100)
+        #expect(log.count <= 2, Comment(rawValue: "deliveries=\(log.count)"))
         #expect(log.batches.reduce(0) { $0 + ($1[uuid]?.bookIDs.count ?? 0) } == 100)
     }
 

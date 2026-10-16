@@ -98,6 +98,32 @@ struct ThumbnailLoaderTests {
                 "ThumbnailLoader.supportedMaxPixelSizes must cover every maxPixelSize the app requests")
     }
 
+    /// G62: 複数冊の purge は、渡した本のキャッシュだけを捨てる（ほかの本はキャッシュに残る）。
+    @Test("purge(bookIDs:) drops the cache of exactly the given books")
+    func purgeBookIDsDropsOnlyTheGivenBooks() async throws {
+        let tmpBundle = FileManager.default.temporaryDirectory.appendingPathComponent("loader-\(UUID().uuidString)")
+        let tmpThumbnails = tmpBundle.appendingPathComponent("Thumbnails")
+        try FileManager.default.createDirectory(at: tmpThumbnails, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpBundle) }
+        for id in 1...3 { _ = try makeFixtureThumbnail(in: tmpThumbnails, id: id, pixelSize: 200) }
+
+        let loader = ThumbnailLoader(bundleURL: tmpBundle)
+        // アプリが使う大きさ（purge の対象）で読み、キャッシュに入れる。
+        let size = try #require(ThumbnailLoader.supportedMaxPixelSizes.first)
+        var before: [Int: CGImage] = [:]
+        for id in 1...3 { before[id] = try #require(await loader.thumbnail(for: id, maxPixelSize: size)) }
+
+        await loader.purge(bookIDs: [1, 2])
+
+        // 捨てた本は読み直す（別のインスタンス）。捨てていない本はキャッシュのまま（同じインスタンス）。
+        for id in 1...2 {
+            let again = try #require(await loader.thumbnail(for: id, maxPixelSize: size))
+            #expect(again !== before[id], Comment(rawValue: "book \(id) should have been purged"))
+        }
+        let kept = try #require(await loader.thumbnail(for: 3, maxPixelSize: size))
+        #expect(kept === before[3])
+    }
+
     @Test("Cache hits on second call")
     func cacheHitsOnSecondCall() async throws {
         let tmpBundle = FileManager.default.temporaryDirectory.appendingPathComponent("loader-\(UUID().uuidString)")

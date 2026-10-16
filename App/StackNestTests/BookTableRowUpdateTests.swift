@@ -56,6 +56,9 @@ struct BookTableRowUpdateTests {
         let db: Database
         let table: CountingTableView
         let coordinator: BookTableCoordinator
+        /// 表の親（clip view）を生かしておく。表は親を保持しないので、scroll view が解放されると表は親なしに戻り、
+        /// 見える範囲が無限になる（下の `makeHarness` の注）。
+        let scroll: NSScrollView
     }
 
     /// 合成の本 2,000 冊を持つ AppState と、それを出している表。最初の同期（全体）を済ませ、数を 0 に戻して返す。
@@ -77,9 +80,15 @@ struct BookTableRowUpdateTests {
         table.delegate = coordinator
         coordinator.tableView = table
         coordinator.installColumns(in: table)
+        // アプリ（`BookTableViewRepresentable.makeNSView`）と同じく scroll view に入れる。親が無いと表の `visibleRect` が
+        // 無限になり、全体の作り直しの後の最初の `.reinsert` で `endUpdates()` が 2,000 行すべての行の view を作る
+        // （1 回 3.6〜4.7 秒・MainActor を塞いで他のスイートを待たせた。調査は G62 の reinsert-probe）。
+        // ウィンドウは作らない（作ると試験のホストが落ちる＝D8）。scroll view だけなら落ちない。
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))
+        scroll.documentView = table
         coordinator.syncFromAppState()
         table.resetCounts()
-        return Harness(state: state, db: db, table: table, coordinator: coordinator)
+        return Harness(state: state, db: db, table: table, coordinator: coordinator, scroll: scroll)
     }
 
     /// DB を書き換えてから、サーバ経由の変更と同じ入口（まとめずに 1 冊）で AppState に知らせる。
@@ -117,6 +126,13 @@ struct BookTableRowUpdateTests {
         #expect(row(of: id, h) != 1_000)
         #expect(h.coordinator.displayedIDs == h.state.sortedDisplayedBooks.map(\.id))
         #expect(h.table.numberOfRows == 2_000)
+        // 試験の表がアプリと同じく見える範囲を持つこと（親なしに戻ると 2,000 行すべてが「見える」）と、
+        // 外して入れ直しても行の view は見える行の分しか作らないこと。
+        let visibleRows = h.table.rows(in: h.table.visibleRect).length
+        var liveRowViews = 0
+        h.table.enumerateAvailableRowViews { _, _ in liveRowViews += 1 }
+        #expect(visibleRows < 100, Comment(rawValue: "visibleRows=\(visibleRows)"))
+        #expect(liveRowViews <= visibleRows + 1, Comment(rawValue: "live=\(liveRowViews) visible=\(visibleRows)"))
     }
 
     @Test func severalMovedBooksAreReinsertedTogether() throws {
