@@ -2364,25 +2364,65 @@ final class AppState {
         watchNotice.present(notice)
     }
 
-    // MARK: - Phase 4.1c: external book change handler
+    // MARK: - Phase 4.1c / G62: external book change handler
 
-    /// サーバ（Web リーダー/将来のクライアント）からの本変更通知を受け、DB から最新を再取得して
-    /// 詳細ペイン・grid/list へ即時反映する。並び順に影響しない変更（例: title ソート中の読書）では
-    /// 全再ソートを避け、該当行のみ in-place 更新する（4.2a・高頻度 progress 対策）。
+    /// サーバ（CLI・MCP・リモート・Web・外部ビューアの読書位置）から届いた変更をまとめて反映する（G62・spec §6.3）。
+    /// `ExternalChangeCoalescer` が書庫ごとに貯めた分を、間隔ごとに 1 回ここへ渡す。
+    /// - 構造の変化があれば `refreshDisplayedBooks()` を 1 回（本の変更もこれで読み直される）。
+    /// - 無ければ本をまとめて読み（**反映するこの時点で**読む。先に読んでおくと、その間にローカルで書いた新しい値
+    ///   ＝`markVolumeAsReadAndReflect` などを古い値で上書きしうる）、`applyFreshBooks` で入れる。並びに影響する本が
+    ///   あれば 1 回だけ並べ直し、値が同じ本は行の信号を出さない。読めない本は飛ばす（ほかの本は入れる）。
+    /// - 表紙はメモリキャッシュを捨ててから、版を 1 回の代入で上げる。
+    /// 閉じ始めた・閉じた書庫では何もしない（その分は捨てる）。
+    /// Instruments では signpost の区間 "apply"（`ListUpdateLog`・spec §7.1-3）として見える。区間はどの出口でも 1 回だけ閉じる。
+    func applyExternalChanges(bookIDs: Set<Int>, structureChanged: Bool) {
+        let signposter = ListUpdateLog.signposter
+        let interval = signposter.beginInterval("apply", id: signposter.makeSignpostID())
+        guard !isClosing, let db = database else {
+            signposter.endInterval("apply", interval)
+            return
+        }
+        let start = ContinuousClock.now
+        if structureChanged {
+            try? refreshDisplayedBooks()
+        } else if !bookIDs.isEmpty {
+            let found: [Int: BookRow]
+            do {
+                found = try db.fetchBooks(ids: bookIDs)
+            } catch {
+                Self.logger.error("G62: fetchBooks failed: \(error.localizedDescription, privacy: .public)")
+                found = [:]
+            }
+            if found.count < bookIDs.count {
+                Self.logger.info("G62: skipped \(bookIDs.count - found.count) changed books that could not be read")
+            }
+            applyFreshBooks(Array(found.values), allowResort: true)
+        }
+        if !bookIDs.isEmpty { purgeCoversAndBumpVersions(bookIDs) }
+        signposter.endInterval("apply", interval)
+        ListUpdateLog.logger.info("apply books=\(bookIDs.count) structure=\(structureChanged) ms=\(ListUpdateLog.ms(start.duration(to: .now)), format: .fixed(precision: 1))")
+    }
+
+    /// まとめずに 1 冊だけ反映する入口（Phase 4.1c）。G62: サーバのクロージャはこれを呼ばず
+    /// `ExternalChangeCoalescer` を通す。中身は `applyExternalChanges` と同じ。
     func handleExternalBookChange(bookID: Int) {
-        guard let db = database else { return }
-        guard let fresh = try? db.fetchBook(id: bookID) else { return }
-        applyFreshBooks([fresh], allowResort: true)
+        applyExternalChanges(bookIDs: [bookID], structureChanged: false)
+    }
 
-        // G4c: リモート由来の変更で表紙が差し替わっている可能性があるため、当該本のサムネイル
-        // メモリキャッシュを捨てた後に当該本の coverVersionByBook を bump してローカル表紙ビューを
-        // 再取得させる（per-book: 高頻度イベントで可視グリッド全体をフリッカさせないため）。
-        // onBookChanged は変更種別を持たないため一律実行（cover 再取得は thumbnail.jpg から安価）。
-        // purge 完了 → bump の順にして、再取得が新しい thumbnail を読むようにする。
+    /// G4c / G62: リモート由来の変更で表紙が差し替わっている可能性があるため、変わった本のサムネイルの
+    /// メモリキャッシュを捨ててから `coverVersionByBook` を**1 回の代入**で上げる（1 冊ずつ上げると、
+    /// そのたびに表紙の版を読む View が全部評価し直される）。onBookChanged は変更の種類を持たないので一律に行う。
+    /// purge の後に上げるので、再取得は新しい thumbnail を読む。
+    private func purgeCoversAndBumpVersions(_ ids: Set<Int>) {
+        let loader = thumbnailLoader
         Task { @MainActor [weak self] in
+            if let loader {
+                for id in ids { await loader.purge(bookID: id) }
+            }
             guard let self else { return }
-            await self.thumbnailLoader?.purge(bookID: bookID)
-            self.coverVersionByBook[bookID, default: 0] &+= 1
+            var next = self.coverVersionByBook
+            for id in ids { next[id, default: 0] &+= 1 }
+            self.coverVersionByBook = next
         }
     }
 }

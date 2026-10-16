@@ -150,14 +150,9 @@ final class LocalControlController {
             transcoder: ImageIOTranscoder(),
             defaultPageDirection: ViewerSettings.shared.pageDirection,
             onBookChanged: { uuid, bookID in
-                Task { @MainActor in
-                    for state in AppState.activeInstances.allObjects
-                    where state.librarySettings?.libraryUUID == uuid {
-                        state.handleExternalBookChange(bookID: bookID)
-                    }
-                    // G8a Task 6: CLI/MCP (LocalControl 発) の変更を共有 EventHub へ橋渡し。
-                    ServerController.shared.publishLiveEvent(.bookChanged(library: uuid, bookID: bookID))
-                }
+                // G62（spec §6.3）: 通知ごとに MainActor の Task を作らず、まとめて反映する。共有 EventHub への
+                // 橋渡し（G8a Task 6）も、まとめた反映の後に今と同じ数だけ出す。
+                ExternalChangeCoalescer.shared.note(book: bookID, in: uuid, origin: .localControl)
             },
             onLibrarySettingsChanged: { uuid in
                 Task { @MainActor in
@@ -185,13 +180,8 @@ final class LocalControlController {
                 return out as URL?
             },
             onLibraryStructureChanged: { uuid in
-                Task { @MainActor in
-                    for state in AppState.activeInstances.allObjects
-                    where state.librarySettings?.libraryUUID == uuid {
-                        try? state.refreshDisplayedBooks()
-                    }
-                    ServerController.shared.publishLiveEvent(.structureChanged(library: uuid))
-                }
+                // G62（spec §6.3）: まとめて反映する（全体の読み直しは 1 回の反映につき 1 回）。橋渡しも今と同じ数。
+                ExternalChangeCoalescer.shared.noteStructure(in: uuid, origin: .localControl)
             },
             apiOnly: true,  // ローカルエンドポイントはアプリ Web UI を載せず API ドキュメント(Redoc)のみ
             adminTier: true, // B1: ローカルコントロール(loopback)= admin。CLI/MCP は add/trash/ロック/グローバル設定が可能

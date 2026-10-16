@@ -69,12 +69,8 @@ final class ServerController {
             transcoder: ImageIOTranscoder(),
             defaultPageDirection: ViewerSettings.shared.pageDirection,   // サーバ起動時スナップショット（4.1c）
             onBookChanged: { uuid, bookID in
-                Task { @MainActor in
-                    for state in AppState.activeInstances.allObjects
-                    where state.librarySettings?.libraryUUID == uuid {
-                        state.handleExternalBookChange(bookID: bookID)
-                    }
-                }
+                // G62（spec §6.3）: 通知ごとに MainActor の Task を作らず、まとめて反映する（橋渡しは無い＝今どおり）。
+                ExternalChangeCoalescer.shared.note(book: bookID, in: uuid, origin: .sharedServer)
             },
             onLibrarySettingsChanged: { uuid in
                 // 4.2c-6a (C1'): リモートがスタンプ定義を PUT したら、同バンドルを開いている
@@ -111,12 +107,8 @@ final class ServerController {
             },
             onLibraryStructureChanged: { uuid in
                 // 4.2d-2: リモート RW での add/delete（行集合の変化）を該当ライブラリへ全リロード反映。
-                Task { @MainActor in
-                    for state in AppState.activeInstances.allObjects
-                    where state.librarySettings?.libraryUUID == uuid {
-                        try? state.refreshDisplayedBooks()
-                    }
-                }
+                // G62（spec §6.3）: まとめて反映する。
+                ExternalChangeCoalescer.shared.noteStructure(in: uuid, origin: .sharedServer)
             },
             grantsProvider: { GrantStore.list() },  // C-③a: 毎リクエスト現在のグラントを参照（ライブ反映/即時失効）
             onScanNowRequested: { uuid in

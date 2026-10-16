@@ -2169,6 +2169,33 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    /// G62（spec §6.3）: 本をまとめて読む（1 回の読み取りトランザクション）。返すのは ID → 本。居ない ID は飛ばす。
+    /// SQLite の変数の上限に当たらないよう `chunkSize` 件ずつに分けて読む（同じトランザクションの中）。
+    /// 改名用の `bookRows(ids:)`（並びと重複の約束がある）とは別に持つ。閉じた DB では空を返す（`fetchBook` と同じ）。
+    public func fetchBooks(ids: some Collection<Int>, chunkSize: Int = 500) throws -> [Int: BookRow] {
+        let unique = Array(Set(ids))
+        guard !unique.isEmpty, let q = queue else { return [:] }
+        let size = max(1, chunkSize)
+        return try q.read { db in
+            var out: [Int: BookRow] = [:]
+            out.reserveCapacity(unique.count)
+            var start = 0
+            while start < unique.count {
+                let chunk = Array(unique[start..<min(start + size, unique.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let rows = try Row.fetchAll(
+                    db, sql: "SELECT \(Self.bookColumns) FROM book WHERE id IN (\(placeholders))",
+                    arguments: StatementArguments(chunk))
+                for r in rows {
+                    let book = Self.bookRow(from: r)
+                    out[book.id] = book
+                }
+                start += size
+            }
+            return out
+        }
+    }
+
     /// シリーズごとの最大巻。**巻数の桁を決めるために庫全体から引く**
     /// （改名対象の中の最大ではない ―― ディスク上に既に並んでいるファイルと桁を揃えるため）。
     /// 突き合わせは NFC 正規化した文字列で行う。
