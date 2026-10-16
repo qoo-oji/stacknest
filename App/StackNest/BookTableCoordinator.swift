@@ -23,15 +23,26 @@ final class BookTableCoordinator: NSObject {
     /// Header right-click menu for column visibility toggling.
     private var headerMenu: NSMenu?
 
-    /// Last observed value of appState.sortedDisplayedBooksVersion. Used by
-    /// syncFromAppState to skip reloadData when the book list is unchanged.
-    /// Without this guard, every AppState change (e.g., selection update from
-    /// our own delegate) triggers updateNSView → reloadData, which disrupts
+    /// Last observed value of appState.sortedDisplayedBooksVersion (the structure
+    /// version). Used by syncFromAppState to skip reloadData when the book list is
+    /// unchanged. Without this guard, every AppState change (e.g., selection update
+    /// from our own delegate) triggers updateNSView → reloadData, which disrupts
     /// in-flight NSTableView mouse tracking and reverts user selection
-    /// (Phase 2.4a-table-fix #17). The version counter also catches content
-    /// changes (e.g., metadata edits that don't change count or id ordering),
-    /// which a shape-only snapshot would miss (#12 list-view stale row).
+    /// (Phase 2.4a-table-fix #17). Content changes that don't rebuild the array
+    /// (metadata edits, #12 list-view stale row) no longer bump this version;
+    /// they arrive as the row signal (`appState.bookListChanges`, G62) and are
+    /// tracked by `lastContentVersion` below.
     private var lastDataVersion: Int = -1
+
+    /// G62（spec §6.4）: 表が今出している本の ID の並び。計画の前提（前の並び）として使い、更新のたびに AppState の並びに揃える。
+    private(set) var displayedIDs: [Int] = []
+
+    /// G62: 前に見た行の版（`appState.bookListChanges.contentVersion`）。これより後に変わった本だけを描き直す。
+    private var lastContentVersion: Int = 0
+
+    /// G62: 行を外して入れ直している間は true。`tableViewSelectionDidChange` が選択を AppState へ書き戻さない
+    /// （行を外すと表の選択が一時的に減り、それを書き戻すと選択が消える）。終わった後の選び直しで戻す。
+    private var isApplyingRowMoves = false
 
     /// Guard flag: true while installColumns(in:) is programmatically setting
     /// table.sortDescriptors. NSTableView fires sortDescriptorsDidChange even for
@@ -147,13 +158,14 @@ final class BookTableCoordinator: NSObject {
     func syncFromAppState() {
         guard let table = tableView else { return }
 
-        let isClickInProgress = (table as? GatedTableView)?.isClickInProgress ?? false
         let version = appState.sortedDisplayedBooksVersion
+        // G62（spec §6.4）: 行の信号。ここで読むので SwiftUI の依存に載る（行の中身だけの変更でも updateNSView が呼ばれる）。
+        let changes = appState.bookListChanges
 
         // If a user click is mid-flight, buffer this sync until AppKit's
         // mouseDown super returns. Calling reload/selectRowIndexes during the
         // click tracking loop reverts the in-progress selection.
-        // Phase 2.4a-table-fix #17.
+        // Phase 2.4a-table-fix #17. G62: 後回しの間の変更は版に貯まるので、クリックの後の同期で取りこぼさない。
         if let gatedTable = table as? GatedTableView, gatedTable.isClickInProgress {
             gatedTable.pendingPostClickSync = { [weak self] in
                 self?.syncFromAppState()
@@ -163,12 +175,16 @@ final class BookTableCoordinator: NSObject {
 
         let books = appState.sortedDisplayedBooks
 
-        if version != lastDataVersion {
+        // G62（spec §6.4）: 構造の版が変わったら全体、行の版だけなら変わった本の行だけ（動いた本は外して入れ直す）。
+        let structureChanged = version != lastDataVersion
+        if structureChanged || changes.contentVersion != lastContentVersion {
+            let changed: Set<Int> = structureChanged ? [] : changes.changed(since: lastContentVersion)
+            let update = ListUpdatePlanner.plan(
+                displayed: displayedIDs, current: books.map(\.id),
+                changed: changed, structureChanged: structureChanged)
+            applyListUpdate(update, to: table, books: books)
             lastDataVersion = version
-            // G62 T1（spec §7.1-3）: 全体の作り直しの回数と時間を記録する。
-            let start = ContinuousClock.now
-            table.reloadData()
-            ListUpdateLog.logger.info("table plan=full rows=\(books.count) ms=\(ListUpdateLog.ms(start.duration(to: .now)), format: .fixed(precision: 1))")
+            lastContentVersion = changes.contentVersion
         }
 
         var indices: [Int] = []
@@ -219,6 +235,40 @@ final class BookTableCoordinator: NSObject {
                 if nsCol.title != newTitle { nsCol.title = newTitle }
             }
         }
+    }
+
+    /// G62（spec §6.4）: 計画を表に当てる。どの場合も、表が出している ID の並び（`displayedIDs`）を AppState に揃える。
+    private func applyListUpdate(_ update: ListUpdate, to table: NSTableView, books: [BookRow]) {
+        if case .unchanged = update { return }
+        let signpostID = ListUpdateLog.signposter.makeSignpostID()
+        let interval = ListUpdateLog.signposter.beginInterval("table", id: signpostID)
+        let start = ContinuousClock.now
+        let kind: String
+        let rows: Int
+        switch update {
+        case .unchanged:
+            return
+        case .full:
+            kind = "full"
+            rows = books.count
+            table.reloadData()
+        case .reloadRows(let indexes):
+            kind = "rows"
+            rows = indexes.count
+            table.reloadData(forRowIndexes: indexes, columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+        case .reinsert(let remove, let insert):
+            kind = "reinsert"
+            rows = insert.count
+            isApplyingRowMoves = true
+            table.beginUpdates()
+            table.removeRows(at: remove, withAnimation: [])
+            table.insertRows(at: insert, withAnimation: [])
+            table.endUpdates()
+            isApplyingRowMoves = false
+        }
+        displayedIDs = books.map(\.id)
+        ListUpdateLog.signposter.endInterval("table", interval)
+        ListUpdateLog.logger.info("table plan=\(kind, privacy: .public) rows=\(rows) ms=\(ListUpdateLog.ms(start.duration(to: .now)), format: .fixed(precision: 1))")
     }
 
     /// Invoked from NSTableView's doubleAction. Opens the clicked book in the external viewer.
@@ -352,6 +402,8 @@ extension BookTableCoordinator: NSTableViewDelegate {
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        // G62: 行を外して入れ直している間の選択の変化は書き戻さない（後で syncFromAppState が選び直す）。
+        guard !isApplyingRowMoves else { return }
         guard let table = notification.object as? NSTableView else { return }
         let selectedIndices = table.selectedRowIndexes
         let books = appState.sortedDisplayedBooks

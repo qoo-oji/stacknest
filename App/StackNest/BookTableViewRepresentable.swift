@@ -12,7 +12,8 @@ import AppCore
 /// table.selectRowIndexes) reverts the in-progress click selection, so the
 /// click ends up resolving to the original row and `tableViewSelectionDidChange`
 /// never fires. Phase 2.4a-table-fix R5 (#17).
-final class GatedTableView: NSTableView {
+/// G62: テストが更新の呼び出しを数える派生（`CountingTableView`）を作るため `final` を外した。
+class GatedTableView: NSTableView {
     /// True while AppKit is processing a mouse click (between mouseDown enter
     /// and super.mouseDown returning). Coordinator.syncFromAppState consults
     /// this and buffers its work via `pendingPostClickSync` instead of mutating

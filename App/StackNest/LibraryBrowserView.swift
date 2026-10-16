@@ -275,7 +275,8 @@ struct LibraryBrowserView: View {
             }
 
             Group {
-                if appState.sortedDisplayedBooks.isEmpty {
+                // G62（spec §6.4）: 配列ではなく Bool を読む（1 冊の変更で、この body 全体を評価し直さない）。
+                if !appState.hasDisplayedBooks {
                     emptyStateView
                 } else {
                     switch appState.viewMode {

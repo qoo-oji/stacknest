@@ -53,7 +53,7 @@ struct VolumeSwapReadReflectTests {
     /// ★ `displayedBooks` と `sortedDisplayedBooks` の**両方**を用意する。
     /// グリッドが実際に描画するのは `sortedDisplayedBooks` の方
     /// （`LibraryBrowserView.swift` の `ForEach(appState.sortedDisplayedBooks)`）で、
-    /// リストは `BookTableCoordinator` が `sortedDisplayedBooksVersion` を見て reloadData する。
+    /// リストは `BookTableCoordinator` が行の信号（`bookListChanges`）を見て、その行だけを描き直す（G62）。
     /// **`displayedBooks` だけを検査するテストは、画面に出ない更新を「成功」と判定してしまう**
     /// ―― G34b の初版はまさにそれで、実機 smoke B1 が NG になるまで緑のままだった。
     private func makeState() throws -> (AppState, Database) {
@@ -88,16 +88,18 @@ struct VolumeSwapReadReflectTests {
         #expect(rendered.playDate?.timeIntervalSince1970 == at.timeIntervalSince1970)
     }
 
-    /// リストビュー（NSTableView 版）は `sortedDisplayedBooksVersion` の変化で reloadData する。
-    /// 配列だけ書き換えて version を bump しないと、**リスト表示では反映されない**。
-    @Test("sortedDisplayedBooksVersion が bump される（リストの reloadData 用）")
-    func renderedListVersionIsBumped() throws {
+    /// G62（spec §6.4）: リストビュー（NSTableView 版）は行の信号（`bookListChanges`）で**その行だけ**を描き直す。
+    /// 構造の版（`sortedDisplayedBooksVersion`）を上げると表は全体を作り直すので、巻送りでは上げない。
+    @Test("巻送りした本の行の信号が出て、構造の版は上がらない")
+    func rowSignalIsRaisedWithoutBumpingTheStructureVersion() throws {
         let (state, _) = try makeState()
-        let before = state.sortedDisplayedBooksVersion
+        let structureBefore = state.sortedDisplayedBooksVersion
+        let contentBefore = state.bookListChanges.contentVersion
 
         state.markVolumeAsReadAndReflect(bookID: 2, at: Date(timeIntervalSince1970: 1_700_000_000))
 
-        #expect(state.sortedDisplayedBooksVersion != before)
+        #expect(state.bookListChanges.changed(since: contentBefore) == [2])
+        #expect(state.sortedDisplayedBooksVersion == structureBefore)
     }
 
     @Test("巻送りした本が displayedBooks 上でも既読になる")
