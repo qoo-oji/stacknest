@@ -1314,6 +1314,166 @@ components:
             type: integer
           description: 戻した本の ID（ID が他の本に使われていて戻せなかった本は含まない）。やり直し（再削除）はこの ID だけを対象にする
 
+    OpenLibraryRequest:
+      type: object
+      description: 書庫を開く（POST /local/libraries/open の本文）
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: 書庫のバンドルのローカルの絶対パス
+
+    OpenLibraryReply:
+      type: object
+      description: 開いた（既に開いていた）書庫
+      required: [uuid]
+      properties:
+        uuid:
+          type: string
+          description: ライブラリ UUID
+
+    CloseLibraryRequest:
+      type: object
+      description: 書庫を閉じる（POST /local/libraries/close の本文）
+      required: [uuid]
+      properties:
+        uuid:
+          type: string
+          description: ライブラリ UUID
+
+    FinderTagSyncStatusReply:
+      type: object
+      description: Finder タグの同期の状態（動いているアプリが持つ値そのもの）
+      required: [running, locked]
+      properties:
+        field:
+          type: string
+          description: 同期する項目の列名（genre・author・neta・keyword_a・keyword_b・keyword_c）。同期しないならキー省略
+        running:
+          type: boolean
+          description: 今この書庫の同期が走っているか
+        locked:
+          type: boolean
+          description: アプリでこの書庫が施錠中（解錠していない）か。true なら再照合は断られる
+
+    FinderTagSyncFieldRequest:
+      type: object
+      description: Finder タグの同期する項目の変更（PUT /local/libraries/{uuid}/finder-tags の本文）
+      properties:
+        field:
+          type: string
+          nullable: true
+          description: 同期する項目の列名（genre・author・neta・keyword_a・keyword_b・keyword_c）。null・空なら同期をやめる。ほかの名前は 400
+
+    FinderTagResyncReply:
+      type: object
+      description: Finder タグの再照合の結果。status が started 以外なら件数はすべて 0（走っていない）
+      required: [status, updatedInLibrary, updatedInFinder, skippedTags, skippedBooks, indexingDisabledVolumes]
+      properties:
+        status:
+          type: string
+          enum: [started, alreadyRunning, noLibrary, noField, locked]
+          description: 始まったか、始まらなかったならなぜか（started は終わるまで走った）
+        field:
+          type: string
+          description: 同期する項目の列名（分かれば。断られたときも入る）
+        updatedInLibrary:
+          type: integer
+          description: Finder のタグから書庫の項目を書き換えた本の数
+        updatedInFinder:
+          type: integer
+          description: 書庫の項目から Finder のタグを書き換えた本の数
+        skippedTags:
+          type: array
+          items:
+            type: string
+          description: 区切り（`, `）を含むので同期しなかったタグの名前
+        skippedBooks:
+          type: array
+          items:
+            type: string
+          description: タグを読めなかった本のパス
+        indexingDisabledVolumes:
+          type: array
+          items:
+            type: string
+          description: Spotlight の索引が無効なボリュームの名前。空でなければ Finder から書庫への向きは動いていない
+        failure:
+          type: string
+          description: 同期そのものが失敗した理由（表示用）。失敗していなければキー省略
+
+    RenameFilesRequest:
+      type: object
+      description: メタデータでのファイル名の変更（POST /local/libraries/{uuid}/rename-files の本文）
+      required: [ids, apply]
+      properties:
+        ids:
+          type: array
+          items:
+            type: integer
+          description: 本の ID
+        presetID:
+          type: string
+          nullable: true
+          description: 使うファイル名の書式のプリセット（format と両方は 400。どちらも無ければ書庫の既定のプリセット）
+        format:
+          type: string
+          nullable: true
+          description: 使う書式そのもの（presetID と両方は 400）
+        apply:
+          type: boolean
+          description: true のときだけファイルを動かす。false なら計画を返すだけ。キーを省くと 400
+
+    RenamePlanRowDTO:
+      type: object
+      description: ファイル名の変更の 1 冊分
+      required: [id, oldName, newName, status]
+      properties:
+        id:
+          type: integer
+        oldName:
+          type: string
+        newName:
+          type: string
+        status:
+          type: string
+          enum: [ok, unchanged, conflictExisting, conflictInBatch, emptyName, tooLong, noPath]
+          description: ok は変えられる、unchanged は同じ名前、conflictExisting は同じ名前のファイルが既にある、conflictInBatch は今回の中で名前がぶつかる、emptyName は名前が空になる、tooLong は長すぎる、noPath はファイルが無い
+        failure:
+          type: string
+          description: 実行して失敗したときの理由。計画だけならキー省略
+
+    RenameFilesReply:
+      type: object
+      description: ファイル名の変更の結果。status が ok 以外なら rows は空で applied は false
+      required: [status, applied, rows, missingIDs, renamed, skipped]
+      properties:
+        status:
+          type: string
+          enum: [ok, badFormat, failed]
+          description: ok は計画（または実行）できた、badFormat は書式の誤り、failed は DB・ディスクの障害（理由は failure）
+        applied:
+          type: boolean
+          description: 実際にファイルを動かしたか
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenamePlanRowDTO'
+        missingIDs:
+          type: array
+          items:
+            type: integer
+          description: 書庫に無い本の ID（rows には入れない）
+        renamed:
+          type: integer
+          description: 名前を変えた数（applied が false なら 0）
+        skipped:
+          type: integer
+          description: 変えなかった数（ok 以外の行と、実行して失敗した行）
+        failure:
+          type: string
+          description: status が failed のときだけ入る理由（表示用）
+
 paths:
   /server/info:
     get:
@@ -4520,6 +4680,236 @@ paths:
                 description: SSE のフレーム（`event:` の行・`data:` の行・空行）と心拍のコメント行
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /local/libraries/open:
+    servers:
+      - url: /
+    post:
+      summary: パスで書庫を開く（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        ローカルの絶対パスの書庫をアプリで開き（既に開いていればそのまま）、その UUID を返す。開くのはアプリの窓と同じ経路。
+        パスが無い・書庫でなければ 400、開いた書庫の読み込みを待てなかった・アプリの起動が終わっていないなら 500、開く仕組みの無い口では 501。
+        施錠は見ない。**admin の tier が必要**（127.0.0.1 の口では CLI の鍵が admin）。本専用の鍵は通らない。
+      tags: [Local]
+      operationId: openLocalLibrary
+      x-stacknest-tier: admin
+      x-stacknest-lock: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenLibraryRequest'
+      responses:
+        '200':
+          description: 開いた（既に開いていた）書庫
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenLibraryReply'
+        '400':
+          description: 本文が読めない・パスが無い・書庫として正しくない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: 開く仕組みが書庫を見つけられないと答えた（今のアプリは返さない）
+        '500':
+          description: 書庫の読み込みを待てなかった・アプリの起動が終わっていない
+        '501':
+          description: この口には書庫を開く仕組みが無い
+
+  /local/libraries/close:
+    servers:
+      - url: /
+    post:
+      summary: 書庫を閉じる（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        UUID で指した書庫の窓をアプリで閉じる。アプリで開いていなければ 404、閉じたことを確かめられなければ 500、閉じる仕組みの無い口では 501。
+        施錠は見ない。**admin の tier が必要**（127.0.0.1 の口では CLI の鍵が admin）。本専用の鍵は通らない。
+      tags: [Local]
+      operationId: closeLocalLibrary
+      x-stacknest-tier: admin
+      x-stacknest-lock: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseLibraryRequest'
+      responses:
+        '204':
+          description: 閉じた
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: その書庫をアプリで開いていない
+        '500':
+          description: 閉じたことを確かめられなかった
+        '501':
+          description: この口には書庫を閉じる仕組みが無い
+
+  /local/libraries/{uuid}/finder-tags:
+    servers:
+      - url: /
+    parameters:
+      - name: uuid
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ライブラリ UUID
+    get:
+      summary: Finder タグの同期の状態（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        動いているアプリが持つ、その書庫の Finder タグの同期の状態（同期する項目・走っているか・施錠中か）を返す。アプリで開いていない書庫は 404。
+        サーバの側では施錠を見ない（書庫の鍵は要らない。施錠中かは応答の `locked` で分かる）。**admin の tier が必要。**
+      tags: [Local]
+      operationId: getFinderTagSync
+      x-stacknest-tier: admin
+      x-stacknest-lock: none
+      responses:
+        '200':
+          description: Finder タグの同期の状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinderTagSyncStatusReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          description: この口には Finder タグの同期の仕組みが無い
+    put:
+      summary: Finder タグの同期する項目の変更（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        Finder タグと同期する書庫の項目を変える（null・空で同期をやめる）。知らない列名は 400（黙って同期をやめない）。項目を変えると前回の同期の値は消える。
+        走っている同期が止まってから変え、変えた後の状態を返す。アプリで開いていない書庫は 404。
+        サーバの側では施錠を見ない（書庫の鍵は要らない）。**admin の tier が必要。**
+      tags: [Local]
+      operationId: setFinderTagSyncField
+      x-stacknest-tier: admin
+      x-stacknest-lock: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinderTagSyncFieldRequest'
+      responses:
+        '200':
+          description: 変えた後の Finder タグの同期の状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinderTagSyncStatusReply'
+        '400':
+          description: 本文が読めない・知らない列名
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          description: この口には Finder タグの同期の仕組みが無い
+
+  /local/libraries/{uuid}/finder-tags/resync:
+    servers:
+      - url: /
+    post:
+      summary: Finder タグの再照合（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        アプリのメニューの「Finder タグを再照合」と同じ同期を走らせ、終わるまで待って結果を返す。ユーザーのファイルの Finder タグと書庫の項目を書き換える。
+        始まらなかったとき（走っている・項目が無い・アプリで施錠中など）は 200 で `status` に理由を入れる。アプリで開いていない書庫は 404。
+        サーバの側では施錠を見ない（書庫の鍵は要らない。施錠中はアプリが `locked` で断る）。**admin の tier が必要。**
+      tags: [Local]
+      operationId: resyncFinderTags
+      x-stacknest-tier: admin
+      x-stacknest-lock: none
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: 再照合の結果（始まらなかったら status に理由）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinderTagResyncReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          description: この口には Finder タグの同期の仕組みが無い
+
+  /local/libraries/{uuid}/rename-files:
+    servers:
+      - url: /
+    post:
+      summary: メタデータでファイル名を変える（ローカル・admin）
+      description: |
+        127.0.0.1 の口で「ローカルコントロールを許可」が ON のときだけある（共有サーバ・読書位置の同期だけの口には無く 404）。
+        選んだ本のファイル名を、ファイル名の書式（`presetID` か `format`。どちらも無ければ書庫の既定のプリセット）から作り直す。`apply: true` のときだけファイルを動かし、false なら計画だけを返す。
+        `presetID` と `format` を両方付けたら 400。書庫に無い ID は `missingIDs` に入れる。アプリで開いていない書庫は 404。
+        `/api/v1` と同じく施錠を見る（施錠した書庫では書庫の鍵〔`X-Library-Token`〕が要る）。**admin の tier が必要。**
+      tags: [Local]
+      operationId: renameFiles
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameFilesRequest'
+      responses:
+        '200':
+          description: 計画（apply が true なら実行の結果）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenameFilesReply'
+        '400':
+          description: 本文が読めない（apply が無いときを含む）・presetID と format の両方がある
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          description: この口にはファイル名を変える仕組みが無い
 
 tags:
   - name: Server

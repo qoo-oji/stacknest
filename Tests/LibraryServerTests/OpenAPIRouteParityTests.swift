@@ -76,19 +76,6 @@ struct OpenAPIRouteParityTests {
         "GET /openapi.yaml", "GET /docs", "GET /redoc.standalone.js", "GET /",
     ]
 
-    /// まだ openapi.yaml に書いていない操作（G65 Task 3〜5 が書いて削る。Task 5 で空にして消す）。
-    static let undocumented: Set<String> = [
-        // Task 5
-        "POST /local/libraries/open", "POST /local/libraries/close",
-        "GET /local/libraries/{uuid}/finder-tags", "PUT /local/libraries/{uuid}/finder-tags",
-        "POST /local/libraries/{uuid}/finder-tags/resync", "POST /local/libraries/{uuid}/rename-files",
-    ]
-
-    @Test func undocumentedListShrinksAsOperationsAreWritten() {
-        // 書いた操作を消すたびにこの数も直す（Task 1 で 50・Task 3 で 33・Task 4 で 6。Task 5 でこの試験ごと消す）。
-        #expect(Self.undocumented.count == 6)
-    }
-
     @Test func everyRouteIsDocumentedAndEveryDocumentedOperationExists() throws {
         let ops = try OpenAPISpecReader.operations(in: OpenAPISpecReader.specText())
         let documented = Set(ops.map(\.key))
@@ -97,13 +84,9 @@ struct OpenAPIRouteParityTests {
         let staleExclusions = Self.documentRoutes.subtracting(code)
         #expect(staleExclusions.isEmpty, "除外表にあってコードに無い:\n\(staleExclusions.sorted().joined(separator: "\n"))")
         let api = code.subtracting(Self.documentRoutes)
-        let missing = api.subtracting(documented).subtracting(Self.undocumented)
+        let missing = api.subtracting(documented)
         #expect(missing.isEmpty, "コードにあって openapi.yaml に無い:\n\(missing.sorted().joined(separator: "\n"))")
         let stale = documented.subtracting(api)
         #expect(stale.isEmpty, "openapi.yaml にあってコードに無い:\n\(stale.sorted().joined(separator: "\n"))")
-        let nowDocumented = Self.undocumented.intersection(documented)
-        #expect(nowDocumented.isEmpty, "書いたので undocumented から消す:\n\(nowDocumented.sorted().joined(separator: "\n"))")
-        let notInCode = Self.undocumented.subtracting(api)
-        #expect(notInCode.isEmpty, "undocumented にあってコードに無い（綴りの誤り）:\n\(notInCode.sorted().joined(separator: "\n"))")
     }
 }
