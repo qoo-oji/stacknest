@@ -11,7 +11,10 @@ public struct ServedLibrary: Sendable {
     public let name: String           // 表示名（バンドル名）
     public let bundleURL: URL
     public let db: Database
-    public let isLocked: Bool         // 作った時点の lock_password_hash の有無。G62: 情報として残すだけで、施錠の門には使わない
+    /// 作った時点の lock_password_hash の有無。G62: スナップショット上の値は情報として残すだけで、施錠の門には使わない。
+    /// ただし `LibraryResolver.resolve` が返すコピーでは、そのリクエストで DB から読んだ判定に差し替わっている
+    /// （`withLockState`）。`POST …/viewer-token` の `if lib.isLocked` はこの判定を使っており、正しい。
+    public let isLocked: Bool
     public init(uuid: String, name: String, bundleURL: URL, db: Database, isLocked: Bool) {
         self.uuid = uuid
         self.name = name

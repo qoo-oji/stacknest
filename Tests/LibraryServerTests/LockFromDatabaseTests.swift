@@ -71,6 +71,21 @@ struct LockFromDatabaseTests {
         }
     }
 
+    /// N4（spec Q6）: 解錠も、施錠の状態を読めない（閉じた DB）なら 503。正しいパスワードでも 403（パスワード違い）にしない。
+    @Test func unlockOnAClosedDatabaseIs503WithoutTheLockedHeader() async throws {
+        let fx = try TestLibraryFixture(name: "G62-u1", bookCount: 1, locked: true, password: "pw"); defer { fx.cleanup() }
+        let lib = fx.servedLibrary()
+        fx.db.close()
+        try await makeApp([lib]).test(.router) { client in
+            try await client.execute(uri: "/api/v1/libraries/\(lib.uuid)/unlock", method: .post,
+                                     headers: [.authorization: "Bearer tk"],
+                                     body: .init(string: #"{"password":"pw"}"#)) { r in
+                #expect(r.status == .serviceUnavailable)
+                #expect(r.headers[.init("X-Library-Locked")!] == nil)
+            }
+        }
+    }
+
     /// 返す書庫の `isLocked` は、DB から読んだ判定と同じ（G60 の本専用トークンの発行がこれで分岐する）。
     @Test func resolveReturnsTheJudgedLockState() async throws {
         let locked = try TestLibraryFixture(name: "G62-r1", bookCount: 1, locked: true, password: "pw"); defer { locked.cleanup() }
@@ -102,7 +117,8 @@ struct LockFromDatabaseTests {
 
         let stalePrint = ViewerBookAccess(libraryUUID: lib.uuid, bookID: 1,
                                           lockFingerprint: ViewerTokenStore.lockFingerprint(for: "another-hash"))
-        await #expect(throws: LibraryAccessError.self) {
+        // 施錠の門で断る（.locked）。DB は開いているので .unavailable（503）ではない。
+        await #expect(throws: LibraryAccessError.locked) {
             _ = try await resolver.resolve(uuid: lib.uuid, libraryToken: nil, viewerAccess: stalePrint)
         }
     }

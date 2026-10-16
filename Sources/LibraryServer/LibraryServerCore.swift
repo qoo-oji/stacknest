@@ -616,6 +616,10 @@ public struct LibraryServerCore: Sendable {
             guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else {
                 throw HTTPError(.notFound)
             }
+            // G62（spec §6.9・Q6）: 施錠の状態を DB から読めない（書庫を閉じた直後）なら 503。
+            // 照合（`verifiedCredential`）は閉じた DB で nil を返し、パスワード違いの 403 に化けるので、その前に確かめる。
+            // 試行の枠を取る前に置く（閉じかけの書庫への要求で枠を使わず、失敗としても数えない）。
+            _ = try lib.lockCredentialOrUnavailable()
             // #2: ブルートフォース抑止。連続失敗が閾値超なら一定時間 429 で拒否する。
             // G23 (M3): 数える単位は library＋principal。library 単体だと、閲覧トークンを渡した
             // 相手が失敗を繰り返すだけで正当な所有者を締め出せてしまう。
@@ -1474,10 +1478,11 @@ public struct LibraryServerCore: Sendable {
             let lib = try await resolver.resolveLibrary(request, context)
             let body = try await request.decode(as: LockRequest.self, context: context)
             guard !body.password.isEmpty else { throw HTTPError(.badRequest) }
-            // 既存ロックの有無は都度ライブから読む（resolver の isLocked スナップショットではなく、
-            // このリクエスト内で最新の DB 値を見る）。
+            // 既存ロックの有無は、書き込みの条件を決めるためにここで DB からもう一度読む（`resolve` が判定に使った
+            // のと同じ源。`lib.isLocked` はその判定だが、本文を読む間に変わりうるので書く直前の値を使う）。
+            // G62: 読めなければ 503（`currentLockCredential()` のように nil＝「未施錠」に化けさせない）。
             let expectedHash: String?
-            if lib.currentLockCredential() != nil {
+            if try lib.lockCredentialOrUnavailable() != nil {
                 // 認証(admin bearer token)は通っているが、ロック自体の所有権証明（現パスワード）が
                 // 無い/誤っている → 403（401 ではない）。比較は LibraryLock.verifiedCredential 経由
                 // （constant-time 比較・旧形式からの遅延移行を再利用し、自前比較を書かない）。
@@ -1514,7 +1519,9 @@ public struct LibraryServerCore: Sendable {
         api.delete("libraries/:lib/lock") { [self] request, context in
             try context.requireAdmin()
             let lib = try await resolver.resolveLibrary(request, context)
-            guard lib.currentLockCredential() != nil else {
+            // G62: 施錠の有無は DB から読み直し、読めなければ 503。閉じかけの書庫で「解除した」（204）と答えて
+            // 設定の変更を知らせない（`currentLockCredential()` は閉じた DB で nil＝「施錠なし」に化ける）。
+            guard try lib.lockCredentialOrUnavailable() != nil else {
                 // ロックが無い: 消す物が無いので no-op 成功（旧クライアントの無ボディ DELETE と互換）。
                 self.notifySettingsChanged(lib.uuid)
                 return HTTPResponse.Status.noContent

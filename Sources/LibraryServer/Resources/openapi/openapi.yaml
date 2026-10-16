@@ -1582,6 +1582,7 @@ paths:
         取得したトークンをヘッダ `X-Library-Token`、またはクエリ `?lt=<token>` で渡すと（ヘッダが優先）、ロック庫の API にアクセスできる。
         トークンの有効期間は発行から 24 時間で、使っても延びない。
         サーバの再起動、またはその書庫のパスワードの変更・解除でも失効する（securitySchemes の `libraryToken` と同じ）。
+        施錠の状態を書庫の DB から読めない（書庫を閉じた直後）ときは、パスワードを照らさずに 503 を返す（失敗の回数にも数えない）。
       tags: [Libraries]
       operationId: unlockLibrary
       x-stacknest-tier: read
@@ -1623,6 +1624,8 @@ paths:
               description: 再試行までの秒数
               schema:
                 type: string
+        '503':
+          $ref: '#/components/responses/LibraryUnavailable'
 
   /libraries/{lib}/lock:
     post:

@@ -34,6 +34,62 @@ struct LockEndpointTests {
         return token
     }
 
+    /// G62（M2）: `resolve` が施錠を DB から読んだ**直後**に DB を閉じる。
+    /// 接続に GRDB の trace を付け、`library_settings` を読む最初の文（`resolve` の `readLockCredential()`）の
+    /// 実行中に `close()` する。`close()` は `_queue` を nil にするだけで、実行中の読み取りは自分の queue で
+    /// 読み切るので `resolve` は通り、その後の道の読み取りは「閉じた DB」を見る（時間に頼らず決まった順で起きる）。
+    private func closeRightAfterTheNextSettingsRead(_ fixture: TestLibraryFixture) throws {
+        let db = fixture.db
+        try db.write { conn in
+            conn.trace { event in
+                if "\(event)".contains("library_settings") { db.close() }
+            }
+        }
+    }
+
+    /// G62（M2）: 閉じかけの書庫への DELETE /lock は 503。「解除した」（204）と答えず、設定の変更も知らせない。
+    @Test func deleteLockWhenTheDatabaseClosesAfterResolveIs503AndDoesNotNotify() async throws {
+        let fixture = try TestLibraryFixture(name: "LockDelClosing", bookCount: 0)
+        defer { fixture.cleanup() }
+        let lib = fixture.servedLibrary()
+        let changed = LabelChangeBox()
+        let app = LibraryServerCore(
+            config: .init(port: 0, token: "R", editToken: "W",
+                          onLibrarySettingsChanged: { changed.set($0) }, adminTier: true),
+            dataSource: StaticLibraryDataSource(libraries: [lib])
+        ).buildApplication()
+        try closeRightAfterTheNextSettingsRead(fixture)
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .delete,
+                headers: [.authorization: "Bearer W"]
+            ) { response in
+                #expect(response.status == .serviceUnavailable)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)
+            }
+        }
+        #expect(changed.value == nil)
+    }
+
+    /// G62（M2）: 閉じかけの書庫への POST /lock も 503（「未施錠」と取り違えて書き込みの条件を作らない）。
+    @Test func postLockWhenTheDatabaseClosesAfterResolveIs503() async throws {
+        let fixture = try TestLibraryFixture(name: "LockSetClosing", bookCount: 0)
+        defer { fixture.cleanup() }
+        let lib = fixture.servedLibrary()
+        let app = makeApp(fixture: fixture, adminTier: true)
+        try closeRightAfterTheNextSettingsRead(fixture)
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/api/v1/libraries/\(lib.uuid)/lock", method: .post,
+                headers: [.authorization: "Bearer W", .contentType: "application/json"],
+                body: .init(string: #"{"password":"x"}"#)
+            ) { response in
+                #expect(response.status == .serviceUnavailable)
+                #expect(response.headers[.init("X-Library-Locked")!] == nil)
+            }
+        }
+    }
+
     /// POST /lock sets lock_password_hash in DB.
     @Test func postLockSetsHash() async throws {
         let fixture = try TestLibraryFixture(name: "LockSet", bookCount: 0)

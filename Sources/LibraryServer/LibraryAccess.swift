@@ -55,6 +55,19 @@ func libraryToken(from request: Request) -> String? {
     return request.uri.queryParameters.get("lt")
 }
 
+extension ServedLibrary {
+    /// G62（spec §6.2・§6.9 Q6）: 施錠の世代を DB から読み、読めなければ `LibraryAccessError.unavailable`（503）にする。
+    /// 施錠の門（`LibraryResolver.resolve`）と、施錠を自分で見る道（`POST …/unlock`・`POST|DELETE …/lock`）が使う。
+    /// 読めないことを「施錠なし」や「パスワード違い」と取り違えないための 1 か所。
+    func lockCredentialOrUnavailable() throws -> String? {
+        do {
+            return try readLockCredential()
+        } catch {
+            throw LibraryAccessError.unavailable
+        }
+    }
+}
+
 /// ライブラリ解決 + ロックゲートの共通ヘルパ。
 struct LibraryResolver: Sendable {
     let dataSource: any LibraryServerDataSource
@@ -71,12 +84,7 @@ struct LibraryResolver: Sendable {
         guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else {
             return nil
         }
-        let credential: String?
-        do {
-            credential = try lib.readLockCredential()
-        } catch {
-            throw LibraryAccessError.unavailable
-        }
+        let credential = try lib.lockCredentialOrUnavailable()
         if let credential {
             if let viewerAccess {
                 // G60: 本専用トークンは、その本に限って書庫のトークンなしで読める（ビューアに書庫の

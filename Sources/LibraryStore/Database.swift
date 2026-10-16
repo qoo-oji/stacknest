@@ -1690,9 +1690,7 @@ public final class Database: @unchecked Sendable {
     /// Returns the value for the given key, or nil if the key does not exist.
     public func getLibrarySetting(key: String) throws -> String? {
         guard let q = queue else { return nil }
-        return try q.read { db in
-            try String.fetchOne(db, sql: "SELECT value FROM library_settings WHERE key = ?", arguments: [key])
-        }
+        return try Self.readLibrarySetting(key: key, in: q)
     }
 
     /// G62（spec §6.2）: `getLibrarySetting(key:)` と同じ読み取りだが、**閉じた DB では nil ではなく
@@ -1700,7 +1698,12 @@ public final class Database: @unchecked Sendable {
     /// （ほかの呼び出し元は今のまま・spec §13-5）。
     public func getLibrarySettingRequiringOpen(key: String) throws -> String? {
         guard let q = queue else { throw DatabaseError.libraryClosed }
-        return try q.read { db in
+        return try Self.readLibrarySetting(key: key, in: q)
+    }
+
+    /// 上の 2 つが共有する読み取り本体。閉じた DB の扱い（nil か投げるか）は呼び出し側が `queue` を取り出す時点で決める。
+    private static func readLibrarySetting(key: String, in q: DatabaseQueue) throws -> String? {
+        try q.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM library_settings WHERE key = ?", arguments: [key])
         }
     }
