@@ -168,6 +168,8 @@ struct BrowserColumnView: View {
             guard let f = f, let s = s else { return nil }
             return (f.sqlColumn, s)
         }
+        // G62 T1（spec §6.7・§7.1-3）: 問い合わせの回数と鍵の変化を記録する（鍵の中身は出さない）。
+        ListUpdateLog.logger.info("facet load column=\(columnIndex) key=\(ListUpdateLog.digest(refreshKey), privacy: .public)")
         values = await facetValues(field.sqlColumn, upperConstraints)
     }
 }

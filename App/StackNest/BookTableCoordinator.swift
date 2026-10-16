@@ -165,7 +165,10 @@ final class BookTableCoordinator: NSObject {
 
         if version != lastDataVersion {
             lastDataVersion = version
+            // G62 T1（spec §7.1-3）: 全体の作り直しの回数と時間を記録する。
+            let start = ContinuousClock.now
             table.reloadData()
+            ListUpdateLog.logger.info("table plan=full rows=\(books.count) ms=\(ListUpdateLog.ms(start.duration(to: .now)), format: .fixed(precision: 1))")
         }
 
         var indices: [Int] = []

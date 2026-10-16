@@ -66,8 +66,12 @@ jobs:
       # match in both the C and a UTF-8 locale (an identifier on the same line as invalid bytes, kanji/full-width
       # patterns), check annotated tag messages, ref names and a `-` stdin body, and check commits that only another
       # remote has. Uses a temporary list, never the real one.
-      - name: Private identifier guard tests
-        run: python3 -m unittest Scripts/tests/test_check_private_identifiers.py
+      # G62: the pure parts of the burst benchmark script (percentiles, request bodies, exit code, library guard);
+      # nothing here talks to a running app.
+      - name: Private identifier guard and bench script tests
+        run: |
+          python3 -m unittest Scripts/tests/test_check_private_identifiers.py
+          python3 -m unittest Scripts/tests/test_g62_burst.py
 
       # A bare directory argument (`node --test web-tests/`) fails on Node 22+ ("Cannot find module");
       # let the shell expand the files so it works on every Node version.
