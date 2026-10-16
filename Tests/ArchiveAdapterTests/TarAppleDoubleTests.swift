@@ -100,4 +100,14 @@ struct TarAppleDoubleTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(try await LibarchiveCoverExtractor().countImageEntries(in: url).count == 2)
     }
+
+    @Test("名前の判定: 最後の要素が `._` で始まるものだけ")
+    func appleDoubleNamePredicate() {
+        #expect(LibarchiveFormats.isAppleDoubleName("._a.jpg"))
+        #expect(LibarchiveFormats.isAppleDoubleName("d/e/._a.jpg"))
+        #expect(!LibarchiveFormats.isAppleDoubleName("a.jpg"))
+        #expect(!LibarchiveFormats.isAppleDoubleName("_a.jpg"))
+        #expect(!LibarchiveFormats.isAppleDoubleName("c._d.jpg"))
+        #expect(!LibarchiveFormats.isAppleDoubleName("._d/a.jpg"))   // 親が `._` でも最後の要素が違えば対象外
+    }
 }

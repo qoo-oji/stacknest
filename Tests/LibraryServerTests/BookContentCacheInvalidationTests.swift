@@ -332,4 +332,22 @@ struct BookContentCacheInvalidationTests {
         #expect(same)
         #expect(a.etag == b.etag)
     }
+
+    /// Codex の指摘そのままの向き: 登録前に読んだ .tgz は、登録した後に読み直すと読めるようになる。
+    @Test func registeringAfterFirstReadMakesTgzReadable() async throws {
+        let (url, dir) = try Self.makeTGZ()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let box = ExtensionBox([:])
+        let cache = BookContentCache(ttlSeconds: 300, userExtensions: { box.map })
+        let row = Self.row(id: 34, path: url.path)
+
+        let before = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let pagesBefore = try? await before.content.pageCount
+        #expect(pagesBefore == nil || pagesBefore == 0, "登録前の .tgz は圧縮 tar として読めないはず")
+
+        box.map = ["tgz": .archive]
+        let after = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        #expect(try await after.content.pageCount == 3, "登録後も古い content が返っている")
+        #expect(after.userExtensions == ["tgz": .archive])
+    }
 }

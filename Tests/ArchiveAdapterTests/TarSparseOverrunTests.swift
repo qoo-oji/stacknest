@@ -101,8 +101,8 @@ struct TarSparseOverrunTests {
     }
 
     /// mac-ext を切っているので、`._x.png` は libarchive に食われず、エントリとして届く（メモリの穴を塞ぐ設定の確認）。
-    /// G64 Codex fix: ただし画像の一覧・数には入れない（`TarAppleDoubleTests`）。ここでは libarchive が返すことを
-    /// 検査器の数（`entryCount`）で確かめる。
+    /// G64 Codex fix: ただし画像の一覧・数には入れない（`TarAppleDoubleTests`）。ここでは素の libarchive ハンドルで
+    /// ヘッダを数え、`._x.png` と `x.png` の 2 つが返ることで mac-ext が切れていることを確かめる。
     @Test("`._` のエントリは libarchive から普通のエントリとして届く（mac-ext を切っている）")
     func appleDoubleEntryIsOrdinary() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("g64-mac-\(UUID().uuidString)")

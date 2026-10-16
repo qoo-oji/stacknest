@@ -57,6 +57,12 @@ public actor BookContentCache {
     /// ETag のフォーマットは `bookETag(for:)`（ContentEndpoints.swift）と**バイト完全一致**——
     /// 同じ (row.id, mtime, size, pathHash) から同じ文字列規則で組み立てるため、変化していない
     /// 本では常に同じ値になる（全クライアントの immutable キャッシュを壊さない）。
+    ///
+    /// G64: content の再利用判定（Basis）には path/mtime/size に加えて**足した拡張子の一覧**も入る。
+    /// 一覧が変われば（登録・解除・種類の付け替え）作り直す。ETag には一覧を入れない（本のバイトは
+    /// 変わらないので、変化していない本の ETag は一覧の変更をまたいで同じ値のまま）。
+    /// 返す `userExtensions` は content を作った（または再利用を許した）のと同じ 1 回のスナップショットで、
+    /// 呼び出し側（manifest の format 分類）はこれを使う。
     public func contentAndETag(
         for row: BookRow, libraryUUID: String
     ) throws -> (content: any BookContent, etag: String, userExtensions: UserExtensionMap) {
@@ -75,7 +81,7 @@ public actor BookContentCache {
             entries[key] = entry
             return (entry.content, etag, extensions)
         }
-        // 未キャッシュ、または row の content 基準（path/mtime/size）が変化した＝再構築。
+        // 未キャッシュ、または content 基準（path/mtime/size・足した拡張子の一覧）が変化した＝再構築。
         // 旧 Entry の強参照はここで落ち、ArchiveBookContent→SequentialArchiveExtractor の deinit が
         // 走って temp が即掃除される（リモート temp TTL follow-up を相乗りでカバー）。
         let content = try BookContentFactory.make(for: row, userExtensions: extensions)
