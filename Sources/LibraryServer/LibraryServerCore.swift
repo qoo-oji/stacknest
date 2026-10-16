@@ -457,6 +457,15 @@ public struct LibraryServerCore: Sendable {
         if config.sweepRuntimeTempOnStartup {
             TempSweeper.sweepRuntimeTemp()
         }
+        return Application(
+            router: buildRouter(),
+            configuration: .init(address: .hostname(config.host, port: config.port))
+        )
+    }
+
+    /// G65（spec §6.1）: router を組む。試験が `routes` を列挙して openapi.yaml と突き合わせるために分けた。
+    /// 振る舞いは buildApplication() の中にあったときと同じ。
+    func buildRouter() -> Router<LibraryRequestContext> {
         let router = Router(context: LibraryRequestContext.self)
         // G55: エラー文などの言語をリクエストの Accept-Language で決める（認証より前に置く）。
         router.add(middleware: LanguageMiddleware())
@@ -2402,10 +2411,7 @@ public struct LibraryServerCore: Sendable {
                 router.get("/", use: serveFile(openapiDir.appendingPathComponent("docs.html"), contentType: "text/html; charset=utf-8"))
             }
         }
-        return Application(
-            router: router,
-            configuration: .init(address: .hostname(config.host, port: config.port))
-        )
+        return router
     }
 
     /// 4.2c-6b: 選択ページから Thumbnails/<id>/thumbnail.jpg を再生成する（App の CoverRefresher 相当）。
