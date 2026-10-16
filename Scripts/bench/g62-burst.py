@@ -10,9 +10,11 @@
 書く本は ID の大きい方から N 冊（合成の書庫では ID の順＝追加の順なので、追加日の降順で上に来る本）。
 HTTP の API しか使わないので、直す前の main の build でも走る。
 終了コードは、全件が成功（200）なら 0、タイムアウトか失敗（400 など）が 1 件でもあれば 1。
+--csv の行は書けたそばから出して flush する（途中で落ちても、それまでの行は残る）。
 """
 import argparse
 import csv
+import datetime
 import json
 import math
 import os
@@ -22,11 +24,13 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from http.client import HTTPException
 
 DEFAULTS_DOMAIN = "app.shelfsmith.stacknest"
 REQUEST_TIMEOUT_S = 60.0  # same as the URLRequest default (the CLI sets no timeout)
 BENCH_PREFIX = "g62-bench"
 DEFAULT_CLI = pathlib.Path(__file__).resolve().parents[2] / "dist" / "StackNest.app" / "Contents" / "Helpers" / "stacknest-cli"
+CSV_FIELDS = ["index", "book_id", "books", "start", "end", "elapsed", "status"]
 
 
 def percentile(values, p):
@@ -124,8 +128,15 @@ class Http:
         return json.loads(raw)
 
 
+def failure(e):
+    """例外を「理由つきの失敗」の状態にする（例: "error RemoteDisconnected: Remote end closed ..."）。"""
+    return f"error {type(e).__name__}: {e}"
+
+
 def timed(fn):
-    """fn() を 1 回走らせ、(開始, 終了, 状態) を返す。状態は HTTP の番号・"timeout"・"error ..."。"""
+    """fn() を 1 回走らせ、(開始, 終了, 状態) を返す。状態は HTTP の番号・"timeout"・"error ..."。
+    接続の切断（RemoteDisconnected・ConnectionResetError・IncompleteRead など）や応答の読み違いは
+    計測全体を落とさず、理由つきの失敗 1 件として数える（G62 follow-up 1）。"""
     start = time.time()
     try:
         status = fn()
@@ -134,25 +145,67 @@ def timed(fn):
     except (TimeoutError, urllib.error.URLError) as e:
         reason = getattr(e, "reason", e)
         status = "timeout" if isinstance(reason, TimeoutError) or "timed out" in str(reason) else f"error {reason}"
+    except (OSError, HTTPException, json.JSONDecodeError) as e:
+        # HTTPError / URLError / TimeoutError are OSError subclasses, so this clause must stay after them.
+        status = failure(e)
     return start, time.time(), status
 
 
-def row(n, book_id, start, end, status):
-    return {"index": n, "book_id": book_id, "start": start, "end": end, "elapsed": end - start, "status": status}
+def row(n, book_id, start, end, status, books=1):
+    """1 回の書き込みの記録。books はその 1 回で書いた本の数（1 冊ずつの書き込みは 1、スタンプは全冊）。"""
+    return {"index": n, "book_id": book_id, "books": books, "start": start, "end": end,
+            "elapsed": end - start, "status": status}
 
 
-def run_http(http, lib, ids, field, salt):
+class CsvRows:
+    """行を書けたそばから CSV に出して flush する（G62 follow-up 2）。path が None なら何もしない。"""
+
+    def __init__(self, path):
+        self.file = open(path, "w", newline="") if path else None
+        self.writer = csv.DictWriter(self.file, fieldnames=CSV_FIELDS) if self.file else None
+        if self.writer:
+            self.writer.writeheader()
+            self.file.flush()
+
+    def add(self, r):
+        if self.writer:
+            self.writer.writerow(r)
+            self.file.flush()
+
+    def close(self):
+        if self.file:
+            self.file.close()
+            self.file = None
+            self.writer = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def run_http(http, lib, ids, field, salt, emit):
     rows = []
     for n, book_id in enumerate(ids):
         def one(book_id=book_id, n=n):
             http.libraries()  # the CLI resolves the library with GET /libraries before every set
             status, _ = http.call("PATCH", f"/libraries/{lib['id']}/books/{book_id}", patch_body(field, n, salt))
             return status
-        rows.append(row(n, book_id, *timed(one)))
+        r = row(n, book_id, *timed(one))
+        rows.append(r)
+        emit(r)
     return rows
 
 
-def run_cli(cli, lib, ids, field, salt):
+def check_cli(path):
+    """--mode cli の前に、stacknest-cli が実行できるファイルかを確かめる。だめなら 1 行の説明で SystemExit（G62 follow-up 3）。"""
+    if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+        raise SystemExit(f"stacknest-cli not found or not executable: {path} (pass the helper's path with --cli)")
+
+
+def run_cli(cli, lib, ids, field, salt, emit):
     rows = []
     for n, book_id in enumerate(ids):
         start = time.time()
@@ -168,14 +221,28 @@ def run_cli(cli, lib, ids, field, salt):
                 status = f"exit {p.returncode}"
         except subprocess.TimeoutExpired:
             end, status = time.time(), "timeout"
-        rows.append(row(n, book_id, start, end, status))
+        except OSError as e:
+            # The binary vanished or cannot be launched mid-run: record it rather than crash (check_cli runs first).
+            end, status = time.time(), failure(e)
+        r = row(n, book_id, start, end, status)
+        rows.append(r)
+        emit(r)
     return rows
 
 
-def run_stamp(http, lib, ids, salt):
+def run_stamp(http, lib, ids, salt, emit):
+    """スタンプの一括適用 1 回。行は 1 つで、book_id は持たず（1 冊ではないため）、books に冊数を入れる（G62 follow-up 5）。"""
     body = {"field": "genre", "value": f"{BENCH_PREFIX} {salt}", "bookIDs": ids}
     start, end, status = timed(lambda: http.call("POST", f"/libraries/{lib['id']}/books/stamp", body)[0])
-    return [row(0, len(ids), start, end, status)]
+    r = row(0, None, start, end, status, books=len(ids))
+    emit(r)
+    return [r]
+
+
+def make_salt(now=None):
+    """実行ごとに変わる値（時分秒＋マイクロ秒）。同じ秒のうちに走らせ直しても前の回と違う値を書く（G62 follow-up 4）。"""
+    now = time.time() if now is None else now
+    return datetime.datetime.fromtimestamp(now).strftime("%H%M%S%f")
 
 
 def main(argv=None):
@@ -191,6 +258,8 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="resolve and print the library, write nothing")
     args = ap.parse_args(argv)
 
+    if args.mode == "cli":
+        check_cli(args.cli)  # before the load check, the defaults and any request to the app
     load1 = os.getloadavg()[0]
     if load1 > 2.0 and not args.ignore_load and not args.dry_run:
         raise SystemExit(f"load average {load1:.2f} > 2: not measuring (G35 rule)")
@@ -202,18 +271,14 @@ def main(argv=None):
                       "field": args.field, "count": count, "load1": round(load1, 2)}), flush=True)
     if args.dry_run:
         return 0
-    salt = time.strftime("%H%M%S")
-    if args.mode == "http":
-        rows = run_http(http, lib, ids, args.field, salt)
-    elif args.mode == "cli":
-        rows = run_cli(args.cli, lib, ids, args.field, salt)
-    else:
-        rows = run_stamp(http, lib, ids, salt)
-    if args.csv:
-        with open(args.csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["index", "book_id", "start", "end", "elapsed", "status"])
-            w.writeheader()
-            w.writerows(rows)
+    salt = make_salt()
+    with CsvRows(args.csv) as sink:
+        if args.mode == "http":
+            rows = run_http(http, lib, ids, args.field, salt, sink.add)
+        elif args.mode == "cli":
+            rows = run_cli(args.cli, lib, ids, args.field, salt, sink.add)
+        else:
+            rows = run_stamp(http, lib, ids, salt, sink.add)
     summary = summarize(rows)
     summary["load1_before"] = round(load1, 2)
     summary["load1_after"] = round(os.getloadavg()[0], 2)
