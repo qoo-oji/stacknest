@@ -8,7 +8,32 @@ if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "pre-push: active gh account is '${ACTUAL:-none}', expected '$EXPECTED'. Push refused." >&2
   exit 1
 fi
+ROOT="$(git rev-parse --show-toplevel)"
+CHECK="$ROOT/Scripts/check-private-identifiers.sh"
+# 標準入力（ref の組）は 1 度しか読めないので、受けてから検査に渡す。
+REFS="$(cat)"
+[ -n "$REFS" ] || exit 0
+# push する ref の名前（ブランチ・タグ。軽量タグも）と、注釈付きタグのメッセージ（コミットの検査では見えない）を
+# 個人識別子の検査にかける。タグは ref の名前ではなく、送るオブジェクトの種類で決める
+# （`git push <remote> <タグの SHA>:refs/tags/x` も対象）。入れ子のタグは中まで順にたどる。ref の削除は検査しない。
+TAGTEXT="$(mktemp -t pre-push-tag)"
+trap 'rm -f "$TAGTEXT"' EXIT
+ZERO="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue
+  printf '%s\n' "$remote_ref" > "$TAGTEXT"
+  "$CHECK" text "$TAGTEXT" || { echo "pre-push: ref name $remote_ref refused." >&2; exit 1; }
+  obj="$local_sha"
+  while :; do
+    objtype="$(git cat-file -t "$obj")" || { echo "pre-push: cannot read the object $obj of $remote_ref. Push refused." >&2; exit 1; }   # 失敗を「タグではない」と取り違えない
+    [ "$objtype" = "tag" ] || break
+    git cat-file tag "$obj" > "$TAGTEXT" || { echo "pre-push: cannot read the tag object of $remote_ref. Push refused." >&2; exit 1; }
+    "$CHECK" text "$TAGTEXT" || { echo "pre-push: tag $remote_ref refused." >&2; exit 1; }
+    obj="$(sed -n 's/^object //p;q' "$TAGTEXT")"
+    [ -n "$obj" ] || { echo "pre-push: cannot follow the tag object of $remote_ref. Push refused." >&2; exit 1; }
+  done
+done <<< "$REFS"
 # 2026-10-01: 個人識別子（実名など）を push しない。push する各コミットのファイル全体と、
-# 新しいコミットのメッセージ・作成者を検査する（標準入力の ref の組をそのまま渡す）。
+# 新しいコミットのメッセージ・作成者を検査する（ref の組をそのまま渡す）。
 # 第 2 引数は push 先の remote の名前（新しい ref の範囲を、その remote にまだ無いコミットに絞る）。
-exec "$(git rev-parse --show-toplevel)/Scripts/check-private-identifiers.sh" pre-push "$1"
+printf '%s\n' "$REFS" | "$ROOT/Scripts/check-private-identifiers.sh" pre-push "$1"

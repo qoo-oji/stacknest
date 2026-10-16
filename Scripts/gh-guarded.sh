@@ -21,6 +21,8 @@ fi
 #     gh api の -F / --field の「キー=@パス」の値（-f / --raw-field の値はそのままの文字列なので読まない）。通常のファイルならそのまま読み、"-"（標準入力）や
 #     パイプ（<(...)）などは一度一時ファイルに受けてから検査し、gh にはその一時ファイルを渡す。
 #     読めない指定は止める（検査を素通りさせない）
+#   - 位置引数の "-"（gist create - など、標準入力の本文）も、上と同じく一時ファイルに受けて検査する。こちらは "-" のまま
+#     gh に渡し、検査した本文を gh の標準入力へ戻す（gh の読み方・ファイル名の決め方を変えない）
 #   - それ以外で既存の通常のファイルを指す引数（gist のファイルなど）
 # gh api の -F は「キー=値」の指定で、本文のファイル名ではない（値が @パスのときだけファイル）。
 if [ "$#" -eq 0 ]; then exec gh; fi
@@ -28,6 +30,7 @@ CHECK="$(cd "$(dirname "$0")" && pwd)/check-private-identifiers.sh"
 TEXT="$(mktemp -t gh-guarded-text)"
 TEMPS=()
 STDIN_BODY=""
+POSITIONAL_STDIN=""
 # 一時ファイルは配列で持ち、引用付きで消す（TMPDIR に空白があっても別のファイルを消さない）。
 # bash 3.2 は set -u で空の配列の展開を嫌うので ${a[@]+...} の形にする
 cleanup() { rm -f "$TEXT"; local f; for f in ${TEMPS[@]+"${TEMPS[@]}"}; do rm -f "$f"; done; return 0; }
@@ -81,6 +84,8 @@ for a in "$@"; do
       expand_field "$a"; a="$FIELD" ;;
     *)
       case "$a" in
+        -)                                         # 位置引数の "-"（標準入力の本文）: 他の標準入力の指定と同じく検査する
+          resolve_input -; POSITIONAL_STDIN=1 ;;     # "-" は gh にそのまま渡し、検査した本文を標準入力へ戻す
         --body-file|--notes-file|--input) expect=input ;;
         -F) if [ "$SUB" = "api" ]; then expect=field; else expect=input; fi ;;
         --field) expect=field ;;
@@ -98,5 +103,10 @@ done
 "$CHECK" text "$TEXT" || refuse "refusing to post: gh $1 ${2:-}"
 # exec で置き換えると後片付け（trap）が走らないので、gh を呼んでから終了コードを返す
 rc=0
-gh "${ARGS[@]}" || rc=$?
+if [ -n "$POSITIONAL_STDIN" ]; then
+  # 位置引数の "-" は gh が標準入力から読む（gist のファイル名なども gh の決めたまま）。検査した本文をそのまま戻す
+  gh "${ARGS[@]}" < "$STDIN_BODY" || rc=$?
+else
+  gh "${ARGS[@]}" || rc=$?
+fi
 exit "$rc"

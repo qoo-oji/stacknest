@@ -57,8 +57,10 @@ jobs:
           python3 -m unittest Scripts/tests/test_l10n_lint.py
           python3 Scripts/l10n-lint.py --strict --no-app-checks
 
-      # The personal-identifier guard (pre-push) must refuse rather than pass when grep or awk fails,
-      # and check commits that only another remote has. Uses a temporary list, never the real one.
+      # The personal-identifier guard (pre-push) must refuse rather than pass when grep, awk or iconv fails,
+      # match in both the C and a UTF-8 locale (an identifier on the same line as invalid bytes, kanji/full-width
+      # patterns), check annotated tag messages, ref names and a `-` stdin body, and check commits that only another
+      # remote has. Uses a temporary list, never the real one.
       - name: Private identifier guard tests
         run: python3 -m unittest Scripts/tests/test_check_private_identifiers.py
 

@@ -55,7 +55,7 @@ both_grep() {
     out_c="$(printf '%s\n' "$input" | LC_ALL=C grep "$@")" || rc_c=$?
     # UTF-8 の grep は、不正なバイトを含む行を黙って飛ばす。UTF-8 の実行には、不正な並びを落とした写し（改行は残るので
     # 行番号は同じ）を渡す。先に変数へ取る（iconv の失敗をパイプの中で隠さない）。不正なバイトの行の中の識別子は C の実行が拾う
-    clean="$(printf '%s\n' "$input" | iconv -f UTF-8 -t UTF-8 -c)" || return 2
+    clean="$(printf '%s\n' "$input" | iconv -f UTF-8 -t UTF-8 -c)" || { echo "private-identifiers: iconv failed" >&2; return 2; }
     out_u="$(printf '%s\n' "$clean" | LC_ALL="$UTF8_LOCALE" grep "$@")" || rc_u=$?
     { [ "$rc_c" -le 1 ] && [ "$rc_u" -le 1 ]; } || return 2
     [ -n "$out_c$out_u" ] || return 1
@@ -98,8 +98,8 @@ check_patches() {
         || fail "git log -p failed: $*"
     # 足された行だけを、行頭の "+" を外して照合する（^ や $ で固定した検査語も当たるように）。
     # 見出しの "+++ b/…" と、"++ " で始まる足した行（パッチでは "+++ " になる）を取り違えないよう、
-    # "@@" の区切りの中だけを見る。awk は C ロケールで動かす（UTF-8 として読めないバイトの行で macOS の awk が
-    # 途中で落ち、それより後の行を見ないまま「一致なし」になるのを防ぐ）。awk と grep の失敗は「一致なし」と区別して止まる
+    # "@@" の区切りの中だけを見る。awk は C ロケールで動かす（UTF-8 だと不正なバイトの行で終了コード 2 になり、
+    # その push を止めてしまう）。awk と grep を 1 本のパイプにすると awk の失敗が grep の「一致なし(1)」に隠れるので、段を分けて状態を見る
     added="$(printf '%s\n' "$patch" \
         | LC_ALL=C awk '/^diff --git /{h=0; next} /^@@/{h=1; next} h && /^\+/{print substr($0, 2)}')" \
         || fail "awk failed on the outgoing patches"

@@ -1,7 +1,9 @@
 """Scripts/check-private-identifiers.sh の試験（一時の git リポジトリと一時の検査語の一覧で動かす）。
 
 止まるべき場面で止まることを確かめる: 一覧が無い・空、ファイル全体、途中のコミットで足して後で消した行、
-UTF-8 として読めない行の後ろ、grep・awk の失敗、ほかの remote にだけあるコミットを新しい ref で push するとき。
+UTF-8 として読めない行の後ろ・同じ行（C と UTF-8 の両方のロケールで照合する）、文字として扱う検査語（山田.?太郎 など）、
+grep・awk・iconv の失敗、UTF-8 のロケールが無いとき、ほかの remote にだけあるコミットを新しい ref で push するとき、
+注釈付きタグのメッセージ・push する ref の名前、gh-guarded.sh の標準入力の本文（位置引数の "-"）。
 """
 
 import os
@@ -211,16 +213,34 @@ class DualLocaleTests(Base):
                 self.assertEqual(self.run_script("text", str(path), env=env)[0], 1)
 
     def test_identifier_in_a_commit_message_line_with_invalid_bytes_stops(self):
+        # git commit は不正なバイトを Latin-1 として書き直すので、生のコミットオブジェクトを作って生のバイトを検査まで届ける
         self.base = self.commit("a.txt", "clean\n", "start")
-        self.repo.joinpath("a.txt").write_text("clean\nmore\n")
-        self.git("add", "a.txt")
-        msg = self.tmp / "msg.bin"
-        msg.write_bytes(b"change\n\n\xff\xfe " + WORD.encode() + b"\n")
-        self.git("commit", "-q", "--cleanup=verbatim", "-F", str(msg))
-        tip = self.git("rev-parse", "HEAD")
-        rc, err = self.push(tip, locale="en_US.UTF-8")
-        self.assertEqual(rc, 1, err)
-        self.assertIn("commit messages", err)
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        who = "tester <tester@example.invalid> 1700000000 +0000"
+        raw = (f"tree {tree}\nparent {self.base}\nauthor {who}\ncommitter {who}\n\nchange\n\n").encode() \
+            + b"\xff\xfe " + WORD.encode() + b"\n"
+        obj = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--literally", "--stdin"], cwd=self.repo,
+                             env=self.env, input=raw, capture_output=True, check=True).stdout.decode().strip()
+        for locale in ("en_US.UTF-8", "C"):
+            with self.subTest(locale=locale):
+                rc, err = self.push(obj, locale=locale)
+                self.assertEqual(rc, 1, err)
+                self.assertIn("commit messages", err)
+
+    def test_character_pattern_on_the_same_line_as_invalid_bytes_stops(self):
+        # UTF-8 の実行に生の文面ではなく不正な並びを落とした写しを渡していること（生だと UTF-8 の grep がその行を飛ばす）
+        self.set_list("山田.?太郎")
+        tip = self.leak_then_remove(b"\xff ", "山田　太郎")
+        for locale in ("en_US.UTF-8", "C"):
+            with self.subTest(locale=locale, mode="pre-push"):
+                self.assertEqual(self.push(tip, locale=locale)[0], 1)
+            with self.subTest(locale=locale, mode="text"):
+                path = self.tmp / "raw.txt"
+                path.write_bytes(b"\xff " + "山田　太郎\n".encode())
+                self.assertEqual(self.run_script("text", str(path), env=dict(self.env, LC_ALL=locale))[0], 1)
+        clean = self.tmp / "clean.txt"
+        clean.write_bytes(b"\xff " + "山田花子\n".encode())
+        self.assertEqual(self.run_script("text", str(clean))[0], 0)
 
     def test_character_patterns_stop_in_push_tree_and_text(self):
         # 利用者のロケールが C でも UTF-8 でも、文字として扱う検査語が当たること
@@ -274,6 +294,7 @@ class DualLocaleTests(Base):
         env = self.fake("iconv", "exit 1")
         rc, err = self.run_script("text", stdin="clean\n", env=env)
         self.assertNotEqual(rc, 0)
+        self.assertIn("iconv failed", err)
 
     def test_first_file_without_a_final_newline_does_not_join_the_next(self):
         self.set_list("^" + WORD)
@@ -285,6 +306,119 @@ class DualLocaleTests(Base):
     def test_a_missing_file_stops_text(self):
         rc, err = self.run_script("text", str(self.tmp / "nope.txt"))
         self.assertNotEqual(rc, 0)
+
+
+ROOT_SCRIPTS = Path(__file__).resolve().parents[1]
+
+
+class FakeGh:
+    """PATH 上の偽の gh（ネットワークに出ない）。api は shelfsmith を返し、それ以外は引数と標準入力を記録する。"""
+
+    def __init__(self, test):
+        self.log = test.tmp / "gh.log"
+        gh = test.bin / "gh"
+        gh.write_text('#!/bin/sh\nif [ "$1" = api ]; then echo shelfsmith; exit 0; fi\n'
+                      f'echo "$@" >> "{self.log}"\ncat > "{self.log}.stdin"\n')
+        gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+        test.env["PATH"] = f"{test.bin}:{test.env['PATH']}"
+
+    def calls(self):
+        return self.log.read_text() if self.log.exists() else ""
+
+    def stdin(self):
+        path = Path(f"{self.log}.stdin")
+        return path.read_text() if path.exists() else ""
+
+
+class WithScripts(Base):
+    def setUp(self):
+        super().setUp()
+        (self.repo / "Scripts" / "githooks").mkdir(parents=True)
+        for name in ("check-private-identifiers.sh", "gh-guarded.sh", "githooks/pre-push"):
+            shutil.copy2(ROOT_SCRIPTS / name, self.repo / "Scripts" / name)
+        self.gh = FakeGh(self)
+        self.commit("f.txt", "clean\n", "start")
+
+
+class GhGuardedStdinTests(WithScripts):
+    def post(self, *args, stdin=""):
+        return subprocess.run([str(self.repo / "Scripts" / "gh-guarded.sh"), *args], cwd=self.repo, env=self.env,
+                              input=stdin, capture_output=True, text=True)
+
+    def test_bare_dash_stdin_body_is_checked_and_still_reaches_gh(self):
+        refused = self.post("gist", "create", "-", stdin=f"see {WORD}\n")
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertEqual(self.gh.calls(), "")
+        clean = self.post("gist", "create", "-", stdin="plain words\n")
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(self.gh.calls().split(), ["gist", "create", "-"])
+        self.assertEqual(self.gh.stdin(), "plain words\n")        # 検査した本文が gh の標準入力に戻る
+        named = self.post("gist", "create", "-f", "notes.md", "-", stdin="more words\n")
+        self.assertEqual(named.returncode, 0, named.stderr)
+        self.assertTrue(self.gh.calls().strip().endswith("gist create -f notes.md -"), self.gh.calls())
+        self.assertEqual(self.gh.stdin(), "more words\n")
+
+
+class TagAndRefNameTests(WithScripts):
+    def run_hook(self, stdin):
+        return subprocess.run([str(self.repo / "Scripts" / "githooks" / "pre-push"), "origin", "x"], cwd=self.repo,
+                              env=self.env, input=stdin, capture_output=True, text=True)
+
+    def tag_line(self, name, message):
+        self.git("tag", "-a", name, "-m", message)
+        sha = self.git("rev-parse", name)
+        return f"refs/tags/{name} {sha} refs/tags/{name} {ZERO}\n"
+
+    def test_annotated_tag_with_identifier_is_refused(self):
+        result = self.run_hook(self.tag_line("v3", "Release " + WORD))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refs/tags/v3 refused", result.stderr)
+
+    def test_clean_annotated_and_lightweight_tags_pass(self):
+        self.assertEqual(self.run_hook(self.tag_line("v4", "Release 0.1.0")).returncode, 0)
+        self.git("tag", "light")
+        sha = self.git("rev-parse", "light")
+        self.assertEqual(self.run_hook(f"refs/tags/light {sha} refs/tags/light {ZERO}\n").returncode, 0)
+
+    def test_raw_tag_sha_refspec_is_checked_by_object_type(self):
+        self.git("tag", "-a", "raw", "-m", "Release " + WORD)
+        sha = self.git("rev-parse", "raw")
+        result = self.run_hook(f"{sha} {sha} refs/tags/x {ZERO}\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refs/tags/x refused", result.stderr)
+
+    def test_nested_tag_chain_is_checked(self):
+        self.git("tag", "-a", "inner", "-m", "Inner " + WORD)
+        inner = self.git("rev-parse", "inner")
+        self.git("tag", "-a", "outer", "-m", "clean outer", inner)
+        outer = self.git("rev-parse", "outer")
+        self.assertNotEqual(self.run_hook(f"refs/tags/outer {outer} refs/tags/outer {ZERO}\n").returncode, 0)
+
+    def test_unreadable_object_type_refuses_the_push(self):
+        line = self.tag_line("v5", "Release " + WORD)
+        real_git = shutil.which("git")
+        stub = self.bin / "git"
+        stub.write_text(f'#!/bin/sh\n[ "$1" = cat-file ] && [ "$2" = -t ] && exit 128\nexec {real_git} "$@"\n')
+        stub.chmod(0o755)
+        result = self.run_hook(line)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read the object", result.stderr)
+
+    def test_ref_names_are_checked(self):
+        head = self.git("rev-parse", "HEAD")
+        for name in (f"refs/heads/{WORD}-topic", f"refs/tags/{WORD}-light"):
+            with self.subTest(name=name):
+                result = self.run_hook(f"refs/heads/main {head} {name} {ZERO}\n")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"ref name {name} refused", result.stderr)
+        for name in ("refs/heads/feature/x", "refs/tags/0.1.0"):
+            with self.subTest(name=name):
+                self.assertEqual(self.run_hook(f"refs/heads/main {head} {name} {ZERO}\n").returncode, 0)
+
+    def test_deleting_a_ref_needs_no_name_check(self):
+        head = self.git("rev-parse", "HEAD")
+        result = self.run_hook(f"(delete) {ZERO} refs/heads/{WORD}-topic {head}\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class HookTests(unittest.TestCase):
