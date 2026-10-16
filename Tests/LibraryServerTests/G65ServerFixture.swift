@@ -24,6 +24,8 @@ enum G65ServerFixture {
         ])
     }
 
+    // サーバの設定のうち、道を増やすもの（/local・中継など）は、すべてこの fixture で有効にする。
+    // 有効にし忘れた道は突き合わせの試験に見えず、文書に無くても通ってしまう。
     static func core(repo: InMemoryGrantRepository = makeRepo()) -> LibraryServerCore {
         LibraryServerCore(
             config: .init(port: 0, token: "G65-UNUSED", editToken: nil,

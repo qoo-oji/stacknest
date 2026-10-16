@@ -115,6 +115,12 @@ struct OpenAPIDTOParityTests {
     }
 
     /// 読み方そのものの確かめ（入れ子の properties・次のスキーマのキーを拾わない）。
+    /// G65: /me の応答（role は tier から導く互換の値・scope は G23 から）。
+    @Test func meReplyKeysAreInTheSpec() throws {
+        let spec = try specText()
+        expectKeys(try object(MeReply(tier: .edit, scope: .libraries(["u"]))).keys, in: "MeReply", spec: spec)
+    }
+
     @Test func readerPicksOnlyTheSchemaOwnProperties() {
         let yaml = """
         components:

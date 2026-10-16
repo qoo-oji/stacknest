@@ -27,6 +27,14 @@ enum OpenAPISpecReader {
         var description: String { "openapi.yaml l.\(line): paths の字下げ 4 に知らない鍵: \(text)" }
     }
 
+    /// 字下げ 2・4 以外の浅い字下げ（1・3・5）。操作が 3 字下げになっているなど、黙って読み飛ばすと操作が消える。
+    struct UnexpectedIndent: Error, CustomStringConvertible {
+        let line: Int
+        let indent: Int
+        let text: String
+        var description: String { "openapi.yaml l.\(line): paths の字下げ \(indent) は読めない（2 の倍数で書く）: \(text)" }
+    }
+
     static func specText() throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // LibraryServerTests
@@ -83,6 +91,9 @@ enum OpenAPISpecReader {
             case 10 where inResponses && key == "$ref":
                 if let status { current?.responses[status] = unquote(value).components(separatedBy: "/").last ?? "" }
             default:
+                // 6 以上の深い行（本文・パラメータ・スキーマの中）は読み飛ばしてよい。
+                // 浅い奇数の字下げ（1・3・5）は、操作や path が黙って消えるので投げる。
+                if indent < 6 { throw UnexpectedIndent(line: index + 1, indent: indent, text: trimmed) }
                 continue
             }
         }

@@ -60,6 +60,17 @@ struct OpenAPIRouteParityTests {
         #expect(throws: OpenAPISpecReader.UnknownKey.self) { try OpenAPISpecReader.operations(in: yaml) }
     }
 
+    /// 操作が 3 字下げ（2 の倍数でない）だと、黙って消えずに投げる。
+    @Test func readerRejectsAnOddIndentInsidePaths() {
+        let yaml = """
+        paths:
+          /a:
+           get:
+              responses: {}
+        """
+        #expect(throws: OpenAPISpecReader.UnexpectedIndent.self) { try OpenAPISpecReader.operations(in: yaml) }
+    }
+
     /// 文書そのものの配信。API ではないので突き合わせから除く（コードに実在することは確かめる）。
     static let documentRoutes: Set<String> = [
         "GET /openapi.yaml", "GET /docs", "GET /redoc.standalone.js", "GET /",

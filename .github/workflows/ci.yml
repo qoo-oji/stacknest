@@ -64,6 +64,9 @@ jobs:
       - name: Private identifier guard tests
         run: python3 -m unittest Scripts/tests/test_check_private_identifiers.py
 
+      - name: OpenAPI document parses as YAML
+        run: ruby -ryaml -e 'YAML.load_file(ARGV[0]); puts "openapi.yaml: ok"' Sources/LibraryServer/Resources/openapi/openapi.yaml
+
       # A bare directory argument (`node --test web-tests/`) fails on Node 22+ ("Cannot find module");
       # let the shell expand the files so it works on every Node version.
       - name: Web tests
