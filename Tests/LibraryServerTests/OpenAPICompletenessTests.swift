@@ -29,6 +29,7 @@ struct OpenAPICompletenessTests {
                 ids[id] = op.key
             }
             if let tags = op.fields["tags"] {
+                if !(tags.hasPrefix("[") && tags.hasSuffix("]")) { problems.append("\(op.key): tags は [X] の形で書く: \(tags)") }
                 let names = tags.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
                     .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 for name in names where !declaredTags.contains(name) { problems.append("\(op.key): 宣言していないタグ \(name)") }
@@ -54,6 +55,15 @@ struct OpenAPICompletenessTests {
             let lockScoped = op.path.hasPrefix("/libraries/{lib}") || op.path.hasPrefix("/local/libraries/{uuid}")
             if lockScoped, op.fields["x-stacknest-lock"] != "none", !["LibraryLocked", "ForbiddenOrLocked"].contains(forbidden) {
                 problems.append("\(op.key): 403 に LibraryLocked か ForbiddenOrLocked が無い（施錠を見ないなら x-stacknest-lock: none）")
+            }
+            let lockChecked = (op.path.hasPrefix("/libraries/{lib}") || op.path.hasPrefix("/local/libraries/{uuid}"))
+                && op.fields["x-stacknest-lock"] != "none"
+            let twoAlternatives = ["- bearerAuth: []", "libraryToken: []", "- bearerAuth: []"]
+            if lockChecked, op.securityLines != twoAlternatives {
+                problems.append("\(op.key): 施錠を見る操作は security に bearerAuth+libraryToken と bearerAuth の 2 通りを並べる")
+            }
+            if !lockChecked, tier != "none", !op.securityLines.isEmpty {
+                problems.append("\(op.key): 施錠を見ない操作は security を書かない（既定の bearerAuth）")
             }
             for name in op.responses.values where !name.isEmpty && !Self.responseNames.contains(name) {
                 problems.append("\(op.key): 知らない共通の応答 \(name)")
@@ -116,6 +126,41 @@ struct OpenAPICompletenessTests {
         let problems = try Self.problems(in: yaml)
         #expect(problems.contains { $0.contains("宣言していないタグ Nope") })
         #expect(problems.contains { $0.contains("schemas/Missing") })
+    }
+
+    @Test func duplicateComponentNameIsReported() {
+        let yaml = """
+        components:
+          schemas:
+            A:
+              type: object
+            A:
+              type: string
+        """
+        #expect(OpenAPISpecReader.unresolvedRefs(in: yaml).contains { $0.contains("A が 2 回ある") })
+    }
+
+    @Test func securityAndTagShapesAreChecked() throws {
+        let yaml = """
+        paths:
+          /libraries/{lib}/x:
+            get:
+              summary: s
+              tags:
+                - T
+              operationId: x
+              x-stacknest-tier: read
+              responses:
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+                '403':
+                  $ref: '#/components/responses/LibraryLocked'
+                '404':
+                  $ref: '#/components/responses/NotFound'
+        """ + "\n" + Self.badBase
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("tags は [X] の形で書く") })
+        #expect(problems.contains { $0.contains("2 通りを並べる") })
     }
 
     @Test func responseRefIntoAnotherSectionThrows() {

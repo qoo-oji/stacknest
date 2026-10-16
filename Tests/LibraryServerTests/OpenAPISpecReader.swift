@@ -11,6 +11,8 @@ struct OpenAPIOperation: Equatable {
     var fields: [String: String] = [:]
     /// 応答の状態コード → `$ref` の `components.responses` の名前（`$ref` でなければ ""）。
     var responses: [String: String] = [:]
+    /// `security:` の下の行（字下げを除いた形。例: `- bearerAuth: []`・`libraryToken: []`）。
+    var securityLines: [String] = []
     var key: String { "\(method) \(path)" }
 }
 
@@ -72,10 +74,11 @@ enum OpenAPISpecReader {
         var current: OpenAPIOperation?
         var inResponses = false
         var status: String?
+        var inSecurity = false
         var seenPaths: Set<String> = []
         func flush() {
             if let c = current { ops.append(c) }
-            current = nil; inResponses = false; status = nil
+            current = nil; inResponses = false; status = nil; inSecurity = false
         }
         func unquote(_ s: String) -> String { s.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")) }
         for (index, raw) in yaml.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
@@ -108,7 +111,7 @@ enum OpenAPISpecReader {
                 if methods.contains(key) { throw MisplacedMethod(line: index + 1, text: trimmed) }
                 guard current != nil else { continue }
                 current?.fields[key] = value
-                inResponses = (key == "responses"); status = nil
+                inResponses = (key == "responses"); status = nil; inSecurity = (key == "security")
             case 8 where inResponses:
                 let code = unquote(key)
                 status = code
@@ -121,6 +124,7 @@ enum OpenAPISpecReader {
                 // 6 以上の深い行（本文・パラメータ・スキーマの中）は読み飛ばしてよい。
                 // 浅い奇数の字下げ（1・3・5）は、操作や path が黙って消えるので投げる。
                 if indent < 6 { throw UnexpectedIndent(line: index + 1, indent: indent, text: trimmed) }
+                if inSecurity, !inResponses { current?.securityLines.append(trimmed) }
                 continue
             }
         }
@@ -135,6 +139,7 @@ enum OpenAPISpecReader {
         var refs: [(line: Int, section: String, name: String)] = []
         var inComponents = false
         var section: String?
+        var duplicates: [String] = []
         for (index, raw) in yaml.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = String(raw)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -144,7 +149,10 @@ enum OpenAPISpecReader {
             if inComponents {
                 if indent == 2 { section = String(trimmed.dropLast(trimmed.hasSuffix(":") ? 1 : 0)) }
                 else if indent == 4, let section, trimmed.hasSuffix(":") {
-                    defined[section, default: []].insert(String(trimmed.dropLast()))
+                    let name = String(trimmed.dropLast())
+                    if !defined[section, default: []].insert(name).inserted {
+                        duplicates.append("l.\(index + 1): components.\(section) の \(name) が 2 回ある（後のものだけが配信される）")
+                    }
                 }
             }
             if let r = trimmed.range(of: "$ref:") {
@@ -155,7 +163,7 @@ enum OpenAPISpecReader {
                 else { refs.append((index + 1, "?", value)) }
             }
         }
-        return refs.filter { defined[$0.section]?.contains($0.name) != true }
+        return duplicates + refs.filter { defined[$0.section]?.contains($0.name) != true }
             .map { "l.\($0.line): $ref の先が無い: \($0.section)/\($0.name)" }
     }
 
