@@ -134,18 +134,30 @@ enum OpenAPISpecReader {
 
     /// ファイル中のすべての `$ref: '#/components/<節>/<名前>'` のうち、その節に定義が無いもの。
     /// 定義は `components:` の下の節（字下げ 2）の直下の名前（字下げ 4）。
+    /// あわせて、2 回ある最上位の鍵（`components:`・`paths:`・`tags:` など）と、2 回ある `components` の名前も返す（先頭に並べる）。
+    /// どちらも YAML としては通るが、後のものだけが配信され前のものが黙って消える。
     static func unresolvedRefs(in yaml: String) -> [String] {
         var defined: [String: Set<String>] = [:]
         var refs: [(line: Int, section: String, name: String)] = []
         var inComponents = false
         var section: String?
         var duplicates: [String] = []
+        var topLevelKeys: Set<String> = []
         for (index, raw) in yaml.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = String(raw)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
             let indent = line.prefix(while: { $0 == " " }).count
-            if indent == 0 { inComponents = (trimmed == "components:"); section = nil }
+            if indent == 0 {
+                inComponents = (trimmed == "components:"); section = nil
+                // 字下げ 0 の列の項目（`- …`）は鍵ではないので数えない。
+                if !trimmed.hasPrefix("-"), let colon = trimmed.firstIndex(of: ":") {
+                    let key = String(trimmed[..<colon])
+                    if !topLevelKeys.insert(key).inserted {
+                        duplicates.append("l.\(index + 1): 最上位の \(key) が 2 回ある（後のものだけが配信され、前のブロックは丸ごと消える。既にあるブロックの中に足す）")
+                    }
+                }
+            }
             if inComponents {
                 if indent == 2 { section = String(trimmed.dropLast(trimmed.hasSuffix(":") ? 1 : 0)) }
                 else if indent == 4, let section, trimmed.hasSuffix(":") {

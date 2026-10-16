@@ -62,7 +62,8 @@ struct OpenAPICompletenessTests {
             if lockChecked, op.securityLines != twoAlternatives {
                 problems.append("\(op.key): 施錠を見る操作は security に bearerAuth+libraryToken と bearerAuth の 2 通りを並べる")
             }
-            if !lockChecked, tier != "none", !op.securityLines.isEmpty {
+            // `security:` の下の行（block の形）だけでなく、1 行の flow の形（`security: [{bearerAuth: []}]`）も見る。
+            if !lockChecked, tier != "none", op.fields["security"] != nil {
                 problems.append("\(op.key): 施錠を見ない操作は security を書かない（既定の bearerAuth）")
             }
             for name in op.responses.values where !name.isEmpty && !Self.responseNames.contains(name) {
@@ -140,6 +141,26 @@ struct OpenAPICompletenessTests {
         #expect(OpenAPISpecReader.unresolvedRefs(in: yaml).contains { $0.contains("A が 2 回ある") })
     }
 
+    /// 最上位の鍵が 2 回あると、YAML としては通るが後のブロックだけが配信され、前のブロックは丸ごと消える。
+    /// ファイル末尾にブロックを足す書き方で起きやすいので、3 つの鍵それぞれで確かめる。
+    @Test(arguments: [
+        "components:\n  schemas:\n    NewThing:\n      type: object",
+        "paths:\n  /new:\n    get:\n      summary: s",
+        "tags:\n  - name: New",
+    ])
+    func topLevelKeyTwiceIsReported(appended: String) throws {
+        let yaml = """
+        openapi: 3.1.0
+        paths:
+          /a:
+            get:
+              summary: s
+        """ + "\n" + Self.badBase + "\n" + appended
+        let key = String(appended.prefix(while: { $0 != ":" }))
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("最上位の \(key) が 2 回ある") }, Comment(rawValue: problems.joined(separator: "\n")))
+    }
+
     @Test func securityAndTagShapesAreChecked() throws {
         let yaml = """
         paths:
@@ -157,10 +178,45 @@ struct OpenAPICompletenessTests {
                   $ref: '#/components/responses/LibraryLocked'
                 '404':
                   $ref: '#/components/responses/NotFound'
+          /free-block:
+            get:
+              summary: s
+              tags: [T]
+              operationId: freeBlock
+              x-stacknest-tier: read
+              security:
+                - bearerAuth: []
+              responses:
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+          /free-flow:
+            get:
+              summary: s
+              tags: [T]
+              operationId: freeFlow
+              x-stacknest-tier: read
+              security: [{bearerAuth: []}]
+              responses:
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+          /none:
+            get:
+              summary: s
+              tags: [T]
+              operationId: noAuth
+              x-stacknest-tier: none
+              security: []
+              responses:
+                '200':
+                  description: ok
         """ + "\n" + Self.badBase
         let problems = try Self.problems(in: yaml)
         #expect(problems.contains { $0.contains("tags は [X] の形で書く") })
         #expect(problems.contains { $0.contains("2 通りを並べる") })
+        // 施錠を見ない操作の security は、block の形でも flow の形でも報告する。認証なしの `security: []` は通す。
+        #expect(problems.contains { $0.contains("GET /free-block: 施錠を見ない操作は security を書かない") })
+        #expect(problems.contains { $0.contains("GET /free-flow: 施錠を見ない操作は security を書かない") })
+        #expect(!problems.contains { $0.hasPrefix("GET /none:") }, Comment(rawValue: problems.joined(separator: "\n")))
     }
 
     @Test func responseRefIntoAnotherSectionThrows() {

@@ -247,7 +247,7 @@ components:
       properties:
         libraryToken:
           type: string
-          description: ロック庫アクセス用の短命トークン（再起動で失効）
+          description: ロック庫アクセス用の短命トークン（発行から 24 時間で失効し、使っても延びない。サーバの再起動、その書庫のパスワードの変更・解除でも失効する）
 
     ViewerTokenReply:
       type: object
@@ -796,8 +796,9 @@ paths:
       summary: ロック庫の解錠（ライブラリトークン取得）
       description: |
         パスワードを送信してロック庫を解錠し、短命なライブラリトークンを取得する。
-        取得したトークンを `X-Library-Token` ヘッダに付けることでロック庫の API にアクセスできる。
-        トークンはサーバ再起動で失効する。
+        取得したトークンをヘッダ `X-Library-Token`、またはクエリ `?lt=<token>` で渡すと（ヘッダが優先）、ロック庫の API にアクセスできる。
+        トークンの有効期間は発行から 24 時間で、使っても延びない。
+        サーバの再起動、またはその書庫のパスワードの変更・解除でも失効する（securitySchemes の `libraryToken` と同じ）。
       tags: [Libraries]
       operationId: unlockLibrary
       x-stacknest-tier: read
