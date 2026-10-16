@@ -15,6 +15,9 @@ public actor BookContentCache {
         let path: String?
         let mtime: Double?
         let size: Int64?
+        /// G64 Codex fix: content を作ったときの足した拡張子の一覧。変われば作り直す
+        /// （.tgz を登録する前に作った圧縮 tar 不可の content を、登録後も返し続けない）。
+        let userExtensions: UserExtensionMap
     }
 
     private struct Entry {
@@ -56,25 +59,28 @@ public actor BookContentCache {
     /// 本では常に同じ値になる（全クライアントの immutable キャッシュを壊さない）。
     public func contentAndETag(
         for row: BookRow, libraryUUID: String
-    ) throws -> (content: any BookContent, etag: String) {
+    ) throws -> (content: any BookContent, etag: String, userExtensions: UserExtensionMap) {
         let key = "\(libraryUUID)/\(row.id)"
         let now = clock.now
         // 期限切れエントリの掃除（呼び出しごとの軽量 sweep）
         entries = entries.filter { now - $0.value.lastAccess < ttl }
         let (mtime, size) = effectiveFileStat(for: row)
-        let basis = Basis(path: row.path, mtime: mtime, size: size)
+        // 1 リクエスト 1 スナップショット: content の構築・cache 判定・呼び出し側の分類
+        // （manifest の format）が同じ一覧を使う。
+        let extensions = userExtensions()
+        let basis = Basis(path: row.path, mtime: mtime, size: size, userExtensions: extensions)
         let etag = Self.etagString(rowID: row.id, path: row.path, mtime: mtime, size: size)
         if var entry = entries[key], entry.basis == basis {
             entry.lastAccess = now
             entries[key] = entry
-            return (entry.content, etag)
+            return (entry.content, etag, extensions)
         }
         // 未キャッシュ、または row の content 基準（path/mtime/size）が変化した＝再構築。
         // 旧 Entry の強参照はここで落ち、ArchiveBookContent→SequentialArchiveExtractor の deinit が
         // 走って temp が即掃除される（リモート temp TTL follow-up を相乗りでカバー）。
-        let content = try BookContentFactory.make(for: row, userExtensions: userExtensions())
+        let content = try BookContentFactory.make(for: row, userExtensions: extensions)
         entries[key] = Entry(content: content, lastAccess: now, basis: basis)
-        return (content, etag)
+        return (content, etag, extensions)
     }
 
     /// `bookETag(for:)`（ContentEndpoints.swift）と同一の文字列規則。effectiveFileStat の

@@ -1935,12 +1935,12 @@ public struct LibraryServerCore: Sendable {
         api.get("libraries/:lib/books/:id/manifest") { [config] request, context in
             let (lib, row) = try await resolver.resolveBook(request, context)
             // G64: `format` はサーバの一覧で決めた種類（archive・image・video・text。新しい値は足さない）。
-            let userExtensions = config.userExtensions()
+            // content を作ったのと同じ 1 回のスナップショットで分類する（下の contentAndETag が返す）。
             // Finding 2: content と etag を同じ 1 回の effectiveFileStat 呼び出しから得る
             // （content(for:) の後で独立に bookETag(for: row) を呼び直すと、フォルダ本では
             // その間にディレクトリが変化しうるため、advertise する版と実際の pageCount が
             // 食い違う可能性があった）。
-            let (content, etag) = try await contentCache.contentAndETag(for: row, libraryUUID: lib.uuid)
+            let (content, etag, userExtensions) = try await contentCache.contentAndETag(for: row, libraryUUID: lib.uuid)
             let pageCount: Int
             do {
                 pageCount = try await content.pageCount
@@ -1976,7 +1976,7 @@ public struct LibraryServerCore: Sendable {
             let (lib, row) = try await resolver.resolveBook(request, context)
             let n = try context.parameters.require("n", as: Int.self)
             // Finding 2: manifest と同じ理由で、content と book 版 ETag を同じ 1 回の stat から得る。
-            let (content, bookVersion) = try await contentCache.contentAndETag(for: row, libraryUUID: lib.uuid)
+            let (content, bookVersion, _) = try await contentCache.contentAndETag(for: row, libraryUUID: lib.uuid)
             let maxw = request.uri.queryParameters.get("maxw", as: Int.self)
             let etag = maxwETag(bookVersion + "-p\(n)", maxw: maxw)
             if request.headers[.ifNoneMatch] == etag { return Response(status: .notModified) }

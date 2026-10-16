@@ -211,7 +211,7 @@ struct BookContentCacheInvalidationTests {
 
         // 修正後の manifest/pages ハンドラが実際に呼ぶ経路: content と etag を 1 回の
         // stat から一緒に得る。
-        let (content, snapshotEtag) = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let (content, snapshotEtag, _) = try await cache.contentAndETag(for: row, libraryUUID: "L")
         let pageCount = try await content.pageCount
         #expect(pageCount == 3)
 
@@ -241,8 +241,92 @@ struct BookContentCacheInvalidationTests {
         let cache = BookContentCache(ttlSeconds: 300)
         let row = Self.row(id: 63, path: threePage.path)
 
-        let (_, etagFromCache) = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let (_, etagFromCache, _) = try await cache.contentAndETag(for: row, libraryUUID: "L")
         let etagFromFreeFunction = bookETag(for: row)
         #expect(etagFromCache == etagFromFreeFunction)
+    }
+
+    // MARK: G64 Codex fix: 足した拡張子の一覧が変わったら作り直す
+
+    private final class ExtensionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UserExtensionMap
+        init(_ value: UserExtensionMap) { self.value = value }
+        var map: UserExtensionMap {
+            get { lock.lock(); defer { lock.unlock() }; return value }
+            set { lock.lock(); defer { lock.unlock() }; value = newValue }
+        }
+    }
+
+    /// tar.gz を `.tgz` で作る（足したアーカイブの拡張子としてだけ読める）。
+    private static func makeTGZ() throws -> (url: URL, dir: URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bcc-ext-\(UUID().uuidString)")
+        let src = dir.appendingPathComponent("src")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        for i in 1...3 { try Data("p\(i)".utf8).write(to: src.appendingPathComponent("p\(i).jpg")) }
+        let url = dir.appendingPathComponent("book.tgz")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.environment = ["COPYFILE_DISABLE": "1"]
+        process.arguments = ["-czf", url.path, "-C", src.path, "p1.jpg", "p2.jpg", "p3.jpg"]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+        return (url, dir)
+    }
+
+    @Test func rebuildsWhenUserExtensionsChange() async throws {
+        let (url, dir) = try Self.makeTGZ()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let box = ExtensionBox(["tgz": .archive])
+        let cache = BookContentCache(ttlSeconds: 300, userExtensions: { box.map })
+        let row = Self.row(id: 31, path: url.path)
+
+        let first = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        #expect(try await first.content.pageCount == 3)
+        #expect(first.userExtensions == ["tgz": .archive])
+
+        // 登録を外す（=この本は対応外になる）。古い content を返し続けてはならない。
+        box.map = [:]
+        var threw = false
+        do { _ = try await cache.contentAndETag(for: row, libraryUUID: "L") } catch { threw = true }
+        #expect(threw, "拡張子の登録を外したのに古い content を返した")
+
+        // 登録し直すと読める。返ったスナップショットは今の一覧。
+        box.map = ["tgz": .archive]
+        let again = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        #expect(try await again.content.pageCount == 3)
+        #expect(again.userExtensions == ["tgz": .archive])
+    }
+
+    @Test func rebuildsOnAnyConfigurationChangeAndSnapshotMatches() async throws {
+        let (url, dir) = try Self.makeTGZ()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let box = ExtensionBox(["tgz": .archive])
+        let cache = BookContentCache(ttlSeconds: 300, userExtensions: { box.map })
+        let row = Self.row(id: 32, path: url.path)
+
+        let a = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        box.map = ["tgz": .archive, "zzz": .image]
+        let b = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let rebuilt = (a.content as AnyObject) !== (b.content as AnyObject)
+        #expect(rebuilt)
+        #expect(b.userExtensions == ["tgz": .archive, "zzz": .image])
+        #expect(a.etag == b.etag)
+    }
+
+    @Test func unchangedConfigurationStillHitsCacheWithSameETag() async throws {
+        let (url, dir) = try Self.makeTGZ()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let box = ExtensionBox(["tgz": .archive])
+        let cache = BookContentCache(ttlSeconds: 300, userExtensions: { box.map })
+        let row = Self.row(id: 33, path: url.path)
+
+        let a = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let b = try await cache.contentAndETag(for: row, libraryUUID: "L")
+        let same = (a.content as AnyObject) === (b.content as AnyObject)
+        #expect(same)
+        #expect(a.etag == b.etag)
     }
 }
