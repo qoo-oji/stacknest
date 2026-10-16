@@ -142,6 +142,7 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
             let name = String(cString: cName)
             archive_read_data_skip(archive)
             if name.hasSuffix("/") { continue }
+            if LibarchiveFormats.isTarAppleDouble(archive, name: name) { continue }   // G64: tar の `._名前` は候補にしない
             let ext = (name as NSString).pathExtension.lowercased()
             if ext == "pdf" {
                 names.append(name)
@@ -215,6 +216,7 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
             let name = String(cString: cName)
             archive_read_data_skip(archive)
             if name.hasSuffix("/") { continue }
+            if LibarchiveFormats.isTarAppleDouble(archive, name: name) { continue }   // G64: tar の `._名前` は候補にしない
             let ext = (name as NSString).pathExtension.lowercased()
             if Self.imageExtensions.contains(ext) {
                 names.append(name)
@@ -315,6 +317,10 @@ public struct LibarchiveCoverExtractor: CoverImageExtractor {
             }
             let name = String(cString: cName)
             if name.hasSuffix("/") {
+                archive_read_data_skip(archive)
+                continue
+            }
+            if LibarchiveFormats.isTarAppleDouble(archive, name: name) {   // G64: 列挙と同じ規則で数えない
                 archive_read_data_skip(archive)
                 continue
             }

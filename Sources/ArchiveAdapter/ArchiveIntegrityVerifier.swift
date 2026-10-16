@@ -170,6 +170,12 @@ public enum ArchiveIntegrityVerifier {
                 continue
             }
 
+            // G64: tar の AppleDouble（`._名前`）は本のエントリではない（列挙・数え方と同じ規則）。数にも検査にも入れない。
+            if LibarchiveFormats.isTarAppleDouble(archive, name: name) {
+                archive_read_data_skip(archive)
+                continue
+            }
+
             entryCount += 1
             let ext = (name as NSString).pathExtension.lowercased()
             if Self.imageExtensions.contains(ext) {

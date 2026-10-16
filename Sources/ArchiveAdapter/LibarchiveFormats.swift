@@ -98,6 +98,21 @@ enum LibarchiveFormats {
         }
     }
 
+    /// G64 Codex fix: tar の中の AppleDouble（macOS のメタデータ `._名前`）か。
+    /// `mac-ext` を切った（上）ので、`._001.jpg` は普通のエントリとして見える。画像・PDF の候補にも数にも入れない。
+    /// **今開いている書庫の形式が tar のときだけ**（zip の `__MACOSX/._x` や、tar でない書庫は今のまま）。
+    /// 形式はヘッダを読んだ後でしか決まらないので、`archive_read_next_header` の後に呼ぶ。
+    static func isTarAppleDouble(_ archive: OpaquePointer, name: String) -> Bool {
+        guard isAppleDoubleName(name) else { return false }
+        return (archive_format(archive) & ARCHIVE_FORMAT_BASE_MASK) == ARCHIVE_FORMAT_TAR
+    }
+
+    /// 最後のパス要素が `._` で始まる名前か（形式は問わない純粋な名前判定。テスト用に分けてある）。
+    static func isAppleDoubleName(_ name: String) -> Bool {
+        let last = name.split(separator: "/", omittingEmptySubsequences: true).last ?? Substring(name)
+        return last.hasPrefix("._")
+    }
+
     /// その URL で tar を有効にするか。
     static func readsTar(_ url: URL) -> Bool {
         !zipFamilyExtensions.contains(url.pathExtension.lowercased())
