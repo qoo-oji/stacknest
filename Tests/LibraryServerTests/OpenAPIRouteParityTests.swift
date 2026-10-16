@@ -78,15 +78,6 @@ struct OpenAPIRouteParityTests {
 
     /// まだ openapi.yaml に書いていない操作（G65 Task 3〜5 が書いて削る。Task 5 で空にして消す）。
     static let undocumented: Set<String> = [
-        // Task 3
-        "POST /session",
-        "GET /grants", "POST /grants", "PATCH /grants/{id}", "DELETE /grants/{id}",
-        "POST /libraries/{lib}/shelves", "PATCH /libraries/{lib}/shelves/{id}", "DELETE /libraries/{lib}/shelves/{id}",
-        "GET /libraries/{lib}/shelves/{id}/conditions", "PUT /libraries/{lib}/shelves/{id}/conditions",
-        "POST /libraries/{lib}/shelves/{id}/books", "DELETE /libraries/{lib}/shelves/{id}/books",
-        "POST /libraries/{lib}/lock", "DELETE /libraries/{lib}/lock",
-        "GET /events",
-        "GET /libraries/{lib}/counts", "POST /libraries/{lib}/books/{id}/page-layout",
         // Task 4
         "POST /libraries/{lib}/integrity/full-scan", "POST /libraries/{lib}/duplicates/scan",
         "GET /libraries/{lib}/integrity/summary", "GET /libraries/{lib}/integrity/list", "POST /libraries/{lib}/integrity/scan",
@@ -107,9 +98,9 @@ struct OpenAPIRouteParityTests {
         "POST /local/libraries/{uuid}/finder-tags/resync", "POST /local/libraries/{uuid}/rename-files",
     ]
 
-    @Test func undocumentedListHasFiftyEntriesAtTheStart() {
-        // Task 1 の時点の数の確かめ。Task 3〜5 で減らすたびにこの数も直す（Task 5 でこの試験ごと消す）。
-        #expect(Self.undocumented.count == 50)
+    @Test func undocumentedListShrinksAsOperationsAreWritten() {
+        // 書いた操作を消すたびにこの数も直す（Task 1 で 50・Task 3 で 33。Task 5 でこの試験ごと消す）。
+        #expect(Self.undocumented.count == 33)
     }
 
     @Test func everyRouteIsDocumentedAndEveryDocumentedOperationExists() throws {

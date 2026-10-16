@@ -394,6 +394,9 @@ components:
           type: string
         isSmart:
           type: boolean
+        bookCount:
+          type: integer
+          description: 所属の冊数（手動の棚・お気に入りは所属の数、スマートシェルフは条件に合う数）。一覧（GET）だけが数え、作成・更新の応答では常に 0
 
     BookDetailDTO:
       type: object
@@ -689,6 +692,15 @@ components:
           description: アーカイブ形式（archive / image / folder / video / text / epub）。`epub` はテキスト EPUB（G48-3）で、pageCount は 0・ページ経路は無い。全ページ画像の EPUB は text のままページ経路で配る
         etag:
           type: string
+        pageOverrides:
+          type: object
+          additionalProperties:
+            type: integer
+            enum: [0, 1]
+          description: ページごとの見開きの上書き（`POST …/page-layout` で書く・G17）。キーはページ番号（0 始まり）の文字列、値は 0＝見開きにする・1＝単ページにする。上書きが 1 つも無い本はキー省略
+        damageNote:
+          type: string
+          description: 破損などで全ページを読めなかったときの注意文（G26）。全ページ読めたならキー省略
         epubLocator:
           type: object
           description: format が epub のときの読書位置（未保存ならキー省略）。POST /epub-progress と同じ形
@@ -735,6 +747,241 @@ components:
             type: string
           description: 追加に失敗したファイルのパス
 
+    SessionReply:
+      type: object
+      description: セッションの鍵（`POST /session` の応答）
+      required: [sessionToken, expiresIn]
+      properties:
+        sessionToken:
+          type: string
+          description: '`?token=` で渡す短命の鍵。ヘッダ（`Authorization: Bearer`）で出してもセッションとしては引かれない'
+        expiresIn:
+          type: integer
+          description: 有効期間（秒・今は 1800）。使っても延びない。サーバの再起動でも失効する
+
+    GrantDTO:
+      type: object
+      description: グラント 1 件（一覧・作成・更新の応答）。鍵そのもの（token）を含む
+      required: [id, label, token, tier, scope]
+      properties:
+        id:
+          type: string
+          description: グラントの ID（秘密ではない）
+        label:
+          type: string
+          description: 表示用の名前
+        token:
+          type: string
+          description: '鍵そのもの（`Authorization: Bearer` で渡す）。admin だけが読める'
+        tier:
+          type: string
+          enum: [read, edit, admin]
+        scope:
+          description: 鍵の範囲。全書庫は空のオブジェクト、決めた書庫だけなら libraries にその UUID の配列
+          oneOf:
+            - type: object
+              maxProperties: 0
+              description: 全書庫
+            - type: object
+              required: [libraries]
+              properties:
+                libraries:
+                  type: array
+                  items:
+                    type: string
+
+    GrantCreateRequest:
+      type: object
+      description: グラントの作成（POST /grants の本文）。鍵と ID はサーバが作る
+      required: [label, tier, scope]
+      properties:
+        label:
+          type: string
+        tier:
+          type: string
+          enum: [read, edit, admin]
+        scope:
+          description: 全書庫は空のオブジェクト、決めた書庫だけなら libraries にその UUID の配列。呼び手の scope を超えたら 403
+          oneOf:
+            - type: object
+              maxProperties: 0
+              description: 全書庫
+            - type: object
+              required: [libraries]
+              properties:
+                libraries:
+                  type: array
+                  items:
+                    type: string
+
+    GrantUpdateRequest:
+      type: object
+      description: グラントの更新（PATCH /grants/{id} の本文）。省いた項目（null を含む）は変えない。鍵は変わらない
+      properties:
+        label:
+          type: string
+          nullable: true
+        tier:
+          type: string
+          nullable: true
+          enum: [read, edit, admin, null]
+        scope:
+          nullable: true
+          description: 全書庫は空のオブジェクト、決めた書庫だけなら libraries にその UUID の配列。呼び手の scope を超えたら 403
+          oneOf:
+            - type: object
+              maxProperties: 0
+              description: 全書庫
+            - type: object
+              required: [libraries]
+              properties:
+                libraries:
+                  type: array
+                  items:
+                    type: string
+
+    SmartShelfConditions:
+      type: object
+      description: スマートシェルフの条件（条件の取得の応答・設定の本文と応答・作成と更新の本文の conditions で共通）
+      required: [version, match, rules]
+      properties:
+        version:
+          type: integer
+          description: 条件の形式の版（今は 1）
+        match:
+          type: string
+          enum: [all, any]
+          description: all はすべてのルールに合う本、any はどれかのルールに合う本
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/SmartShelfRule'
+
+    SmartShelfRule:
+      type: object
+      description: スマートシェルフのルール 1 件
+      required: [id, field, op, value]
+      properties:
+        id:
+          type: string
+          format: uuid
+        field:
+          type: string
+          enum: [title, author, genre, series, neta, keywordA, keywordB, keywordC, memo, bookType, rating, unseen, pages, dateAdded, playDate]
+          description: 対象の項目。title〜memo は文字列、bookType・rating・pages は数、dateAdded・playDate は日付、unseen は未読
+        op:
+          type: string
+          enum: [equals, contains, startsWith, endsWith, eq, gte, lte, within, olderThan, isUnread, isRead]
+          description: 文字列は equals・contains・startsWith・endsWith、数は eq・gte・lte、日付は within・olderThan（日数）、未読は isUnread・isRead
+        value:
+          $ref: '#/components/schemas/RuleValue'
+
+    RuleValue:
+      type: object
+      description: ルールの値。kind が値の型を決める
+      required: [kind, value]
+      properties:
+        kind:
+          type: string
+          enum: [text, int, days]
+        value:
+          description: kind が text なら文字列、int なら整数、days なら日数（整数）
+          oneOf:
+            - type: string
+            - type: integer
+
+    ShelfCreateRequest:
+      type: object
+      description: シェルフの作成（POST /libraries/{lib}/shelves の本文）
+      required: [title, isSmart]
+      properties:
+        title:
+          type: string
+        isSmart:
+          type: boolean
+          description: true でスマートシェルフ（conditions が要る。無ければ 400）。false で手動の棚（conditions を付けたら 409）
+        conditions:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/SmartShelfConditions'
+
+    ShelfUpdateRequest:
+      type: object
+      description: シェルフの更新（PATCH /libraries/{lib}/shelves/{id} の本文）。省いた項目は変えない
+      properties:
+        title:
+          type: string
+          nullable: true
+          description: 新しい名前。お気に入りの棚の名前は変えられない（409）
+        conditions:
+          nullable: true
+          description: 新しい条件。スマートシェルフでなければ 409
+          allOf:
+            - $ref: '#/components/schemas/SmartShelfConditions'
+
+    ShelfBooksRequest:
+      type: object
+      description: 手動の棚の所属を足す・外す本文
+      required: [bookIDs]
+      properties:
+        bookIDs:
+          type: array
+          items:
+            type: integer
+          description: 本の ID。足すときは既に所属している本を飛ばし、末尾に足す
+
+    LockRequest:
+      type: object
+      description: 書庫の施錠・パスワードの変更（POST /libraries/{lib}/lock の本文）
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: 新しいパスワード（空なら 400）
+        currentPassword:
+          type: string
+          nullable: true
+          description: 今のパスワード。既に施錠した書庫のパスワードを変えるときだけ要る（無い・違うときは 403）
+
+    LockRemoveRequest:
+      type: object
+      description: 書庫の施錠の解除（DELETE /libraries/{lib}/lock の本文）。施錠していない書庫では本文ごと省いてよい
+      properties:
+        currentPassword:
+          type: string
+          nullable: true
+          description: 今のパスワード。施錠した書庫では要る（無い・違うときは 403）
+
+    LibraryCountsDTO:
+      type: object
+      description: サイドバーの件数（一覧の絞り込みに依らない）
+      required: [libraryTotal, recentCount, recentDays]
+      properties:
+        libraryTotal:
+          type: integer
+          description: 書庫の全冊数
+        recentCount:
+          type: integer
+          description: 最近 recentDays 日に足した冊数
+        recentDays:
+          type: integer
+          description: 「最近」の日数（書庫の設定・既定 14）
+
+    PageLayoutRequestBody:
+      type: object
+      description: ページごとの見開きの上書き（POST /libraries/{lib}/books/{id}/page-layout の本文）
+      required: [page]
+      properties:
+        page:
+          type: integer
+          minimum: 0
+          description: ページ番号（0 始まり）。ページ数以上は 400
+        mode:
+          type: integer
+          nullable: true
+          enum: [0, 1, null]
+          description: 0＝見開きにする・1＝単ページにする。省くか null で上書きを消す（自動の判定に戻す）。ほかの値は 400
+
 paths:
   /server/info:
     get:
@@ -770,6 +1017,145 @@ paths:
                 $ref: '#/components/schemas/MeReply'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /session:
+    post:
+      summary: セッションの鍵への引き換え
+      description: |
+        ヘッダ `Authorization: Bearer` で出した鍵（グラント・固定の鍵）を、30 分だけ効くセッションの鍵に引き換える。
+        セッションの鍵は `?token=` で渡したときだけ効き、元の鍵と同じ tier と scope を持つ（使うたびに元の鍵で照らし直すので、元のグラントを消すと効かなくなる）。
+        ヘッダを付けられない EventSource（`GET /events`）や `<img>` のために、永続の鍵を URL・履歴・ログに残さないで済ませる。
+        `?token=` だけで呼んだら 401（クエリでの発行は受け付けない）。
+      tags: [Auth]
+      operationId: createSession
+      x-stacknest-tier: read
+      responses:
+        '200':
+          description: 発行したセッションの鍵
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionReply'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /grants:
+    get:
+      summary: グラントの一覧（admin）
+      description: |
+        グラントの一覧を返す。各要素は鍵そのもの（`token`）を含む。
+        呼び手の scope に含まれるグラントだけを返す（全書庫の admin はすべて。書庫を限った admin には、その書庫の中に収まるグラントだけで、全書庫のグラントは返さない）。
+        **admin の tier が必要。**
+      tags: [Grants]
+      operationId: listGrants
+      x-stacknest-tier: admin
+      responses:
+        '200':
+          description: グラントの一覧
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GrantDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: グラントの作成（admin）
+      description: |
+        グラントを作り、新しい鍵と ID を返す。すぐに認証に使える。
+        呼び手の権限を超える scope（書庫を限った admin が全書庫や scope の外の書庫を指定する）・tier は 403。
+        **admin の tier が必要。**
+      tags: [Grants]
+      operationId: createGrant
+      x-stacknest-tier: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantCreateRequest'
+      responses:
+        '200':
+          description: 作ったグラント（鍵そのものを含む）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /grants/{id}:
+    patch:
+      summary: グラントの更新（admin）
+      description: |
+        グラントの名前・tier・scope を変える（鍵は変わらない）。次の要求からすぐに効く。
+        呼び手の scope の外にあるグラントは、在るか無いかを漏らさないため 404。更新後の scope・tier が呼び手の権限を超えるなら 403。
+        `GET /events` の接続は、scope を変えると次の心拍で閉じる（tier だけの変更では閉じない）。
+        **admin の tier が必要。**
+      tags: [Grants]
+      operationId: updateGrant
+      x-stacknest-tier: admin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: グラントの ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantUpdateRequest'
+      responses:
+        '200':
+          description: 更新後のグラント（鍵そのものを含む）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GrantDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: グラントの削除（admin）
+      description: |
+        グラントを消す。その鍵・その鍵で得たセッションの鍵は次の要求から 401 になり、そのグラントで発行した本専用の鍵も 401 になる。
+        `GET /events` の接続は次の心拍（約 5 秒）で閉じる。
+        呼び手の scope の外にあるグラントは 404。
+        **admin の tier が必要。**
+      tags: [Grants]
+      operationId: deleteGrant
+      x-stacknest-tier: admin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: グラントの ID
+      responses:
+        '204':
+          description: 消した
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /libraries:
     get:
@@ -840,6 +1226,121 @@ paths:
               description: 再試行までの秒数
               schema:
                 type: string
+
+  /libraries/{lib}/lock:
+    post:
+      summary: 書庫の施錠・パスワードの変更（admin）
+      description: |
+        書庫にパスワードを設定する（施錠）。既に施錠した書庫では、パスワードを変える。
+        変えるときは、書庫の鍵（`X-Library-Token`）に加えて今のパスワード（`currentPassword`）が要り、無い・違うなら 403（施錠による 403 ではないので `X-Library-Locked` は付かない）。
+        パスワードを変えると、それまでに出した書庫の鍵は使えなくなる。施錠・変更の前に発行した本専用の鍵は、その本を読めなくなる（403）。同時に別の変更が先に入ったら 409（何も変えない）。
+        `settingsChanged` イベントを出す。**admin の tier が必要。**
+      tags: [Libraries]
+      operationId: setLibraryLock
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '204':
+          description: 施錠した・パスワードを変えた
+        '400':
+          description: 本文が読めない・新しいパスワードが空
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 照らしたパスワード（または未施錠という前提）が、同時に入った別の変更で古くなった
+    delete:
+      summary: 書庫の施錠の解除（admin）
+      description: |
+        書庫のパスワードを消す。施錠した書庫では、書庫の鍵（`X-Library-Token`）に加えて本文の今のパスワード（`currentPassword`）が要り、無い・違うなら 403（`X-Library-Locked` は付かない）。
+        施錠していない書庫では何もせず 204（本文は読まない）。解除すると、それまでに出した書庫の鍵は使えなくなる。同時に別の変更が先に入ったら 409。
+        `settingsChanged` イベントを出す。**admin の tier が必要。**
+      tags: [Libraries]
+      operationId: clearLibraryLock
+      x-stacknest-tier: admin
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRemoveRequest'
+      responses:
+        '204':
+          description: 解除した（施錠していなければ何もしない）
+        '400':
+          description: 本文が空でなく、JSON として読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 照らしたパスワードが、同時に入った別の変更で古くなった
+
+  /libraries/{lib}/counts:
+    get:
+      summary: サイドバーの件数
+      description: |
+        書庫の全冊数と、最近足した冊数を返す（リモートのサイドバー用）。一覧の絞り込み（scope・filter）には依らない。
+        「最近」の日数は書庫の設定（既定 14 日）。
+      tags: [Libraries]
+      operationId: getLibraryCounts
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      responses:
+        '200':
+          description: サイドバーの件数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryCountsDTO'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /libraries/{lib}/books:
     parameters:
@@ -1012,6 +1513,329 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+    post:
+      summary: シェルフの作成（edit 以上）
+      description: |
+        手動の棚（`isSmart: false`）かスマートシェルフ（`isSmart: true`・`conditions` が要る）を作る。
+        スマートシェルフで `conditions` が無ければ 400、手動の棚に `conditions` を付けたら 409。
+        応答の `bookCount` は 0（数えるのは一覧だけ）。`settingsChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: createShelf
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShelfCreateRequest'
+      responses:
+        '200':
+          description: 作ったシェルフ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShelfDTO'
+        '400':
+          description: 本文が読めない・スマートシェルフに conditions が無い
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 手動の棚に conditions を付けた
+
+  /libraries/{lib}/shelves/{id}:
+    patch:
+      summary: シェルフの名前・条件の変更（edit 以上）
+      description: |
+        シェルフの名前を変える。スマートシェルフなら条件（`conditions`）も変えられる（どちらも省けば何もしない）。
+        お気に入りの棚の名前を変えようとした・手動の棚に条件を付けたら 409（どちらかが当たれば何も変えない）。
+        応答の `bookCount` は 0。変えたときは `settingsChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: renameShelf
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShelfUpdateRequest'
+      responses:
+        '200':
+          description: 変えた後のシェルフ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShelfDTO'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: お気に入りの棚の名前を変えようとした・手動の棚に条件を付けた
+    delete:
+      summary: シェルフの削除（edit 以上）
+      description: |
+        シェルフを消す（棚の所属も消える。本そのものは消さない）。お気に入りの棚は消せない（409）。
+        `settingsChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: deleteShelf
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      responses:
+        '204':
+          description: 消した
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: お気に入りの棚は消せない
+
+  /libraries/{lib}/shelves/{id}/conditions:
+    get:
+      summary: スマートシェルフの条件の取得
+      description: |
+        スマートシェルフの条件を返す。古い形式で保存した条件は今の形式に直して返す。
+        スマートシェルフでなければ 409。条件が読めないときは 404。
+        施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: getShelfConditions
+      x-stacknest-tier: read
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      responses:
+        '200':
+          description: スマートシェルフの条件
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmartShelfConditions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/LibraryLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: スマートシェルフでない
+    put:
+      summary: スマートシェルフの条件の設定（edit 以上）
+      description: |
+        スマートシェルフの条件を置き換え、保存した条件をそのまま返す。スマートシェルフでなければ 409。
+        `settingsChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: setShelfConditions
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmartShelfConditions'
+      responses:
+        '200':
+          description: 保存した条件
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmartShelfConditions'
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: スマートシェルフでない
+
+  /libraries/{lib}/shelves/{id}/books:
+    post:
+      summary: 手動の棚に本を足す（edit 以上）
+      description: |
+        手動の棚（お気に入りを含む）の末尾に本を足す。既に所属している本は飛ばす。スマートシェルフには足せない（409）。
+        `structureChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: addBooksToShelf
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShelfBooksRequest'
+      responses:
+        '204':
+          description: 足した
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: スマートシェルフには足せない
+    delete:
+      summary: 手動の棚から本を外す（edit 以上）
+      description: |
+        手動の棚（お気に入りを含む）から本を外す（本そのものは消さない）。本文のある DELETE。スマートシェルフからは外せない（409）。
+        `structureChanged` イベントを出す。
+        **edit 以上の tier が必要。** 施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Shelves]
+      operationId: removeBooksFromShelf
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ライブラリ UUID
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: シェルフ ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShelfBooksRequest'
+      responses:
+        '204':
+          description: 外した
+        '400':
+          description: 本文が読めない
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: スマートシェルフからは外せない
 
   /libraries/{lib}/facets/{field}:
     get:
@@ -2165,6 +2989,50 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /libraries/{lib}/books/{id}/page-layout:
+    post:
+      summary: ページごとの見開きの上書き（edit 以上）
+      description: |
+        1 ページについて、見開きにする（`mode: 0`）・単ページにする（`mode: 1`）を本に保存する。`mode` を省くか null で上書きを消す（自動の判定に戻す）。
+        保存した上書きは manifest の `pageOverrides` に出る。ページ番号が 0 未満・ページ数以上、`mode` が 0・1 以外なら 400。
+        `bookChanged` イベントを出す。
+        **edit 以上の tier が必要**（方向の書き戻しと違い read では書けない）。施錠した書庫では書庫の鍵（`X-Library-Token`）が要る。
+      tags: [Books]
+      operationId: setPageLayout
+      x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
+      parameters:
+        - name: lib
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PageLayoutRequestBody'
+      responses:
+        '200':
+          description: 保存した（本文なし）
+        '400':
+          description: 本文が読めない・ページ番号が範囲外・mode が 0・1 以外
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrLocked'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /libraries/{lib}/books/{id}/rating:
     post:
       summary: 評価（rating）更新（R でも可）
@@ -2297,6 +3165,36 @@ paths:
           $ref: '#/components/responses/LibraryLocked'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /events:
+    get:
+      summary: ライブ同期のイベント（SSE）
+      description: |
+        書庫の変化を Server-Sent Events（`text/event-stream`）で流し続ける。鍵の scope の外の書庫のイベントは流さない。
+        EventSource はヘッダを付けられないので、`POST /session` で得たセッションの鍵を `?token=` で渡す。
+        約 5 秒ごとに心拍（`: ping` のコメント行）を送る。グラントのモードでは心拍ごとにグラントを確かめ直し、グラントが消えた・scope が変わったら流れを閉じる（tier だけの変更では閉じない。消えたグラントで繋ぎ直すと 401）。
+        施錠を見ない（書庫の鍵は要らない）。施錠中の書庫の `bookChanged` は、本の ID から蔵書数の目安が漏れないよう `bookId` を落とした `structureChanged` に丸める。
+        イベントの名前（`event:`）と `data:` の JSON:
+        - `bookChanged` `{"library": "<UUID>", "bookId": 1}`: 本のメタデータ・表紙・評価・未読・方向・見開きの上書きなどが変わった
+        - `structureChanged` `{"library": "<UUID>"}`: 本の追加・削除・復元・再リンク、棚の所属、整合性の検査、保守のジョブの終わりなどで一覧が変わった
+        - `settingsChanged` `{"library": "<UUID>"}`: 書庫の設定（ラベル・スタンプ・シェルフ・監視フォルダ・取り込み・一般の設定・プリセット・施錠）が変わった
+        - `maintenanceProgress` `{"library": "<UUID>", "job": "full-scan", "done": 10, "total": 100}`: 保守のジョブ（complete-metadata・compress-covers・full-scan）の進み
+        - `maintenanceFinished` `{"library": "<UUID>", "job": "full-scan", "outcome": "done", "count": 100}`: 保守のジョブの終わり（outcome は done・cancelled・failed）
+        読書位置の書き込み（progress・epub-progress）はイベントを出さない。
+      tags: [Events]
+      operationId: streamEvents
+      x-stacknest-tier: read
+      x-stacknest-lock: none
+      responses:
+        '200':
+          description: イベントの流れ（`Cache-Control` は no-cache）。切断するまで終わらない
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE のフレーム（`event:` の行・`data:` の行・空行）と心拍のコメント行
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
 tags:
   - name: Server
