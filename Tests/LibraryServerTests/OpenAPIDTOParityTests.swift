@@ -114,13 +114,26 @@ struct OpenAPIDTOParityTests {
         expectKeys((reply["book"] as? [String: Any] ?? [:]).keys, in: "BookListItemDTO", spec: spec)
     }
 
-    /// 読み方そのものの確かめ（入れ子の properties・次のスキーマのキーを拾わない）。
     /// G65: /me の応答（role は tier から導く互換の値・scope は G23 から）。
     @Test func meReplyKeysAreInTheSpec() throws {
         let spec = try specText()
         expectKeys(try object(MeReply(tier: .edit, scope: .libraries(["u"]))).keys, in: "MeReply", spec: spec)
     }
 
+    /// G65: DELETE book の応答（全項目を非 nil で入れて、すべてのキーを出す）。
+    @Test func bookRestoreKeysAreInTheSpec() throws {
+        let spec = try specText()
+        let dto = BookRestoreDTO(
+            id: 1, title: "t", author: "a", genre: "g", path: "/p",
+            dateAdded: 1, playDate: 2, bookType: 0, fileType: 1, pages: 3,
+            rating: 4, unseen: true, keywordA: "a", keywordB: "b", keywordC: "c",
+            neta: "n", memo: "m", series: "s", volume: 1.5, coverImageName: "c.jpg",
+            coverCropX: 0, coverCropY: 0, coverCropW: 1, coverCropH: 1,
+            pageDirection: "rtl", contentHash: "h", fileSize: 10, fileMtime: 5, hasCover: true)
+        expectKeys(try object(dto).keys, in: "BookRestoreDTO", spec: spec)
+    }
+
+    /// 読み方そのものの確かめ（入れ子の properties・次のスキーマのキーを拾わない）。
     @Test func readerPicksOnlyTheSchemaOwnProperties() {
         let yaml = """
         components:

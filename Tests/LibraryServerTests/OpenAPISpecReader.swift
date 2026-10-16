@@ -35,6 +35,27 @@ enum OpenAPISpecReader {
         var description: String { "openapi.yaml l.\(line): paths の字下げ \(indent) は読めない（2 の倍数で書く）: \(text)" }
     }
 
+    /// 同じ path のキーが 2 回ある。YAML としては通るが、後のものが前のものを黙って消す。
+    struct DuplicatePath: Error, CustomStringConvertible {
+        let line: Int
+        let path: String
+        var description: String { "openapi.yaml l.\(line): path \(path) が 2 回ある（既にある path には、そのブロックの下に method を足す）" }
+    }
+
+    /// 操作の中（字下げ 6）に method の名前の鍵がある。操作の入れ子の誤り。
+    struct MisplacedMethod: Error, CustomStringConvertible {
+        let line: Int
+        let text: String
+        var description: String { "openapi.yaml l.\(line): method が path の直下（字下げ 4）でなく 6 にある: \(text)" }
+    }
+
+    /// 応答の `$ref` が `#/components/responses/` で始まらない。
+    struct BadResponseRef: Error, CustomStringConvertible {
+        let line: Int
+        let ref: String
+        var description: String { "openapi.yaml l.\(line): 応答の $ref は #/components/responses/ で始める: \(ref)" }
+    }
+
     static func specText() throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // LibraryServerTests
@@ -51,6 +72,7 @@ enum OpenAPISpecReader {
         var current: OpenAPIOperation?
         var inResponses = false
         var status: String?
+        var seenPaths: Set<String> = []
         func flush() {
             if let c = current { ops.append(c) }
             current = nil; inResponses = false; status = nil
@@ -73,6 +95,7 @@ enum OpenAPISpecReader {
             switch indent {
             case 2:
                 flush(); path = key
+                if !seenPaths.insert(key).inserted { throw DuplicatePath(line: index + 1, path: key) }
             case 4:
                 flush()
                 if methods.contains(key), let path {
@@ -81,6 +104,8 @@ enum OpenAPISpecReader {
                     throw UnknownKey(line: index + 1, text: trimmed)
                 }
             case 6:
+                // path 直下の parameters の項目（`- name:`）は 6 に来るので、操作が無くても投げない。method の鍵だけ弾く。
+                if methods.contains(key) { throw MisplacedMethod(line: index + 1, text: trimmed) }
                 guard current != nil else { continue }
                 current?.fields[key] = value
                 inResponses = (key == "responses"); status = nil
@@ -89,7 +114,9 @@ enum OpenAPISpecReader {
                 status = code
                 current?.responses[code] = ""
             case 10 where inResponses && key == "$ref":
-                if let status { current?.responses[status] = unquote(value).components(separatedBy: "/").last ?? "" }
+                let ref = unquote(value)
+                if !ref.hasPrefix("#/components/responses/") { throw BadResponseRef(line: index + 1, ref: ref) }
+                if let status { current?.responses[status] = ref.components(separatedBy: "/").last ?? "" }
             default:
                 // 6 以上の深い行（本文・パラメータ・スキーマの中）は読み飛ばしてよい。
                 // 浅い奇数の字下げ（1・3・5）は、操作や path が黙って消えるので投げる。
@@ -99,5 +126,51 @@ enum OpenAPISpecReader {
         }
         flush()
         return ops
+    }
+
+    /// ファイル中のすべての `$ref: '#/components/<節>/<名前>'` のうち、その節に定義が無いもの。
+    /// 定義は `components:` の下の節（字下げ 2）の直下の名前（字下げ 4）。
+    static func unresolvedRefs(in yaml: String) -> [String] {
+        var defined: [String: Set<String>] = [:]
+        var refs: [(line: Int, section: String, name: String)] = []
+        var inComponents = false
+        var section: String?
+        for (index, raw) in yaml.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let line = String(raw)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            let indent = line.prefix(while: { $0 == " " }).count
+            if indent == 0 { inComponents = (trimmed == "components:"); section = nil }
+            if inComponents {
+                if indent == 2 { section = String(trimmed.dropLast(trimmed.hasSuffix(":") ? 1 : 0)) }
+                else if indent == 4, let section, trimmed.hasSuffix(":") {
+                    defined[section, default: []].insert(String(trimmed.dropLast()))
+                }
+            }
+            if let r = trimmed.range(of: "$ref:") {
+                let value = trimmed[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " '\""))
+                guard value.hasPrefix("#/components/") else { continue }
+                let parts = value.dropFirst("#/components/".count).split(separator: "/")
+                if parts.count == 2 { refs.append((index + 1, String(parts[0]), String(parts[1]))) }
+                else { refs.append((index + 1, "?", value)) }
+            }
+        }
+        return refs.filter { defined[$0.section]?.contains($0.name) != true }
+            .map { "l.\($0.line): $ref の先が無い: \($0.section)/\($0.name)" }
+    }
+
+    /// 最上位 `tags:` に宣言した名前。
+    static func declaredTags(in yaml: String) -> Set<String> {
+        var inTags = false
+        var names: Set<String> = []
+        for raw in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            if line.hasPrefix("tags:") { inTags = true; continue }
+            if inTags, !line.hasPrefix(" "), !line.isEmpty { inTags = false }
+            if inTags, line.hasPrefix("  - name:") {
+                names.insert(line.dropFirst("  - name:".count).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return names
     }
 }

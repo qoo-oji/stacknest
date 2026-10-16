@@ -34,6 +34,9 @@ security:
   - bearerAuth: []
 
 components:
+  # security の書き方: 施錠を見る操作（`/libraries/{lib}` の下で `x-stacknest-lock: none` でないもの）は、
+  # 書庫の鍵つき（bearerAuth + libraryToken）と鍵なし（bearerAuth）の 2 通りを並べる。
+  # 施錠を見ない操作は全体の既定（bearerAuth）のまま `security` を書かない。認証なしの操作だけ `security: []`。
   securitySchemes:
     bearerAuth:
       type: http
@@ -147,6 +150,93 @@ components:
         bookCount:
           type: integer
           description: 書籍数
+
+    BookRestoreDTO:
+      type: object
+      description: 削除した本の行（DELETE の応答。BookRow の全項目を可逆に運ぶ。日時は epoch 秒、方向は ltr / rtl）
+      required: [id, title, dateAdded, bookType, fileType, rating, unseen]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+          nullable: true
+        genre:
+          type: string
+          nullable: true
+        path:
+          type: string
+          nullable: true
+        dateAdded:
+          type: number
+        playDate:
+          type: number
+          nullable: true
+        bookType:
+          type: integer
+        fileType:
+          type: integer
+        pages:
+          type: integer
+          nullable: true
+        rating:
+          type: integer
+        unseen:
+          type: boolean
+        keywordA:
+          type: string
+          nullable: true
+        keywordB:
+          type: string
+          nullable: true
+        keywordC:
+          type: string
+          nullable: true
+        neta:
+          type: string
+          nullable: true
+        memo:
+          type: string
+          nullable: true
+        series:
+          type: string
+          nullable: true
+        volume:
+          type: number
+          nullable: true
+        coverImageName:
+          type: string
+          nullable: true
+        coverCropX:
+          type: number
+          nullable: true
+        coverCropY:
+          type: number
+          nullable: true
+        coverCropW:
+          type: number
+          nullable: true
+        coverCropH:
+          type: number
+          nullable: true
+        pageDirection:
+          type: string
+          nullable: true
+        contentHash:
+          type: string
+          nullable: true
+        fileSize:
+          type: integer
+          nullable: true
+        fileMtime:
+          type: number
+          nullable: true
+        hasCover:
+          type: boolean
+          nullable: true
+          description: 削除時点で表紙があったか（restore がサムネイルを作り直すかの判断に使う）
 
     UnlockReply:
       type: object
@@ -740,6 +830,13 @@ paths:
           description: パスワード不正
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          description: 失敗が続いたため一定時間拒否（ブルートフォース抑止）。待つ秒数をヘッダ `Retry-After` で返す
+          headers:
+            Retry-After:
+              description: 再試行までの秒数
+              schema:
+                type: string
 
   /libraries/{lib}/books:
     parameters:
@@ -1034,6 +1131,10 @@ paths:
       tags: [Books]
       operationId: updateBook
       x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1075,6 +1176,10 @@ paths:
       operationId: deleteBook
       x-stacknest-tier: edit
       x-stacknest-tier-note: '?trash=true のときは admin'
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1092,8 +1197,12 @@ paths:
             type: boolean
           description: true で実ファイルをゴミ箱へ（サーバサポート外は 501）
       responses:
-        '204':
-          description: 削除成功
+        '200':
+          description: 削除した行（リモートの undo 用。`POST /libraries/{lib}/books/restore` の本文にそのまま使える）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookRestoreDTO'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1145,6 +1254,10 @@ paths:
       tags: [Stamps]
       operationId: setStampDefinitions
       x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1181,6 +1294,10 @@ paths:
       tags: [Stamps]
       operationId: applyStamp
       x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1357,6 +1474,10 @@ paths:
       tags: [Cover]
       operationId: setCover
       x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1429,6 +1550,10 @@ paths:
       tags: [Labels]
       operationId: setLabelSettings
       x-stacknest-tier: edit
+      security:
+        - bearerAuth: []
+          libraryToken: []
+        - bearerAuth: []
       parameters:
         - name: lib
           in: path
@@ -1720,7 +1845,7 @@ paths:
       description: |
         `POST /libraries/{lib}/books/{id}/viewer-token` で発行したトークンが、対応ビューアに使われたかを返す。
         読めるのは発行した主体だけ（同じグラント。固定トークンで発行したものは固定トークンで）で、その書庫が今の scope に入っていること。
-        本専用トークン自身では呼べない（403）。scope の外の書庫の記録・発行した主体でない鍵も 403。応答に本の中身は無いので、ロック庫でも `X-Library-Token` は要らない。
+        本専用トークン自身では呼べない（403）。scope の外の書庫の記録・発行した主体でない鍵も 403。404 は、その ID のトークンが無いとき（期限切れで消えた・別の口で発行した）だけで、scope の外の書庫は 404 でなく 403。応答に本の中身は無いので、ロック庫でも `X-Library-Token` は要らない。
         固定トークン（グラント無し）で動かしているサーバでは主体が区別できないので、同じトークンを持つ接続はどれも、
         そのトークンで発行した本専用トークンの使用の状況（日時と名乗りだけ）を読める。
       tags: [Viewer]
@@ -1838,12 +1963,14 @@ paths:
                 format: binary
         '304':
           description: 変更なし（1600 以外の maxw を付けて取り次いだ要求で、If-None-Match が一致）
+        '400':
+          description: "`n` が数でない"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: リモートでページ範囲外（リモートの応答をそのまま返す。この道自体の書庫・本の解決はしない）
         '502':
           description: リモートに届かない・リダイレクト・本文が上限を超えた
 

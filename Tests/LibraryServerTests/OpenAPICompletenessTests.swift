@@ -10,7 +10,13 @@ struct OpenAPICompletenessTests {
     static let responseNames: Set<String> = ["Unauthorized", "Forbidden", "LibraryLocked", "ForbiddenOrLocked", "NotFound"]
 
     @Test func everyOperationCarriesTheRequiredItems() throws {
-        let yaml = try OpenAPISpecReader.specText()
+        let problems = try Self.problems(in: OpenAPISpecReader.specText())
+        #expect(problems.isEmpty, Comment(rawValue: "\n" + problems.joined(separator: "\n")))
+    }
+
+    /// 欠けの一覧（空なら良い）。試験から悪い YAML も渡せるよう、文字列を取る。
+    static func problems(in yaml: String) throws -> [String] {
+        let declaredTags = OpenAPISpecReader.declaredTags(in: yaml)
         let ops = try OpenAPISpecReader.operations(in: yaml)
         var problems: [String] = []
         var ids: [String: String] = [:]
@@ -21,6 +27,14 @@ struct OpenAPICompletenessTests {
             if let id = op.fields["operationId"] {
                 if let other = ids[id] { problems.append("operationId \(id) が重複: \(other) と \(op.key)") }
                 ids[id] = op.key
+            }
+            if let tags = op.fields["tags"] {
+                let names = tags.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+                    .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                for name in names where !declaredTags.contains(name) { problems.append("\(op.key): 宣言していないタグ \(name)") }
+            }
+            if ["{lib}", "{id}", "{uuid}", "{tokenID}"].contains(where: op.path.contains), op.responses["404"] != "NotFound" {
+                problems.append("\(op.key): 404 に NotFound が無い")
             }
             let tier = op.fields["x-stacknest-tier"] ?? ""
             if !Self.tiers.contains(tier) { problems.append("\(op.key): x-stacknest-tier の値が不正: \(tier)") }
@@ -48,6 +62,103 @@ struct OpenAPICompletenessTests {
         for name in Self.responseNames where !yaml.contains("\n    \(name):\n") {
             problems.append("components.responses に \(name) が無い")
         }
-        #expect(problems.isEmpty, Comment(rawValue: "\n" + problems.joined(separator: "\n")))
+        problems += OpenAPISpecReader.unresolvedRefs(in: yaml)
+        return problems
+    }
+
+    private static let badBase = """
+    components:
+      responses:
+        Unauthorized:
+          description: x
+      schemas:
+        A:
+          type: object
+    tags:
+      - name: T
+    """
+
+    @Test func missing404IsReported() throws {
+        let yaml = """
+        paths:
+          /libraries/{lib}/x:
+            get:
+              summary: s
+              tags: [T]
+              operationId: x
+              x-stacknest-tier: read
+              responses:
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+        """ + "\n" + Self.badBase
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("404 に NotFound が無い") })
+    }
+
+    @Test func undeclaredTagAndDanglingRefsAreReported() throws {
+        let yaml = """
+        paths:
+          /a:
+            get:
+              summary: s
+              tags: [Nope]
+              operationId: x
+              x-stacknest-tier: read
+              responses:
+                '200':
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Missing'
+                '401':
+                  $ref: '#/components/responses/Unauthorized'
+        """ + "\n" + Self.badBase
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("宣言していないタグ Nope") })
+        #expect(problems.contains { $0.contains("schemas/Missing") })
+    }
+
+    @Test func responseRefIntoAnotherSectionThrows() {
+        let yaml = """
+        paths:
+          /a:
+            get:
+              responses:
+                '401':
+                  $ref: '#/components/schemas/Unauthorized'
+        """
+        #expect(throws: OpenAPISpecReader.BadResponseRef.self) { try OpenAPISpecReader.operations(in: yaml) }
+    }
+
+    @Test func repeatedPathAndMisplacedMethodThrow() {
+        let dup = """
+        paths:
+          /a:
+            get:
+              responses: {}
+          /b:
+            get:
+              responses: {}
+          /a:
+            post:
+              responses: {}
+        """
+        #expect(throws: OpenAPISpecReader.DuplicatePath.self) { try OpenAPISpecReader.operations(in: dup) }
+        let misplaced = """
+        paths:
+          /a:
+            get:
+              responses: {}
+              post:
+                responses: {}
+        """
+        #expect(throws: OpenAPISpecReader.MisplacedMethod.self) { try OpenAPISpecReader.operations(in: misplaced) }
+        let direct = """
+        paths:
+          /a:
+              get:
+                responses: {}
+        """
+        #expect(throws: OpenAPISpecReader.MisplacedMethod.self) { try OpenAPISpecReader.operations(in: direct) }
     }
 }
