@@ -102,6 +102,34 @@ struct WashiTextAnchorPersistTests {
         await drain()
     }
 
+    /// Washi 1.24.0: 錨付きの復元では最初の報告が着地そのもの（章頭の一時的な報告は先に来ない）で、
+    /// 着地の後に同じ位置が再報告されうる。再報告も復元のアンカーを付けたまま出し、補完（JS 往復）を
+    /// 呼ばず、保護も外さない。動けば保護は外れ、補完が 1 回だけ走る（対照）。
+    @Test func landingReReportKeepsTheAnchorWithoutFetching() async {
+        let gate = AnchorGate()
+        let (host, reports) = makeHost(gate: gate)
+        host.go(to: EPUBLocatorValue(spine: 5, progress: 0.3, cfi: "washi:t=77;idref=c5", engine: "washi"))
+        // 最初の報告 = 着地（章の途中）
+        host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 5, progression: 0.31, idref: "c5"),
+                        pageInItem: 1, pageCountInItem: 4)
+        // 着地の後の再報告（同じ位置）
+        host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 5, progression: 0.31, idref: "c5"),
+                        pageInItem: 1, pageCountInItem: 4)
+        await drain()
+        let anchored = EPUBLocatorValue(spine: 5, progress: 0.31, cfi: "washi:t=77;idref=c5", engine: "washi")
+        #expect(reports() == [anchored, anchored])
+        #expect(gate.pending.isEmpty)   // 着地にも再報告にも補完を呼ばない
+        #expect(host.lastPublished?.textOffset == 77)
+        // 動いたら外れ、補完が 1 回だけ走る
+        host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 5, progression: 0.6, idref: "c5"),
+                        pageInItem: 2, pageCountInItem: 4)
+        await drain()
+        #expect(reports().last?.cfi == nil)
+        #expect(gate.pending.count == 1)
+        gate.resumeAll()
+        await drain()
+    }
+
     /// 着地の補完はページ先頭の文を返す。これで復元した文が前へずれてはいけない
     /// （開いて閉じるたびに保存位置が後退する）。動いた後は補完が普通に効く。
     @Test func enrichmentDoesNotDowngradeRestoredAnchor() async {

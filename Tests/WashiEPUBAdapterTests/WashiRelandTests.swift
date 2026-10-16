@@ -281,6 +281,35 @@ struct WashiRelandTests {
         #expect(navs.isEmpty)
     }
 
+    // MARK: Washi 1.24.0 — 着地の後の同じ位置の再報告
+
+    /// 1.24.0 は着地の後に同じ位置を再報告しうる。再報告で保護が外れると、続く全画面化で
+    /// 同じ文へ戻れない。戻った先の着地の再報告でも、もう一度戻ったり保護を外したりしない。
+    @Test func landingReReportKeepsTheGuardForResize() {
+        let clock = Clock()
+        let (host, navs) = makeLoadedHost(clock: clock)   // 着地 (2, 0.5) は報告済み
+        // 着地の後の再報告（同じ位置）
+        host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 2, progression: 0.5, idref: "c2"),
+                        pageInItem: 3, pageCountInItem: 7)
+        #expect(navs().isEmpty)
+        #expect(host.lastPublished?.textOffset == 400)
+        // 保護は残っている: 大きさの変化で控え、再ページ割りの報告で同じ文へ戻る
+        host.view.setFrameSize(NSSize(width: 800, height: 600))
+        host.view.setFrameSize(NSSize(width: 1440, height: 900))
+        host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 2, progression: 0.41, idref: "c2"),
+                        pageInItem: 2, pageCountInItem: 5)
+        #expect(navs().count == 1)
+        #expect(navs().first?.textOffset == 400)
+        // 戻った先の着地と、その再報告
+        for _ in 0..<2 {
+            host.readerView(host.reader, didMoveTo: EPUBLocator(spineIndex: 2, progression: 0.45, idref: "c2"),
+                            pageInItem: 2, pageCountInItem: 5)
+        }
+        #expect(navs().count == 1)
+        #expect(host.lastPublished?.textOffset == 400)
+        #expect(host.lastPublished?.progression == 0.45)
+    }
+
     // MARK: G56 Codex レビュー（P2）— Washi が内部で処理する入力でも控えを捨てる
 
     private static let click = EPUBClickEvent(x: 0.95, y: 0.5, locationInView: CGPoint(x: 760, y: 300),

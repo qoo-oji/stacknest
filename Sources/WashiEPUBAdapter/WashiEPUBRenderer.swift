@@ -123,6 +123,9 @@ final class WashiReaderHost: NSObject, EPUBReaderViewing, EPUBReaderViewDelegate
     /// 最後に `onLocatorChange` へ出した位置（Washi の型）。Task 9 の「設定変更で同じ文へ戻る」が使う。
     private(set) var lastPublished: EPUBLocator?
     /// 現在位置をアンカー付きで取る（JS 1 往復）。テストで差し替える。
+    /// 呼ぶのは `didMoveTo` の中（保護中でない報告）だけ。Washi 1.24.0 の `currentLocatorWithTextAnchor()` は、
+    /// 錨への着地待ちの間は復元先の章・進行率と表示中のページの文の位置を混ぜて返すため、着地後最初の
+    /// `didMoveTo` より前に保存へ使ってはいけない（着地待ちの間 `didMoveTo` は届かないので、ここは満たす）。
     lazy var fetchAnchoredLocator: @MainActor () async -> EPUBLocator = { [weak self] in
         guard let self else { return EPUBLocator(spineIndex: 0) }
         return await self.reader.currentLocatorWithTextAnchor()
@@ -540,13 +543,18 @@ final class WashiReaderHost: NSObject, EPUBReaderViewing, EPUBReaderViewDelegate
             let key = LandingKey(spine: locator.spineIndex, progress: locator.progression)
             if guardState.landing == nil {
                 // 着地は復元先と同じ spine（idref が両方あれば一致）の報告にだけ結ぶ。
-                // Washi の移動が途中で戻った等で別の章の報告が先に来たら、保護を外す
-                // （古い textOffset と idref を別の章へ付けると、次回は違う章で開いてしまう）。
+                // Washi 1.24.0 以降、錨付きの load / go(to:) の最初の didMoveTo は着地した位置で、
+                // 章頭などの一時的な位置は先に届かない（1.23.0 までは連続スクロール表示などで章頭が
+                // 先に届き、鍵がそこに結ばれて、続く本当の着地で保護が外れていた）。
+                // それでも別の章の報告が先に来たら（読めない項目からの復旧、着地待ちの間の利用者の操作）、
+                // 保護を外す（古い textOffset と idref を別の章へ付けると、次回は違う章で開いてしまう）。
                 if Self.isSameItem(locator, as: guardState.anchor) {
                     guardState.landing = key
                     restoredAnchor = guardState
                 }
             }
+            // 着地の後の同じ位置の再報告（1.24.0 は着地の後に位置を報告し直すので、同じ位置が二度届きうる）も
+            // 鍵が同じなので、アンカーを付けたまま出し、保護も外さず、補完もしない。
             if guardState.landing == key {
                 reported.textOffset = guardState.anchor.textOffset
                 reported.idref = guardState.anchor.idref ?? reported.idref
