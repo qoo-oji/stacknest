@@ -208,15 +208,19 @@ struct BookTableRowUpdateTests {
         #expect(h.state.hasDisplayedBooks)
     }
 
+    /// 前半は観測では確かめられない（Swift 6.3 の `@Observable` は同じ値の代入を知らせない）ので、番兵で見る:
+    /// `handleExternalBookChange` から `displayedSelectedBooks` に書くのは、変わった本が選択中のときだけ呼ぶ
+    /// `refreshDisplayedSelectedBooks()` の 1 か所。選ばれていない本の変更の後も番兵（空）が残れば、呼ばれていない。
     @Test func unselectedChangeDoesNotReassignTheSelectedBooks() throws {
         let h = try makeHarness()
         let selected = h.state.sortedDisplayedBooks[0].id
         let other = h.state.sortedDisplayedBooks[1].id
         h.state.selectedBookIDs = [selected]
+        h.state.displayedSelectedBooks = []   // 番兵: 選び直されると [選択中の本] に戻る（観測の見張りより前に置く）
         let fired = FiredFlag()
         withObservationTracking { _ = h.state.displayedSelectedBooks } onChange: { fired.set() }
         try externalSet(h, other) { $0.series = "G62 ほか" }
-        #expect(!fired.value)
+        #expect(h.state.displayedSelectedBooks.isEmpty)
         try externalSet(h, selected) { $0.series = "G62 選択中" }
         #expect(fired.value)
         #expect(h.state.displayedSelectedBooks.first?.series == "G62 選択中")

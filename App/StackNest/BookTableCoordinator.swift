@@ -179,10 +179,11 @@ final class BookTableCoordinator: NSObject {
         let structureChanged = version != lastDataVersion
         if structureChanged || changes.contentVersion != lastContentVersion {
             let changed: Set<Int> = structureChanged ? [] : changes.changed(since: lastContentVersion)
+            let currentIDs = books.map(\.id)   // 計画と displayedIDs の両方に使う（12k 件を 2 回並べない）
             let update = ListUpdatePlanner.plan(
-                displayed: displayedIDs, current: books.map(\.id),
+                displayed: displayedIDs, current: currentIDs,
                 changed: changed, structureChanged: structureChanged)
-            applyListUpdate(update, to: table, books: books)
+            applyListUpdate(update, to: table, currentIDs: currentIDs)
             lastDataVersion = version
             lastContentVersion = changes.contentVersion
         }
@@ -238,8 +239,9 @@ final class BookTableCoordinator: NSObject {
     }
 
     /// G62（spec §6.4）: 計画を表に当てる。どの場合も、表が出している ID の並び（`displayedIDs`）を AppState に揃える。
-    private func applyListUpdate(_ update: ListUpdate, to table: NSTableView, books: [BookRow]) {
-        if case .unchanged = update { return }
+    /// `currentIDs` は AppState の今の並び（`sortedDisplayedBooks` の ID）。
+    private func applyListUpdate(_ update: ListUpdate, to table: NSTableView, currentIDs: [Int]) {
+        if case .unchanged = update { return }   // 何もしないときは区間も記録も作らない
         let signpostID = ListUpdateLog.signposter.makeSignpostID()
         let interval = ListUpdateLog.signposter.beginInterval("table", id: signpostID)
         let start = ContinuousClock.now
@@ -247,10 +249,12 @@ final class BookTableCoordinator: NSObject {
         let rows: Int
         switch update {
         case .unchanged:
-            return
+            // 上で返しているので来ない。来ても区間を閉じずに返らないよう、ここでは return しない。
+            kind = "unchanged"
+            rows = 0
         case .full:
             kind = "full"
-            rows = books.count
+            rows = currentIDs.count
             table.reloadData()
         case .reloadRows(let indexes):
             kind = "rows"
@@ -266,7 +270,7 @@ final class BookTableCoordinator: NSObject {
             table.endUpdates()
             isApplyingRowMoves = false
         }
-        displayedIDs = books.map(\.id)
+        displayedIDs = currentIDs
         ListUpdateLog.signposter.endInterval("table", interval)
         ListUpdateLog.logger.info("table plan=\(kind, privacy: .public) rows=\(rows) ms=\(ListUpdateLog.ms(start.duration(to: .now)), format: .fixed(precision: 1))")
     }
