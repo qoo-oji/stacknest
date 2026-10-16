@@ -161,6 +161,132 @@ class RemoteScopeTests(Base):
         self.assertEqual(rc, 0, err)
 
 
+NO_SUCH_LOCALE = "xx_XX.UTF-8"
+# (一覧に書く検査語, それに当たる文面)。文字としての扱いが要る書き方: 漢字を挟む「.」、U+3000 を含む括弧、全角文字の -i
+CHARACTER_CASES = [
+    ("山田.?太郎", "山田　太郎"),
+    ("山田[ 　]?太郎", "山田　太郎"),
+    ("ｙａｍａｄａ", "ＹＡＭＡＤＡ"),
+]
+
+
+class DualLocaleTests(Base):
+    """照合は C ロケールと UTF-8 ロケールの両方で行う（不正なバイトと同じ行の識別子・文字としての検査語の両方を拾う）。"""
+
+    def set_list(self, *patterns):
+        self.list.write_text("\n".join(patterns) + "\n", encoding="utf-8")
+
+    def push(self, tip, base=None, env=None, locale=None):
+        e = dict(env or self.env)
+        if locale:
+            e["LC_ALL"] = locale
+        return self.run_script("pre-push", stdin=f"refs/heads/main {tip} refs/heads/main {base or self.base}\n", env=e)
+
+    def leak_then_remove(self, before, text=None, message="add"):
+        """識別子を足すコミットと消すコミットを作る（先端のファイル全体・名前・メッセージはきれい）。先端を返す。"""
+        self.round = getattr(self, "round", 0) + 1
+        clean = f"clean {self.round}\n"                  # 繰り返しても毎回コミットが作れるように中身を変える
+        self.base = self.commit("a.txt", clean, "start")
+        self.commit("a.txt", clean.encode() + before + (text or WORD).encode() + b"\n", message)
+        return self.commit("a.txt", clean, "remove")
+
+    def test_identifier_on_the_same_line_after_invalid_bytes_stops_in_push(self):
+        tip = self.leak_then_remove(b"\xff\xfe ")
+        for locale in ("en_US.UTF-8", "C"):
+            with self.subTest(locale=locale):
+                rc, err = self.push(tip, locale=locale)
+                self.assertEqual(rc, 1, err)
+                self.assertIn("added by an outgoing commit", err)
+
+    def test_identifier_on_the_next_line_after_invalid_bytes_stops_in_push(self):
+        tip = self.leak_then_remove(b"before \xff\xfe after\n")
+        self.assertEqual(self.push(tip, locale="en_US.UTF-8")[0], 1)
+
+    def test_identifier_on_the_same_line_after_invalid_bytes_stops_in_text(self):
+        for locale in ("en_US.UTF-8", "C"):
+            with self.subTest(locale=locale):
+                path = self.tmp / "raw.txt"
+                path.write_bytes(b"\xff\xfe " + WORD.encode() + b"\n")
+                env = dict(self.env, LC_ALL=locale)
+                self.assertEqual(self.run_script("text", str(path), env=env)[0], 1)
+
+    def test_identifier_in_a_commit_message_line_with_invalid_bytes_stops(self):
+        self.base = self.commit("a.txt", "clean\n", "start")
+        self.repo.joinpath("a.txt").write_text("clean\nmore\n")
+        self.git("add", "a.txt")
+        msg = self.tmp / "msg.bin"
+        msg.write_bytes(b"change\n\n\xff\xfe " + WORD.encode() + b"\n")
+        self.git("commit", "-q", "--cleanup=verbatim", "-F", str(msg))
+        tip = self.git("rev-parse", "HEAD")
+        rc, err = self.push(tip, locale="en_US.UTF-8")
+        self.assertEqual(rc, 1, err)
+        self.assertIn("commit messages", err)
+
+    def test_character_patterns_stop_in_push_tree_and_text(self):
+        # 利用者のロケールが C でも UTF-8 でも、文字として扱う検査語が当たること
+        for locale in ("en_US.UTF-8", "C"):
+            for pattern, text in CHARACTER_CASES:
+                with self.subTest(locale=locale, pattern=pattern):
+                    self.set_list(pattern)
+                    env = dict(self.env, LC_ALL=locale)
+                    tip = self.leak_then_remove(b"", text)
+                    rc, err = self.push(tip, env=env)                  # パッチだけ（先端は消した後できれい）
+                    self.assertEqual(rc, 1, err)
+                    self.assertIn("added by an outgoing commit", err)
+                    leaked = self.commit("b.txt", text + "\n")
+                    rc, err = self.run_script("tree", leaked, env=env)
+                    self.assertEqual(rc, 1, err)
+                    self.assertIn("files of", err)
+                    rc, err = self.run_script("text", stdin=text + "\n", env=env)
+                    self.assertEqual(rc, 1, err)
+                    self.assertIn("found in the text", err)
+                    self.git("rm", "-q", "b.txt")
+                    self.git("commit", "-q", "-m", "drop")
+
+    def test_clean_inputs_pass_including_invalid_bytes_and_a_near_miss(self):
+        self.set_list("山田.?太郎")
+        path = self.tmp / "clean.txt"
+        path.write_bytes(b"\xff " + "山田花子\n".encode())
+        self.assertEqual(self.run_script("text", str(path))[0], 0)
+        self.assertEqual(self.run_script("text", stdin="山田花子\n")[0], 0)
+        self.base = self.commit("a.txt", "clean\n", "start")
+        tip = self.commit("a.txt", b"\xff\xfe " + "山田花子\n".encode())
+        rc, err = self.push(tip, locale="en_US.UTF-8")
+        self.assertEqual(rc, 0, err)
+
+    def test_failure_while_reading_the_list_stops(self):
+        env = self.fake("grep", 'for a in "$@"; do [ "$a" = "-v" ] && { echo partial; exit 2; }; done\nexec /usr/bin/grep "$@"')
+        rc, err = self.run_script("text", stdin="clean\n", env=env)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("could not read the identifier list", err)
+
+    def test_missing_utf8_locale_stops(self):
+        tip = self.commit("a.txt", "clean\n")
+        env = dict(self.env, STACKNEST_GUARD_UTF8_LOCALE=NO_SUCH_LOCALE)
+        for args, stdin in ((("pre-push",), f"refs/heads/main {tip} refs/heads/main {ZERO}\n"),
+                            (("tree", tip), ""), (("text",), "clean\n")):
+            with self.subTest(mode=args[0]):
+                rc, err = self.run_script(*args, stdin=stdin, env=env)
+                self.assertEqual(rc, 1, err)
+                self.assertIn("locale", err)
+
+    def test_failing_iconv_stops(self):
+        env = self.fake("iconv", "exit 1")
+        rc, err = self.run_script("text", stdin="clean\n", env=env)
+        self.assertNotEqual(rc, 0)
+
+    def test_first_file_without_a_final_newline_does_not_join_the_next(self):
+        self.set_list("^" + WORD)
+        first, second = self.tmp / "first.txt", self.tmp / "second.txt"
+        first.write_bytes(b"abc")
+        second.write_bytes(WORD.encode() + b"\n")
+        self.assertEqual(self.run_script("text", str(first), str(second))[0], 1)
+
+    def test_a_missing_file_stops_text(self):
+        rc, err = self.run_script("text", str(self.tmp / "nope.txt"))
+        self.assertNotEqual(rc, 0)
+
+
 class HookTests(unittest.TestCase):
     def test_the_hook_passes_the_remote_name(self):
         self.assertIn('check-private-identifiers.sh" pre-push "$1"', HOOK.read_text())
