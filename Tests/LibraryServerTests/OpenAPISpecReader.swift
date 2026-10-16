@@ -152,7 +152,8 @@ enum OpenAPISpecReader {
                 inComponents = (trimmed == "components:"); section = nil
                 // 字下げ 0 の列の項目（`- …`）は鍵ではないので数えない。
                 if !trimmed.hasPrefix("-"), let colon = trimmed.firstIndex(of: ":") {
-                    let key = String(trimmed[..<colon])
+                    // `tags :` も YAML では `tags` の鍵。コロンの前の空白を落として比べる。
+                    let key = trimmed[..<colon].trimmingCharacters(in: .whitespaces)
                     if !topLevelKeys.insert(key).inserted {
                         duplicates.append("l.\(index + 1): 最上位の \(key) が 2 回ある（後のものだけが配信され、前のブロックは丸ごと消える。既にあるブロックの中に足す）")
                     }

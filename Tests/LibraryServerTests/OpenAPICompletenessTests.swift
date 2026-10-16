@@ -161,6 +161,19 @@ struct OpenAPICompletenessTests {
         #expect(problems.contains { $0.contains("最上位の \(key) が 2 回ある") }, Comment(rawValue: problems.joined(separator: "\n")))
     }
 
+    /// 鍵とコロンの間に空白があっても（`tags :`）、YAML では同じ `tags` の鍵なので、2 回目として報告する。
+    @Test func topLevelKeyWithSpaceBeforeColonIsReported() throws {
+        let yaml = """
+        openapi: 3.1.0
+        paths:
+          /a:
+            get:
+              summary: s
+        """ + "\n" + Self.badBase + "\n" + "tags :\n  - name: New"
+        let problems = try Self.problems(in: yaml)
+        #expect(problems.contains { $0.contains("最上位の tags が 2 回ある") }, Comment(rawValue: problems.joined(separator: "\n")))
+    }
+
     @Test func securityAndTagShapesAreChecked() throws {
         let yaml = """
         paths:
