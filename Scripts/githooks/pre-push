@@ -11,7 +11,7 @@ fi
 ROOT="$(git rev-parse --show-toplevel)"
 CHECK="$ROOT/Scripts/check-private-identifiers.sh"
 # 標準入力（ref の組）は 1 度しか読めないので、受けてから検査に渡す。
-REFS="$(cat)"
+REFS="$(cat)" || { echo "pre-push: cannot read the refs. Push refused." >&2; exit 1; }   # 読めないのを「空」と取り違えない
 [ -n "$REFS" ] || exit 0
 # push する ref の名前（ブランチ・タグ。軽量タグも）と、注釈付きタグのメッセージ（コミットの検査では見えない）を
 # 個人識別子の検査にかける。タグは ref の名前ではなく、送るオブジェクトの種類で決める
@@ -21,7 +21,8 @@ trap 'rm -f "$TAGTEXT"' EXIT
 ZERO="0000000000000000000000000000000000000000"
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue
-  printf '%s\n' "$remote_ref" > "$TAGTEXT"
+  # 完全な名前と、refs/heads/ などを外した名前の両方を見る（^ で始まる検査語が名前の先頭に当たるように）
+  printf '%s\n%s\n' "$remote_ref" "${remote_ref#refs/*/}" > "$TAGTEXT"
   "$CHECK" text "$TAGTEXT" || { echo "pre-push: ref name $remote_ref refused." >&2; exit 1; }
   obj="$local_sha"
   while :; do

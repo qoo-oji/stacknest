@@ -107,6 +107,7 @@ if [ -n "$POSITIONAL_STDIN" ]; then
   # 位置引数の "-" は gh が標準入力から読む（gist のファイル名なども gh の決めたまま）。検査した本文をそのまま戻す
   gh "${ARGS[@]}" < "$STDIN_BODY" || rc=$?
 else
-  gh "${ARGS[@]}" || rc=$?
+  # 「-」が無いときは、呼び出し側の標準入力を gh に渡さない（gist create は標準入力を読む。検査していない本文が公開されるため）
+  gh "${ARGS[@]}" < /dev/null || rc=$?
 fi
 exit "$rc"

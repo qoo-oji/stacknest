@@ -358,6 +358,13 @@ class GhGuardedStdinTests(WithScripts):
         self.assertTrue(self.gh.calls().strip().endswith("gist create -f notes.md -"), self.gh.calls())
         self.assertEqual(self.gh.stdin(), "more words\n")
 
+    def test_caller_stdin_without_a_dash_never_reaches_gh(self):
+        # 「-」が無いときに gh が呼び出し側の標準入力を読むと、検査していない本文が公開される（gist create は標準入力を読む）
+        result = self.post("gist", "create", stdin=f"see {WORD}\n")
+        self.assertEqual(self.gh.calls().split(), ["gist", "create"], result.stderr)
+        self.assertNotIn(WORD, self.gh.stdin())
+        self.assertEqual(self.gh.stdin(), "")
+
 
 class TagAndRefNameTests(WithScripts):
     def run_hook(self, stdin):
@@ -414,6 +421,23 @@ class TagAndRefNameTests(WithScripts):
         for name in ("refs/heads/feature/x", "refs/tags/0.1.0"):
             with self.subTest(name=name):
                 self.assertEqual(self.run_hook(f"refs/heads/main {head} {name} {ZERO}\n").returncode, 0)
+
+    def test_anchored_pattern_matches_the_name_without_the_refs_prefix(self):
+        self.list.write_text("^" + WORD + "\n")
+        head = self.git("rev-parse", "HEAD")
+        result = self.run_hook(f"refs/heads/main {head} refs/heads/{WORD}-topic {ZERO}\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ref name", result.stderr)
+
+    def test_failure_to_read_the_refs_refuses_the_push(self):
+        fd = os.open(str(self.tmp), os.O_RDONLY)                  # ディレクトリを標準入力にすると cat が失敗する
+        try:
+            result = subprocess.run([str(self.repo / "Scripts" / "githooks" / "pre-push"), "origin", "x"],
+                                    cwd=self.repo, env=self.env, stdin=fd, capture_output=True, text=True)
+        finally:
+            os.close(fd)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read the refs", result.stderr)
 
     def test_deleting_a_ref_needs_no_name_check(self):
         head = self.git("rev-parse", "HEAD")
