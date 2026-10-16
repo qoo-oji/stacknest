@@ -125,7 +125,9 @@ final class WashiReaderHost: NSObject, EPUBReaderViewing, EPUBReaderViewDelegate
     /// 現在位置をアンカー付きで取る（JS 1 往復）。テストで差し替える。
     /// 呼ぶのは `didMoveTo` の中（保護中でない報告）だけ。Washi 1.24.0 の `currentLocatorWithTextAnchor()` は、
     /// 錨への着地待ちの間は復元先の章・進行率と表示中のページの文の位置を混ぜて返すため、着地後最初の
-    /// `didMoveTo` より前に保存へ使ってはいけない（着地待ちの間 `didMoveTo` は届かないので、ここは満たす）。
+    /// `didMoveTo` より前に保存へ使ってはいけない。ここで満たす理由: Washi は報告を `didMoveTo` で届ける前に
+    /// 復元先（`pendingRestoreLocator`）を消すので、届いた報告の時点では混ざった値にならない（利用者の操作で
+    /// 着地待ちが早く終わった場合も同じ）。再着地で保護をかけ直した後に古い補完が戻っても、世代の照合で捨てる。
     lazy var fetchAnchoredLocator: @MainActor () async -> EPUBLocator = { [weak self] in
         guard let self else { return EPUBLocator(spineIndex: 0) }
         return await self.reader.currentLocatorWithTextAnchor()
