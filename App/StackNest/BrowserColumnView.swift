@@ -170,6 +170,15 @@ struct BrowserColumnView: View {
         }
         // G62 T1（spec §6.7・§7.1-3）: 問い合わせの回数と鍵の変化を記録する（鍵の中身は出さない）。
         ListUpdateLog.logger.info("facet load column=\(columnIndex) key=\(ListUpdateLog.digest(refreshKey), privacy: .public)")
-        values = await facetValues(field.sqlColumn, upperConstraints)
+        // G62（spec §6.7）: 鍵が変わって取り消された後の結果で、新しい値を上書きしない（`.task(id:)` の取り消しは
+        // `Task.detached` に伝わらないので、待ちの後で見る）。
+        guard let fetched = await Self.fetchUnlessCancelled({ await facetValues(field.sqlColumn, upperConstraints) }) else { return }
+        values = fetched
+    }
+
+    /// G62: `fetch` の結果を返す。待っている間に呼び出した Task が取り消されたら nil（結果を捨てる）。
+    static func fetchUnlessCancelled(_ fetch: () async -> [String]) async -> [String]? {
+        let fetched = await fetch()
+        return Task.isCancelled ? nil : fetched
     }
 }

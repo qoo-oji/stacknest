@@ -35,6 +35,12 @@ final class AppState {
     @ObservationIgnored var canServePages: @Sendable (String, UserExtensionMap) async -> Bool = { path, list in
         await BookReadability.canServePages(path: path, userExtensions: list)
     }
+    /// G62（spec §6.7）: ブラウザ区画の問い合わせの本体。`Task.detached` の中（MainActor の外）で呼ばれる。
+    /// テストは差し替えて、どのスレッドで走ったかを記録する。
+    @ObservationIgnored var facetQuery: @Sendable (Database, LocalFacetQueryInput) throws -> [String] = { db, input in
+        try db.distinctValues(forColumn: input.columnSQL, query: input.query, sidebarScope: input.scope,
+                              filter: input.filter, browserConstraints: input.upperConstraints)
+    }
     /// G10: 詳細ペインの表紙表示トグル（per-browser・このウィンドウ専用・既定 true）。
     /// ツールバーボタンで切り替え、DetailPaneView(showCover:) に注入する。
     var showDetailCover: Bool = true
@@ -2448,6 +2454,54 @@ extension AppState {
         } else {
             // 検索欄 fallback (searchQuery の didSet が refreshDisplayedBooks を呼ぶ)
             searchQuery = value
+        }
+    }
+}
+
+// MARK: - G62: ブラウザ区画（ローカル）の問い合わせを MainActor の外で走らせる
+
+/// G62（spec §6.7）: ブラウザ区画の 1 列の問い合わせに渡す値（MainActor 上で取り出してから外へ渡す）。
+/// `AppState`（@MainActor）の中に入れ子にすると隔離を受け継ぐので、ファイルの直下に置く。
+struct LocalFacetQueryInput: Sendable {
+    let columnSQL: String
+    let query: String
+    let scope: SidebarScope
+    let filter: FilterState
+    let upperConstraints: [(String, String)]
+}
+
+extension AppState {
+    /// G62（spec §6.7）: ブラウザ区画（ローカル）の 1 列の値。入力を MainActor 上で値として取り出し、
+    /// `facetQuery`（本番は `db.distinctValues`）は `Task.detached(priority: .userInitiated)` で MainActor の外で走らせる
+    /// （`Database` は `@unchecked Sendable`・GRDB の `DatabaseQueue` が直列化する）。
+    /// 呼び出した Task が待っている間に取り消されたら、結果もエラーの表示も捨てる（`error` を出さない）。
+    /// 呼び出した時点で既に取り消されていたら、問い合わせ自体を走らせない（`Task.detached` には取り消しが伝わらない）。
+    func localFacetValues(columnSQL: String, upperConstraints: [(String, String)]) async -> [String] {
+        guard let db = database, let item = selectedSidebarItem, let settings = librarySettings else { return [] }
+        let scope: SidebarScope
+        switch item {
+        case .library: scope = .library
+        case .favorites:
+            guard let f = favoritesShelfID else { return [] }
+            scope = .favorites(playlistID: f)
+        case .recent: scope = .recent(days: settings.recentDays)
+        case .shelf(let id, _, _): scope = .shelf(playlistID: id)
+        case .smartShelf(let id, _): scope = .smartShelf(playlistID: id)
+        }
+        let input = LocalFacetQueryInput(columnSQL: columnSQL, query: searchQuery, scope: scope,
+                                    filter: settings.filterState, upperConstraints: upperConstraints)
+        let run = facetQuery
+        if Task.isCancelled { return [] }
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<[String], any Error> in
+            Result { try run(db, input) }
+        }.value
+        if Task.isCancelled { return [] }
+        switch result {
+        case .success(let values):
+            return values
+        case .failure(let failure):
+            self.error = .unexpected(failure)
+            return []
         }
     }
 }
