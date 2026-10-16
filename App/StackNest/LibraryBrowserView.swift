@@ -237,12 +237,7 @@ struct LibraryBrowserView: View {
                     BrowserPaneView(
                         browserPaneState: Bindable(settings).browserPaneState,
                         labelFor: { settings.browseLabel(for: $0) },
-                        refreshKey: {
-                            let s = settings.browserPaneState
-                            let filterEncoded = (try? JSONEncoder().encode(settings.filterState))
-                                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                            return "\(s.fields.map { $0?.sqlColumn ?? "" }.joined(separator: ","))|\(s.selections.map { $0 ?? "" }.joined(separator: ","))|\(appState.searchQuery)|\(filterEncoded)|\(String(describing: appState.selectedSidebarItem))|\(appState.booksDataVersion)"
-                        }(),
+                        refreshKey: FacetRefreshKey.local(appState, settings: settings),
                         // G62（spec §6.7）: 問い合わせは MainActor の外で走らせる（`AppState.localFacetValues`）。
                         facetValues: { columnSQL, upperConstraints in
                             await appState.localFacetValues(columnSQL: columnSQL, upperConstraints: upperConstraints)

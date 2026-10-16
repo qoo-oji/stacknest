@@ -1763,7 +1763,7 @@ final class RemoteLibraryState {
     /// 共有ファセット pane の refreshKey。
     var facetRefreshKey: String {
         let s = browserPaneState
-        let f = (try? JSONEncoder().encode(filterState)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let f = FacetRefreshKey.filterPart(filterState)
         return "\(s.fields.map { $0?.sqlColumn ?? "" }.joined(separator: ","))|\(s.selections.map { $0 ?? "" }.joined(separator: ","))|\(query)|\(f)|\(String(describing: sidebarSelection))"
     }
 

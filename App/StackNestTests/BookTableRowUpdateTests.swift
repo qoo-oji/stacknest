@@ -131,7 +131,10 @@ struct BookTableRowUpdateTests {
         let visibleRows = h.table.rows(in: h.table.visibleRect).length
         var liveRowViews = 0
         h.table.enumerateAvailableRowViews { _, _ in liveRowViews += 1 }
+        #expect(visibleRows > 0, Comment(rawValue: "visibleRows=\(visibleRows)"))
         #expect(visibleRows < 100, Comment(rawValue: "visibleRows=\(visibleRows)"))
+        // `+ 1` は余裕で、今は使っていない（実測 live = visible = 32・行 0〜31。`rows(in:)` は端で一部だけ見える行も
+        // 既に数える）。AppKit が行の view を 1 つ多く残しても落とさないためで、見張る退行（2,000 行すべて）には効く。
         #expect(liveRowViews <= visibleRows + 1, Comment(rawValue: "live=\(liveRowViews) visible=\(visibleRows)"))
     }
 
