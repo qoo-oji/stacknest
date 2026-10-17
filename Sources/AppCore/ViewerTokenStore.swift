@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import Foundation
 import CryptoKit
+import StackNestViewerKitCore
 
 /// G60: 本専用の読み取りトークンを、どの口が発行したか。
 /// 発行した口とは別の口では使えない（共有サーバで出したトークンは 127.0.0.1 の口で通らず、逆も同じ）。
@@ -44,7 +45,7 @@ public struct ViewerTokenRecord: Codable, Sendable, Equatable {
     /// G60 v3: 初めて認証に通った日時（まだなら nil）。一度書いたら変えない（spec §5.7）。
     /// v2 で保存した記録にはこのキーが無いので、既定 nil の `var` にして合成のデコードで読めるようにする。
     public internal(set) var firstUsedAt: Date? = nil
-    /// G60 v3: 初めて通った要求の名乗り（`X-StackNest-Viewer`・`ViewerIdentification.sanitize` 済み）。無ければ nil。
+    /// G60 v3: 初めて通った要求の名乗り（`X-StackNest-Viewer`・`StackNestViewerIdentification.sanitizeForStorage` 済み）。無ければ nil。
     public internal(set) var viewer: String? = nil
 
     /// G60 v3（M-3）: 中継の鍵の記録の `libraryUUID`。本物の書庫の UUID（UUID 形式）には決して一致しない見張り用の値。
@@ -207,10 +208,10 @@ public final class ViewerTokenStore: @unchecked Sendable {
 
     /// G60 v3: 初めて認証に通ったことを一度だけ記録する。書いたら true、既に書いてある・知らない id なら false。
     /// 確かめと書き込みを同じ鍵の中で行うので、同時に何本来ても書くのは 1 回。
-    /// `viewer` はここでも `ViewerIdentification.sanitize` を通す（保存するのは整えた文字列だけ）。
+    /// `viewer` はここでも `StackNestViewerIdentification.sanitizeForStorage` を通す（保存するのは整えた文字列だけ）。
     @discardableResult
     public func recordFirstUse(id: String, viewer: String?, now: Date = Date()) -> Bool {
-        let cleaned = ViewerIdentification.sanitize(viewer)
+        let cleaned = StackNestViewerIdentification.sanitizeForStorage(viewer)
         return lock.withLock {
             guard let i = records.firstIndex(where: { $0.id == id }), records[i].firstUsedAt == nil else {
                 return false

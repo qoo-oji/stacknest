@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import StackNestViewerKitCore
 
 /// G60 v3: 外部ビューアのアプリが `Contents/Info.plist` に置く、StackNest への対応の宣言（spec §5.6）。
 ///
@@ -9,14 +10,12 @@ import Foundation
 ///       <array><integer>1</integer></array>
 ///     </dict>
 ///
-/// 判定はこの専用のキーだけで行う。参照ファイルの型（UTType・拡張子）を開けるという宣言は使わない
-/// （`*` や `public.json` を開けると宣言しているだけのアプリを紛れ込ませないため。v2 の判定を置き換えた）。
+/// キーの名前と版の読み方は StackNestViewerKit の `StackNestViewerSupport`（ビューアが自分の宣言を点検するときと
+/// 同じ解釈・G63 段 4）。判定はこの専用のキーだけで行う。参照ファイルの型（UTType・拡張子）を開けるという宣言は
+/// 使わない（`*` や `public.json` を開けると宣言しているだけのアプリを紛れ込ませないため。v2 の判定を置き換えた）。
 /// plist は `PropertyListSerialization` で毎回直接読む（`Bundle(url:)` はキャッシュするので使わない。
 /// LaunchServices の登録にも頼らない）。
 public struct ViewerSupportDeclaration: Sendable, Equatable {
-    public static let infoPlistKey = "StackNestViewerSupport"
-    public static let versionsKey = "referenceFormatVersions"
-
     /// `CFBundleIdentifier`（無ければ nil）。確認できた対応ビューアの記録の鍵に使う。
     public let bundleIdentifier: String?
     /// 画面に出す名前（`CFBundleDisplayName` → `CFBundleName` → `.app` を除いたファイル名）。
@@ -33,12 +32,7 @@ public struct ViewerSupportDeclaration: Sendable, Equatable {
     /// 参照ファイルに書く版。宣言と StackNest が書ける版（`BookReferences.writableVersions`）の共通の最大。
     /// 共通の版が無い（＝未対応）なら nil。
     public var chosenFormatVersion: Int? {
-        Self.chooseVersion(declared: referenceFormatVersions, writable: BookReferences.writableVersions)
-    }
-
-    /// 宣言された版と書ける版の共通の最大。共通が無ければ nil。
-    public static func chooseVersion(declared: [Int], writable: [Int]) -> Int? {
-        Set(declared).intersection(writable).max()
+        StackNestViewerSupport.chooseVersion(declared: referenceFormatVersions, writable: BookReferences.writableVersions)
     }
 
     /// `appURL` の `Contents/Info.plist` を読む。plist が無い・読めない・辞書でないなら nil。
@@ -52,29 +46,14 @@ public struct ViewerSupportDeclaration: Sendable, Equatable {
         let displayName = nonEmptyString(plist["CFBundleDisplayName"])
             ?? nonEmptyString(plist["CFBundleName"])
             ?? appURL.deletingPathExtension().lastPathComponent
-        var versions: [Int] = []
-        if let support = plist[infoPlistKey] as? [String: Any],
-           let declared = support[versionsKey] as? [Any] {
-            versions = declared.compactMap(integerValue)
-        }
         return ViewerSupportDeclaration(bundleIdentifier: nonEmptyString(plist["CFBundleIdentifier"]),
                                         displayName: displayName,
-                                        referenceFormatVersions: versions)
+                                        referenceFormatVersions: StackNestViewerSupport.declaredVersions(in: plist))
     }
 
     private static func nonEmptyString(_ value: Any?) -> String? {
         guard let s = value as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return s
-    }
-
-    /// plist の `<integer>` で正の値だけ。`<true/>` と `<real>1</real>` は NSNumber として 1 に橋渡しされてしまう
-    /// ので、真偽値と浮動小数点を先に外す。文字列（"1"）・配列なども外す。
-    static func integerValue(_ value: Any) -> Int? {
-        guard let number = value as? NSNumber else { return nil }
-        if CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
-        if CFNumberIsFloatType(number as CFNumber) { return nil }
-        let n = number.intValue
-        return n > 0 ? n : nil
     }
 }
 

@@ -182,7 +182,7 @@ public struct ViewerBookAccess: Sendable, Equatable {
 /// 末尾のスラッシュ・大文字違い・余計な階層は通さない（安全側に倒す）。
 enum ViewerTokenRoutes {
     /// G60 v3: 対応ビューアの名乗り（`X-StackNest-Viewer`）。値は `ViewerTokenStore.recordFirstUse` が整える。
-    static let identificationHeader = HTTPField.Name(ViewerIdentification.headerName)!
+    static let identificationHeader = HTTPField.Name(StackNestViewerIdentification.headerName)!
 
     static func allows(method: HTTPRequest.Method, path: String, libraryUUID: String, bookID: Int) -> Bool {
         allowsBookRequest(method: method, path: path, prefix: "/api/v1/libraries/\(libraryUUID)/books/\(bookID)/")

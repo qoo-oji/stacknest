@@ -320,7 +320,7 @@ struct HelperLauncherTests {
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
         let plist: [String: Any] = [
             "CFBundleIdentifier": "com.example.viewer",
-            ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: [1]],
+            StackNestViewerSupport.infoPlistKey: [StackNestViewerSupport.versionsKey: [1]],
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: contents.appendingPathComponent("Info.plist"))

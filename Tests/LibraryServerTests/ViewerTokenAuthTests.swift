@@ -491,7 +491,7 @@ struct ViewerTokenAuthTests {
             }
         }
         let viewer = try #require(store.record(id: issued.record.id)?.viewer)
-        #expect(viewer.count == ViewerIdentification.maxLength)
+        #expect(viewer.count == StackNestViewerIdentification.maxStoredLength)
         #expect(viewer.hasPrefix("com.example.viewer/1.0; format=1"))
     }
 

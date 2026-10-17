@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import Foundation
+import StackNestViewerKitCore
 
 /// G60 v3: 実際に参照ファイルの本を読んだことを確認できた対応ビューア（spec §5.7）。
 public struct ConfirmedViewer: Codable, Sendable, Equatable {
@@ -40,7 +41,7 @@ public final class ConfirmedViewerStore: @unchecked Sendable {
     /// App は確認の Task（MainActor）から呼ぶので、知らせもメインスレッドで届く。
     @discardableResult
     public func record(appBundleIdentifier: String?, viewer: String?, at date: Date) -> ConfirmedViewer? {
-        let identification = ViewerIdentification.parse(viewer)
+        let identification = StackNestViewerIdentification.parse(viewer)
         guard let bundleID = appBundleIdentifier ?? identification?.bundleIdentifier else { return nil }
         let entry = ConfirmedViewer(bundleIdentifier: bundleID, viewerVersion: identification?.version,
                                     formatVersion: identification?.format, confirmedAt: date)

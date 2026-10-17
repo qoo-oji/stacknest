@@ -73,7 +73,7 @@ extension ViewerRelayForwarder {
         await relay.prefetcher?.liveRequestBegan(relayID: relayID, page: page)
         let response: Response
         if let cache = relay.pageCache, usesSharedVariant(request) {
-            let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader])
+            let viewer = StackNestViewerIdentification.sanitizeForStorage(request.headers[ViewerTokenRoutes.identificationHeader])
             let outcome = await loadSharedPage(target, page: page, relayID: relayID, viewer: viewer, cache: cache,
                                                loader: relay.loader, session: relay.session, limit: relay.maxResponseBytes)
             if case .upstream(let status, _, _) = outcome {
@@ -129,7 +129,7 @@ extension ViewerRelayForwarder {
         outgoing.httpMethod = "GET"
         outgoing.httpShouldHandleCookies = false
         outgoing.setValue("Bearer \(target.remoteToken)", forHTTPHeaderField: "Authorization")
-        if let viewer { outgoing.setValue(viewer, forHTTPHeaderField: ViewerIdentification.headerName) }
+        if let viewer { outgoing.setValue(viewer, forHTTPHeaderField: StackNestViewerIdentification.headerName) }
         return outgoing
     }
 

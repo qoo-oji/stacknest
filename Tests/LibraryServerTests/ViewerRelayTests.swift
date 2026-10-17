@@ -626,9 +626,9 @@ struct ViewerRelayTests {
             }
         }
         let forwarded = try #require(RelayRemoteStub.seen.first?.header("X-StackNest-Viewer"))
-        #expect(forwarded == ViewerIdentification.sanitize(raw))
+        #expect(forwarded == StackNestViewerIdentification.sanitizeForStorage(raw))
         #expect(forwarded.hasPrefix("com.example.viewer/1.80; format=1"))
-        #expect(forwarded.count == ViewerIdentification.maxLength, "200 文字で切る")
+        #expect(forwarded.count == StackNestViewerIdentification.maxStoredLength, "200 文字で切る")
         #expect(forwarded.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value <= 0x7E })
     }
 

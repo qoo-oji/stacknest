@@ -265,8 +265,8 @@ enum ViewerRelayForwarder {
         // ビューアの中継の鍵は渡さない。リモートの鍵に付け替える。
         outgoing.setValue("Bearer \(target.remoteToken)", forHTTPHeaderField: "Authorization")
         // 名乗りは保存のときと同じ規則で整えてから渡す（相手のログや保存に制御文字を運ばない）。
-        if let viewer = ViewerIdentification.sanitize(request.headers[ViewerTokenRoutes.identificationHeader]) {
-            outgoing.setValue(viewer, forHTTPHeaderField: ViewerIdentification.headerName)
+        if let viewer = StackNestViewerIdentification.sanitizeForStorage(request.headers[ViewerTokenRoutes.identificationHeader]) {
+            outgoing.setValue(viewer, forHTTPHeaderField: StackNestViewerIdentification.headerName)
         }
         if let etag = request.headers[.ifNoneMatch] {
             outgoing.setValue(etag, forHTTPHeaderField: "If-None-Match")

@@ -105,7 +105,7 @@ struct ExternalViewerSyncWiringTests {
         let plist: [String: Any] = [
             "CFBundleIdentifier": "com.example.fakeviewer",
             "CFBundleName": "FakeViewer",
-            ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: versions],
+            StackNestViewerSupport.infoPlistKey: [StackNestViewerSupport.versionsKey: versions],
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: contents.appendingPathComponent("Info.plist"))

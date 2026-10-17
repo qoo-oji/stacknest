@@ -32,7 +32,7 @@ struct ReferenceViewerSupportTests {
         var plist: [String: Any] = [
             "CFBundleIdentifier": "com.example.viewer",
             "CFBundleName": "Example Viewer",
-            ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: versions],
+            StackNestViewerSupport.infoPlistKey: [StackNestViewerSupport.versionsKey: versions],
         ]
         for (key, value) in extra { plist[key] = value }
         return plist
@@ -52,11 +52,11 @@ struct ReferenceViewerSupportTests {
     }
 
     @Test func choosesTheHighestCommonVersion() {
-        #expect(ViewerSupportDeclaration.chooseVersion(declared: [1, 2, 3], writable: [1, 2]) == 2)
-        #expect(ViewerSupportDeclaration.chooseVersion(declared: [3, 1], writable: [1, 2, 3]) == 3)
-        #expect(ViewerSupportDeclaration.chooseVersion(declared: [1], writable: [1, 2]) == 1)
-        #expect(ViewerSupportDeclaration.chooseVersion(declared: [2], writable: [1]) == nil)
-        #expect(ViewerSupportDeclaration.chooseVersion(declared: [], writable: [1]) == nil)
+        #expect(StackNestViewerSupport.chooseVersion(declared: [1, 2, 3], writable: [1, 2]) == 2)
+        #expect(StackNestViewerSupport.chooseVersion(declared: [3, 1], writable: [1, 2, 3]) == 3)
+        #expect(StackNestViewerSupport.chooseVersion(declared: [1], writable: [1, 2]) == 1)
+        #expect(StackNestViewerSupport.chooseVersion(declared: [2], writable: [1]) == nil)
+        #expect(StackNestViewerSupport.chooseVersion(declared: [], writable: [1]) == nil)
     }
 
     /// 今の StackNest が書けるのは版 1 だけ。将来の版を併せて宣言していても 1 で書き、1 が無ければ未対応。
@@ -101,8 +101,8 @@ struct ReferenceViewerSupportTests {
     @Test func missingOrMisshapenKeyIsUnsupported() throws {
         let shapes: [[String: Any]] = [
             ["CFBundleIdentifier": "com.example.viewer"],
-            ["CFBundleIdentifier": "com.example.viewer", ViewerSupportDeclaration.infoPlistKey: [1]],
-            ["CFBundleIdentifier": "com.example.viewer", ViewerSupportDeclaration.infoPlistKey: [String: Any]()],
+            ["CFBundleIdentifier": "com.example.viewer", StackNestViewerSupport.infoPlistKey: [1]],
+            ["CFBundleIdentifier": "com.example.viewer", StackNestViewerSupport.infoPlistKey: [String: Any]()],
             Self.declaring(1),
             Self.declaring("1"),
         ]
@@ -162,7 +162,7 @@ struct ReferenceViewerSupportTests {
         #expect(ViewerSupportDeclaration.read(appURL: blank)?.displayName == "Example Viewer")
 
         let fileOnly = try Self.makeApp(
-            plist: [ViewerSupportDeclaration.infoPlistKey: [ViewerSupportDeclaration.versionsKey: [1]]],
+            plist: [StackNestViewerSupport.infoPlistKey: [StackNestViewerSupport.versionsKey: [1]]],
             name: "FileNamed")
         defer { Self.remove(fileOnly) }
         let declaration = try #require(ViewerSupportDeclaration.read(appURL: fileOnly))
