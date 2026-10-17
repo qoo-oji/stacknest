@@ -74,10 +74,12 @@ struct ViewerKitContractTests {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let excludedDirNames: Set<String> = ["build", ".build", "DerivedData", ".git"]
-        let pattern = try NSRegularExpression(pattern: #"^\s*(@_exported\s+)?import\s+StackNestViewerKit(Core|Testing)?\b"#)
+        // 属性（`@_exported`・`@testable`・`@preconcurrency` など）・アクセスレベル（`public import` など）・
+        // 宣言の種類を付けた import（`import struct StackNestViewerKitCore.X`）も拾う。
+        let pattern = try NSRegularExpression(pattern: #"^\s*(@\w+(\([^)]*\))?\s+)*((public|package|internal|fileprivate|private)\s+)?import\s+((typealias|struct|class|enum|protocol|actor|let|var|func)\s+)?StackNestViewerKit\w*\b"#)
         let fm = FileManager.default
         var offenders: [String] = []
-        for scanRoot in ["Sources", "App"].map({ root.appendingPathComponent($0) }) {
+        for scanRoot in ["Sources", "App", "Tests"].map({ root.appendingPathComponent($0) }) {
             guard let e = fm.enumerator(at: scanRoot, includingPropertiesForKeys: [.isDirectoryKey]) else {
                 Issue.record("ディレクトリが見つからない: \(scanRoot.path)"); continue
             }
