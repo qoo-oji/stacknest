@@ -3721,9 +3721,9 @@ paths:
         発行したトークンは、その本に限ってライブラリトークンなしで読める（解錠に使ったパスワードの世代に結び付き、
         パスワードが変わると読めなくなる）。
         応答の `tokenID`（秘密ではない）で、発行した主体が `GET /viewer-tokens/{tokenID}` から使われたかを確かめられる。
-        対応ビューアは、このトークンで呼ぶ要求すべてに `X-StackNest-Viewer: <bundle id>/<版>; format=<版>` を付ける
-        （無くても拒まない。初めて通った要求の日時と値を一度だけ記録する）。
-        参照ファイル（`.stacknestbook`）の形式はリポジトリの `docs/book-reference-format.md` を参照。
+        対応ビューアは、このトークンで呼ぶ要求すべてに `X-StackNest-Viewer: <bundle id>/<版>; format=<版>[; kit=<StackNestViewerKit の版>]` を付ける
+        （無くても拒まない。初めて通った要求の日時と値を一度だけ記録する。`kit=` は StackNestViewerKit が付け、記録する値にそのまま残る）。
+        参照ファイル（`.stacknestbook`）の形式は StackNestViewerKit の文書（https://github.com/shelfsmith/StackNestViewerKit/blob/main/Documentation/BookReferenceFormat.md）を参照。
       tags: [Viewer]
       operationId: issueViewerToken
       x-stacknest-tier: read

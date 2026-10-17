@@ -141,6 +141,7 @@ extension HelpContent {
                 .link(label: "Hummingbird — the built-in server. Apache-2.0", url: "https://github.com/hummingbird-project/hummingbird"),
                 .link(label: "swift-argument-parser — the command line. Apache-2.0 / Apple", url: "https://github.com/apple/swift-argument-parser"),
                 .link(label: "libarchive — reading ZIP / RAR / 7z. BSD-2-Clause", url: "https://www.libarchive.org"),
+                .link(label: "StackNestViewerKit — the reference file format shared with external viewers. MIT / shelfsmith", url: "https://github.com/shelfsmith/StackNestViewerKit"),
             ]),
         ]
     }

@@ -55,6 +55,13 @@ shipped inside the app bundle under `Contents/Helpers/`).
   import-boundary test keeps it that way. Registered once at the app
   composition root; replacing the library means writing another adapter
   that passes the shared contract tests and changing that one line.
+- **StackNestViewerKitCore** (external) — The reference file (`.stacknestbook`)
+  type, the viewer support declaration and the identification header, shared
+  with external viewers through
+  [shelfsmith/StackNestViewerKit](https://github.com/shelfsmith/StackNestViewerKit)
+  (MIT, pinned to a revision until 0.1.0). Only `AppCore` depends on it and
+  re-exports it (`Sources/AppCore/Exports.swift`), so the server and the App
+  use the same definitions without declaring the package themselves.
 - **AppCore** — UI-independent application logic that the App target and the
   CLI both need: import (`BookImporter`), filename parsing (`FilenameFormat`),
   watch-folder scan planning (`WatchScanPlanner`), settings (`LibrarySettings`),

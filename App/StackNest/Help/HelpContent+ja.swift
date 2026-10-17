@@ -139,6 +139,7 @@ extension HelpContent {
                 .link(label: "Hummingbird — 内蔵サーバ。Apache-2.0", url: "https://github.com/hummingbird-project/hummingbird"),
                 .link(label: "swift-argument-parser — コマンドライン。Apache-2.0 / Apple", url: "https://github.com/apple/swift-argument-parser"),
                 .link(label: "libarchive — ZIP / RAR / 7z の読み込み。BSD-2-Clause", url: "https://www.libarchive.org"),
+                .link(label: "StackNestViewerKit — 外部ビューアと共有する参照ファイルの形式。MIT / shelfsmith", url: "https://github.com/shelfsmith/StackNestViewerKit"),
             ]),
         ]
     }
