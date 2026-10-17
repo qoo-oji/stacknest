@@ -62,4 +62,23 @@ struct LibrarySettingsServedIdentityHookTests {
         s.reloadGeneralSettings()
         #expect(seen.names.contains("外からの名前"))
     }
+
+    /// G62b: 共有の ON/OFF も DB を正として読み直す。DB が OFF でメモリが ON なら、
+    /// 読み直しでフックが 1 回だけ呼ばれ、値は OFF になる（配信の一覧が DB と食い違ったままにならない）。
+    @Test func reloadGeneralSettingsPicksUpRemoteSharingFromTheDatabase() throws {
+        let (s, db, seen) = try make()
+        s.remoteSharingEnabled = true
+        seen.sharing = []
+        try db.setLibrarySetting(key: "remote_sharing_enabled", value: "false")
+        s.reloadGeneralSettings()
+        #expect(seen.sharing == [false])
+        #expect(s.remoteSharingEnabled == false)
+        // 読み直しは DB へ書き戻さない。
+        #expect(try db.getLibrarySetting(key: "remote_sharing_enabled") == "false")
+
+        // DB とメモリが一致しているときの読み直しはフックを呼ばない。
+        seen.sharing = []
+        s.reloadGeneralSettings()
+        #expect(seen.sharing == [])
+    }
 }

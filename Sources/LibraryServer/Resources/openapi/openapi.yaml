@@ -4689,7 +4689,7 @@ paths:
     get:
       summary: ライブ同期のイベント（SSE）
       description: |
-        書庫の変化を Server-Sent Events（`text/event-stream`）で流し続ける。鍵の scope の外の書庫のイベントは流さない。
+        書庫の変化を Server-Sent Events（`text/event-stream`）で流し続ける。鍵の scope の外の書庫のイベントは流さない。この口が配信していない書庫（共有サーバでは共有を切った・共有していない・閉じた書庫）のイベントも、scope にかかわらず流さない。
         EventSource はヘッダを付けられないので、`POST /session` で得たセッションの鍵を `?token=` で渡す。
         約 5 秒ごとに心拍（`: ping` のコメント行）を送る。グラントのモードでは心拍ごとにグラントを確かめ直し、グラントが消えた・scope が変わったら流れを閉じる（tier だけの変更では閉じない。消えたグラントで繋ぎ直すと 401）。
         施錠を見ない（書庫の鍵は要らない）。施錠中の書庫の `bookChanged` は、本の ID から蔵書数の目安が漏れないよう `bookId` を落とした `structureChanged` に丸める。施錠は書庫の DB から読み、読めなければ施錠中として丸める。

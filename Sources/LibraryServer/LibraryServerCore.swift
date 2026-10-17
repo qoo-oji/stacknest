@@ -347,10 +347,12 @@ public struct LibraryServerCore: Sendable {
         self.contentCache = BookContentCache(ttlSeconds: 300, userExtensions: config.userExtensions)
         // G23 (#15): 施錠庫の bookChanged は bookID を落として配信する（蔵書数の概算が漏れるため）。
         // G62（spec §6.2）: 施錠は DB から読む（スナップショットの isLocked に頼らない）。読めなければ施錠として扱う。
-        // 配信していない書庫は今どおり false（丸めない）。
-        self.eventHub = EventHub(isLibraryLocked: { [dataSource] uuid in
-            guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else { return false }
-            do { return try lib.readLockCredential() != nil } catch { return true }
+        // G62b: 配信していない書庫のイベントは送らない（`.unserved`）。判定は `LibraryResolver.resolve` と
+        // 同じ `dataSource.servedLibraries()`（共有サーバは共有 ON の書庫、ローカル制御の口は開いている全書庫）。
+        // 施錠の DB 読みは丸めが要る `bookChanged` のためだが、ほかのイベントでも 1 キーを読むだけなので分けない。
+        self.eventHub = EventHub(libraryState: { [dataSource] uuid in
+            guard let lib = await dataSource.servedLibraries().first(where: { $0.uuid == uuid }) else { return .unserved }
+            do { return try lib.readLockCredential() != nil ? .locked : .unlocked } catch { return .locked }
         })
         if let maintenanceRegistry {
             self.maintenanceRegistry = maintenanceRegistry

@@ -947,6 +947,12 @@ public final class LibrarySettings {
             if let v = (try? database.getLibrarySetting(key: Self.backupGenerationsKey)) ?? nil, let n = Int(v) {
                 backupGenerations = n
             }
+            // G62b: 共有の ON/OFF も DB を正とする（配信の一覧が DB と食い違ったままにならないように）。
+            // 変わったときだけ代入する ―― didSet が `onServedIdentityChange` を呼び、配信の一覧を作り直すため。
+            if let v = (try? database.getLibrarySetting(key: Self.remoteSharingEnabledKey)) ?? nil {
+                let enabled = (v == "true")
+                if enabled != remoteSharingEnabled { remoteSharingEnabled = enabled }
+            }
         }
     }
 

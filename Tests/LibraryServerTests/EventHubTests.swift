@@ -71,4 +71,33 @@ struct EventHubTests {
         var it = s.stream.makeAsyncIterator()
         #expect(await it.next() == nil)
     }
+
+    // MARK: - G62b: 配信していない書庫のイベントは送らない
+
+    /// 書庫に紐づくイベントは種類を問わず、`.unserved` の書庫の分は scope `.all` にも届かない。
+    @Test func unservedLibraryEventsOfEveryKindAreDropped() async throws {
+        let hub = EventHub(libraryState: { $0 == "served" ? .unlocked : .unserved })
+        let s = await hub.subscribe(scope: .all)
+        await hub.publish(.bookChanged(library: "hidden", bookID: 1))
+        await hub.publish(.structureChanged(library: "hidden"))
+        await hub.publish(.settingsChanged(library: "hidden"))
+        await hub.publish(.maintenanceProgress(library: "hidden", job: "full-scan", done: 1, total: 2))
+        await hub.publish(.maintenanceFinished(library: "hidden", job: "full-scan", outcome: "done", count: 2))
+        await hub.publish(.bookChanged(library: "served", bookID: 9))
+        var it = s.stream.makeAsyncIterator()
+        #expect(await it.next() == .bookChanged(library: "served", bookID: 9))
+        await hub.unsubscribe(s.id)
+    }
+
+    /// 新しい形の `.locked` も G23 と同じに丸める。
+    @Test func lockedStateCoarsensLikeBefore() async throws {
+        let hub = EventHub(libraryState: { _ in .locked })
+        let s = await hub.subscribe(scope: .all)
+        await hub.publish(.bookChanged(library: "locked", bookID: 42))
+        await hub.publish(.settingsChanged(library: "locked"))
+        var it = s.stream.makeAsyncIterator()
+        #expect(await it.next() == .structureChanged(library: "locked"))
+        #expect(await it.next() == .settingsChanged(library: "locked"))
+        await hub.unsubscribe(s.id)
+    }
 }
