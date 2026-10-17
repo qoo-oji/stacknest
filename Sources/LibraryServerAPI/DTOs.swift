@@ -337,7 +337,7 @@ public struct ViewerTokenReply: Codable, Sendable, Equatable {
     }
 }
 
-/// 平文のトークンを print・dump・失敗メッセージ・ログへ出さない（`IssuedViewerToken`・`BookReference` と同じ）。
+/// 平文のトークンを print・dump・失敗メッセージ・ログへ出さない（`IssuedViewerToken`・`StackNestBookReference` と同じ）。
 extension ViewerTokenReply: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String { "ViewerTokenReply(tokenID: \(tokenID ?? "-"), expiresAt: \(expiresAt), token: <redacted>)" }
     public var debugDescription: String { description }

@@ -14,26 +14,27 @@ struct BookReferenceTests {
     }
 
     private func sample(title: String = "本の題名",
-                        expiresAt: Date = Date(timeIntervalSince1970: 1_790_000_000)) -> BookReference {
-        BookReference(version: 1, title: title,
-                      book: "http://192.168.1.10:51234/api/v1/libraries/LIB-1/books/42",
-                      token: "SECRET-TOKEN", expiresAt: expiresAt,
-                      pageCount: 180, direction: "rtl", startPage: 41)
+                        expiresAt: Date = Date(timeIntervalSince1970: 1_790_000_000)) throws -> StackNestBookReference {
+        try StackNestBookReference(version: 1, title: title,
+                                   bookURL: URL(string: "http://192.168.1.10:51234/api/v1/libraries/LIB-1/books/42")!,
+                                   token: "SECRET-TOKEN", expiresAt: expiresAt,
+                                   pageCount: 180, direction: .rightToLeft, startPage: 41)
     }
 
-    /// G60 v3: 版はビューアの宣言から選んだ値をそのまま書く。
-    @Test func writesTheChosenVersion() throws {
-        let ref = BookReference(version: 2, title: "本の題名", book: "http://h:1/api/v1/libraries/L/books/1",
-                                token: "T", expiresAt: Date(timeIntervalSince1970: 1_790_000_000),
-                                pageCount: 1, direction: "rtl", startPage: 0)
-        let obj = try #require(try JSONSerialization.jsonObject(with: ref.encoded()) as? [String: Any])
-        #expect(obj["version"] as? Int == 2)
-        #expect(ref.version == 2)
+    /// G63 段 4: 部品の型は、部品が読めない版では作れない（作った参照ファイルが必ず読める）。StackNest が書ける版は
+    /// 部品が読める版に含まれる（`ViewerKitContractTests`）ので、ビューアの宣言から選んだ版はいつも作れる。
+    @Test func aVersionTheKitCannotReadIsRefused() {
+        #expect(throws: StackNestViewerError(.unsupportedVersion, formatVersion: 2)) {
+            try StackNestBookReference(version: 2, title: "本の題名",
+                                       bookURL: URL(string: "http://h:1/api/v1/libraries/L/books/1")!,
+                                       token: "T", expiresAt: Date(timeIntervalSince1970: 1_790_000_000),
+                                       pageCount: 1, direction: .rightToLeft, startPage: 0)
+        }
     }
 
     @Test func encodesTheVersionOneFields() throws {
-        let ref = sample()
-        let data = try ref.encoded()
+        let ref = try sample()
+        let data = try ref.encodedJSON()
         let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(Set(obj.keys) == ["format", "version", "title", "book", "token", "expiresAt",
                                    "pageCount", "direction", "startPage"])
@@ -51,23 +52,23 @@ struct BookReferenceTests {
     }
 
     @Test func roundTripsAndIgnoresUnknownKeys() throws {
-        var obj = try #require(try JSONSerialization.jsonObject(with: sample().encoded()) as? [String: Any])
+        var obj = try #require(try JSONSerialization.jsonObject(with: sample().encodedJSON()) as? [String: Any])
         obj["somethingNew"] = "x"
         let data = try JSONSerialization.data(withJSONObject: obj)
-        #expect(try BookReference.decode(data) == sample())
+        #expect(try StackNestBookReference.parse(data) == sample())
     }
 
     @Test func helpers() {
-        #expect(BookReference.bookURL(serverBase: URL(string: "http://127.0.0.1:4321/")!, libraryUUID: "LIB-1", bookID: 7)
-                == "http://127.0.0.1:4321/api/v1/libraries/LIB-1/books/7")
-        #expect(BookReference.bookURL(serverBase: URL(string: "http://h:8080")!, libraryUUID: "LIB-1", bookID: 7)
-                == "http://h:8080/api/v1/libraries/LIB-1/books/7")
-        #expect(BookReference.directionString(.rightToLeft) == "rtl")
-        #expect(BookReference.directionString(.leftToRight) == "ltr")
-        #expect(BookReference.clampedStartPage(41, pageCount: 180) == 41)
-        #expect(BookReference.clampedStartPage(500, pageCount: 180) == 179)
-        #expect(BookReference.clampedStartPage(-3, pageCount: 180) == 0)
-        #expect(BookReference.clampedStartPage(5, pageCount: 0) == 0)
+        #expect(BookReferences.bookURL(serverBase: URL(string: "http://127.0.0.1:4321/")!, libraryUUID: "LIB-1", bookID: 7)
+                .absoluteString == "http://127.0.0.1:4321/api/v1/libraries/LIB-1/books/7")
+        #expect(BookReferences.bookURL(serverBase: URL(string: "http://h:8080")!, libraryUUID: "LIB-1", bookID: 7)
+                .absoluteString == "http://h:8080/api/v1/libraries/LIB-1/books/7")
+        #expect(BookReferences.direction(.rightToLeft) == .rightToLeft)
+        #expect(BookReferences.direction(.leftToRight) == .leftToRight)
+        #expect(StackNestBookReference.clampedStartPage(41, pageCount: 180) == 41)
+        #expect(StackNestBookReference.clampedStartPage(500, pageCount: 180) == 179)
+        #expect(StackNestBookReference.clampedStartPage(-3, pageCount: 180) == 0)
+        #expect(StackNestBookReference.clampedStartPage(5, pageCount: 0) == 0)
     }
 
     @Test func writesWithOwnerOnlyPermissions() throws {
@@ -87,7 +88,7 @@ struct BookReferenceTests {
             let a = try FileManager.default.attributesOfItem(atPath: base.appendingPathComponent(sub).path)
             #expect((a[.posixPermissions] as? NSNumber)?.intValue == 0o700, "\(sub)")
         }
-        #expect(try BookReference.decode(Data(contentsOf: url)) == sample())
+        #expect(try StackNestBookReference.load(contentsOf: url) == sample())
     }
 
     @Test func overwritesAndKeepsOneFilePerBook() throws {
@@ -158,7 +159,7 @@ struct BookReferenceTests {
         let writer = BookReferenceStore(baseDirectory: base)
         let now = Date()
         _ = try writer.write(sample(expiresAt: now.addingTimeInterval(-1)), origin: .local, libraryUUID: "LIB-1", bookID: 5)
-        let fresh = sample(expiresAt: now.addingTimeInterval(3600))
+        let fresh = try sample(expiresAt: now.addingTimeInterval(3600))
         let written = DispatchSemaphore(value: 0)
         final class Box: @unchecked Sendable { var result: Result<URL, any Error>? }
         let box = Box()
@@ -181,7 +182,7 @@ struct BookReferenceTests {
 
         let url = try #require(try box.result?.get())
         #expect(FileManager.default.fileExists(atPath: url.path), "書いたばかりの参照ファイルが残る")
-        let kept = try BookReference.decode(Data(contentsOf: url))
+        let kept = try StackNestBookReference.load(contentsOf: url)
         #expect(kept.expiresAt > now)
     }
 
@@ -269,9 +270,34 @@ struct BookReferenceTests {
         #expect(FileManager.default.fileExists(atPath: outsideEmpty.path))
     }
 
-    @Test func descriptionsNeverShowTheToken() {
-        #expect(!String(describing: sample()).contains("SECRET-TOKEN"))
-        #expect(!String(reflecting: sample()).contains("SECRET-TOKEN"))
-        #expect(!"\(sample())".contains("SECRET-TOKEN"))
+    /// G63 段 4: 置き換えの前（G60 の書き手）に書かれたファイルも、掃除は今までどおりに扱う。期限の前なら残し、
+    /// 期限を過ぎていれば消す。読めないファイルは消す（部品の読み手は G60 より厳しいが、G60 が書いたファイルは読める）。
+    @Test func pruneTreatsFilesWrittenBeforeTheAdoptionTheSame() throws {
+        let base = try makeBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = BookReferenceStore(baseDirectory: base)
+        let fm = FileManager.default
+        let golden = Data(BookReferenceGoldenTests.cases[0].golden.utf8)   // G60 が書いていたバイト列（期限 2099 年）
+        var files: [URL] = []
+        for (index, contents) in [golden, golden, Data(#"{"format":"stacknest-book-reference","version":1}"#.utf8)]
+            .enumerated() {
+            let room = store.root.appendingPathComponent("local/LIB-9/\(index)", isDirectory: true)
+            try fm.createDirectory(at: room, withIntermediateDirectories: true)
+            let file = room.appendingPathComponent("Example Book.stacknestbook")
+            try contents.write(to: file)
+            files.append(file)
+        }
+        let beforeExpiry = Date(timeIntervalSince1970: 4_102_358_399)
+        let atExpiry = Date(timeIntervalSince1970: 4_102_358_400)
+        #expect(store.pruneExpired(now: beforeExpiry) == 1, "期限の前の G60 のファイルは残し、項目の欠けたファイルは消す")
+        #expect(fm.fileExists(atPath: files[0].path) && fm.fileExists(atPath: files[1].path))
+        #expect(!fm.fileExists(atPath: files[2].path))
+        #expect(store.pruneExpired(now: atExpiry) == 2, "期限の時刻ちょうどから切れている（今の `expiresAt > now` と同じ）")
+        #expect(!fm.fileExists(atPath: files[0].path) && !fm.fileExists(atPath: files[1].path))
+    }
+
+    @Test func descriptionsNeverShowTheToken() throws {
+        #expect(try !String(describing: sample()).contains("SECRET-TOKEN"))
+        #expect(try !String(reflecting: sample()).contains("SECRET-TOKEN"))
+        #expect(try !"\(sample())".contains("SECRET-TOKEN"))
     }
 }

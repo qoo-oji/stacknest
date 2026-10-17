@@ -61,7 +61,7 @@ struct ReferenceViewerSupportTests {
 
     /// 今の StackNest が書けるのは版 1 だけ。将来の版を併せて宣言していても 1 で書き、1 が無ければ未対応。
     @Test func stackNestWritesVersionOne() throws {
-        #expect(BookReference.writableVersions == [1])
+        #expect(BookReferences.writableVersions == [1])
         let app = try Self.makeApp(plist: Self.declaring([1, 2])); defer { Self.remove(app) }
         #expect(ReferenceViewer.resolve(appURL: app)?.formatVersion == 1)
         let future = try Self.makeApp(plist: Self.declaring([2, 3])); defer { Self.remove(future) }
@@ -121,8 +121,8 @@ struct ReferenceViewerSupportTests {
         let app = try Self.makeApp(plist: [
             "CFBundleIdentifier": "com.example.viewer",
             "CFBundleDocumentTypes": [
-                ["LSItemContentTypes": [BookReference.typeIdentifier]],
-                ["CFBundleTypeExtensions": [BookReference.fileExtension, "*"]],
+                ["LSItemContentTypes": [StackNestFormat.typeIdentifier]],
+                ["CFBundleTypeExtensions": [StackNestFormat.fileExtension, "*"]],
                 ["LSItemContentTypes": ["public.json", "public.data"]],
             ],
         ])
@@ -191,7 +191,7 @@ struct ReferenceViewerSupportTests {
         defer { suite.removePersistentDomain(forName: suiteName) }
         let settings = ViewerSettings(defaults: suite)
         let typeOnly = try Self.makeApp(plist: [
-            "CFBundleDocumentTypes": [["LSItemContentTypes": [BookReference.typeIdentifier]]]
+            "CFBundleDocumentTypes": [["LSItemContentTypes": [StackNestFormat.typeIdentifier]]]
         ])
         defer { Self.remove(typeOnly) }
         settings.categoryViewerPaths[.archive] = typeOnly.path

@@ -2276,7 +2276,7 @@ final class RemoteLibraryState {
         // 古い位置で渡すと開く位置が戻り、渡した後の `postProgress` がサーバの新しい位置を巻き戻す。渡す前にサーバの
         // 今の位置を引き直す（取れなければ一覧の値）。
         let detail = try? await client.bookDetail(libraryUUID: libraryUUID, bookID: book.id, libraryToken: libraryToken)
-        let resumePage = BookReference.clampedStartPage(
+        let resumePage = StackNestBookReference.clampedStartPage(
             resolveResumePage(server: Self.currentServerLastPage(detail: detail, listed: book.lastPage),
                               offline: offlineLastPage),
             pageCount: manifest.pageCount)

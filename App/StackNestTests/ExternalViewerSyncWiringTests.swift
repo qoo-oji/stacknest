@@ -118,8 +118,8 @@ struct ExternalViewerSyncWiringTests {
             "CFBundleIdentifier": "com.example.fakeviewer",
             "CFBundleName": "FakeViewer",
             "CFBundleDocumentTypes": [
-                ["LSItemContentTypes": [BookReference.typeIdentifier]],
-                ["CFBundleTypeExtensions": [BookReference.fileExtension, "zip"]],
+                ["LSItemContentTypes": [StackNestFormat.typeIdentifier]],
+                ["CFBundleTypeExtensions": [StackNestFormat.fileExtension, "zip"]],
             ],
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
@@ -235,9 +235,9 @@ struct ExternalViewerSyncWiringTests {
         #expect(launched.viewer.path == env.viewerApp.path)
         let attrs = try FileManager.default.attributesOfItem(atPath: launched.file.path)
         #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-        let ref = try BookReference.decode(Data(contentsOf: launched.file))
+        let ref = try StackNestBookReference.load(contentsOf: launched.file)
         let uuid = try #require(state.librarySettings?.ensureLibraryUUID())
-        #expect(ref.book == "http://127.0.0.1:4321/api/v1/libraries/\(uuid)/books/1")
+        #expect(ref.bookURL.absoluteString == "http://127.0.0.1:4321/api/v1/libraries/\(uuid)/books/1")
         #expect(ref.title == "本の題名")
         #expect(ref.pageCount == 3)
         #expect(ref.startPage == 2)
@@ -430,7 +430,7 @@ struct ExternalViewerSyncWiringTests {
 
         #expect(launches.entries.count == 1)
         let launched = try #require(launches.entries.first)
-        let ref = try BookReference.decode(Data(contentsOf: launched.file))
+        let ref = try StackNestBookReference.load(contentsOf: launched.file)
         guard case .valid(let record) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
             Issue.record("トークンが有効でない"); return
         }
@@ -518,7 +518,7 @@ struct ExternalViewerSyncWiringTests {
         state.openBooks([row])
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(ref.version == 1)
     }
 
@@ -618,11 +618,11 @@ struct ExternalViewerSyncWiringTests {
         try await waitUntil { !launches.entries.isEmpty }
 
         let file = try #require(launches.entries.first).file
-        let ref = try BookReference.decode(Data(contentsOf: file))
+        let ref = try StackNestBookReference.load(contentsOf: file)
         // G60 v3（spec §5.8・試用）: リモートの本も手元の 127.0.0.1 の口で中継する。
         let relayPrefix = "http://127.0.0.1:4321/api/v1/relay/"
-        #expect(ref.book.hasPrefix(relayPrefix))
-        let relayID = String(ref.book.dropFirst(relayPrefix.count))
+        #expect(ref.bookURL.absoluteString.hasPrefix(relayPrefix))
+        let relayID = String(ref.bookURL.absoluteString.dropFirst(relayPrefix.count))
         let target = try #require(env.relays.target(for: relayID))
         #expect(target.remoteToken == "VIEWER-TOKEN")
         #expect(target.remoteBookURL == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/42")
@@ -645,7 +645,7 @@ struct ExternalViewerSyncWiringTests {
         #expect(env.relays.target(for: relayID, now: relayRecord.expiresAt.addingTimeInterval(-1)) != nil)
         #expect(env.relays.target(for: relayID, now: relayRecord.expiresAt) == nil)
         #expect(ref.pageCount == 20)
-        #expect(ref.direction == "ltr")
+        #expect(ref.direction == .leftToRight)
         #expect(ref.startPage == 5)
         #expect(G60ViewerTokenStub.paths.contains("POST /api/v1/libraries/\(s.libraryUUID)/books/42/viewer-token"))
         #expect(s.errorText == nil)
@@ -700,7 +700,7 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: remoteBook(id: 48, filename: "a.zip", lastPage: 5))
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(ref.startPage == 12)
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/48/progress") } }
     }
@@ -719,7 +719,7 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: remoteBook(id: 49, filename: "a.zip", lastPage: 3))   // 一覧はまだ 3 のまま
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(ref.startPage == 15)
         #expect(G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/49/detail") })
     }
@@ -954,8 +954,8 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: remoteBook(id: 61, filename: "a.zip", lastPage: 0))
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
-        #expect(ref.book == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/61")
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
+        #expect(ref.bookURL.absoluteString == "http://127.0.0.1:1/api/v1/libraries/\(s.libraryUUID)/books/61")
         #expect(ref.token == "VIEWER-TOKEN")
         #expect(ref.expiresAt == Date(timeIntervalSince1970: 2_000_000_000))
         #expect(env.relays.count == 0)
@@ -1031,7 +1031,7 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: remoteBook(id: 62, filename: "a.zip", lastPage: 0))
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(abs(ref.expiresAt.timeIntervalSince(remoteExpiry)) < 1, "リモートの鍵の期限に合わせる")
         guard case .valid(let relayRecord) = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
             Issue.record("参照ファイルの鍵が中継の鍵になっていない"); return
@@ -1065,7 +1065,7 @@ struct ExternalViewerSyncWiringTests {
         let action = try #require(notice.action)
         #expect(action.title == "従来の開き方で開く")
         // トークンは取り消さない（ビューアが遅れて読み始めても動く）。
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         guard case .valid = env.tokens.lookup(token: ref.token, issuer: .localEndpoint) else {
             Issue.record("お知らせを出してもトークンは有効のまま"); return
         }
@@ -1370,7 +1370,7 @@ struct ExternalViewerSyncWiringTests {
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/57/progress") } }
         try await Task.sleep(for: .milliseconds(50))
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(ref.token == "VIEWER-TOKEN")
         #expect(fallbacks.entries.isEmpty)
         #expect(s.errorText == nil, "発行は成功している（v2 のサーバを失敗と取り違えない）")
@@ -1605,8 +1605,8 @@ struct ExternalViewerSyncWiringTests {
             issue: { reply }, fetchStatus: { _ in throw CancellationError() })
 
         #expect(failure == nil)
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
-        let relayID = String(ref.book.dropFirst("http://127.0.0.1:4321/api/v1/relay/".count))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
+        let relayID = String(ref.bookURL.absoluteString.dropFirst("http://127.0.0.1:4321/api/v1/relay/".count))
         #expect(prefetches.items.map { $0.relayID } == [relayID])
         #expect(prefetches.items.map { $0.focus } == [7])
         let target = try #require(env.relays.target(for: relayID))
@@ -1700,8 +1700,34 @@ struct ExternalViewerSyncWiringTests {
         s.openViewer(book: remoteBook(id: 66, filename: "a.zip", lastPage: 0))
         try await waitUntil { !launches.entries.isEmpty }
 
-        let ref = try BookReference.decode(Data(contentsOf: try #require(launches.entries.first).file))
+        let ref = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first).file)
         #expect(ref.version == 1)
         try await waitUntil { G60ViewerTokenStub.paths.contains { $0.hasSuffix("/books/66/progress") } }
+    }
+
+    /// G63 段 4: 部品の型は、読む側が断る値（ページ数が上限を超える本など）では作れない。作れなければ参照ファイルを
+    /// 書かず、ビューアも起動せず、先読みも始めない（`.referenceNotWritten`＝今の「従来の開き方」に合流する）。
+    @Test func aReferenceTheKitRefusesIsNotHandedOff() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let original = HelperLauncher.launch
+        defer { HelperLauncher.launch = original }
+        HelperLauncher.launch = recording(launches)
+        let prefetches = Prefetches()
+        let h = handoff(env, prefetches: prefetches)
+        let viewer = try #require(HelperLauncher.referenceViewer(category: .archive, settings: env.settings))
+        let reply = remoteReply()
+
+        let failure = await h.openRemote(
+            book: remoteBook(id: 71, filename: "big.zip", lastPage: 0),
+            manifest: ManifestDTO(pageCount: StackNestFormat.maxPageCount + 1, direction: "rtl", format: "archive",
+                                  etag: "\"e8\""),
+            viewer: viewer, serverID: UUID(), serverBase: URL(string: "http://127.0.0.1:1/")!, libraryUUID: "LIB-X",
+            startPage: 0, settings: env.settings,
+            issue: { reply }, fetchStatus: { _ in throw CancellationError() })
+
+        #expect(failure == .referenceNotWritten)
+        #expect(launches.entries.isEmpty, "ビューアを起動しない")
+        #expect(prefetches.items.isEmpty, "先読みを始めない")
     }
 }

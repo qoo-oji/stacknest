@@ -131,15 +131,22 @@ struct ExternalViewerHandoff {
         // `isLocalEndpointRunning` はバインド前から true なので、取り直しの最中に開くと古いポートを指しうる。
         // その場合は開き直せば直る＝許容）。
         guard let base = URL(string: "http://127.0.0.1:\(localPort())/") else { return .referenceNotWritten }
-        let reference = BookReference(
-            version: viewer.formatVersion,
-            title: book.title,
-            book: BookReference.bookURL(serverBase: base, libraryUUID: libraryUUID, bookID: book.id),
-            token: issued.token,
-            expiresAt: issued.record.expiresAt,
-            pageCount: pageCount,
-            direction: BookReference.directionString(direction),
-            startPage: BookReference.clampedStartPage(startPage, pageCount: pageCount))
+        let reference: StackNestBookReference
+        do {
+            // G63 段 4: 部品の型は、読む側が断る値（ページ数の上限・鍵の文字など）では作れない。作れなければ渡さない
+            // （書き出しの失敗と同じ扱い。呼び出し側は従来の開き方に戻す）。
+            reference = try StackNestBookReference(
+                version: viewer.formatVersion,
+                title: book.title,
+                bookURL: BookReferences.bookURL(serverBase: base, libraryUUID: libraryUUID, bookID: book.id),
+                token: issued.token,
+                expiresAt: issued.record.expiresAt,
+                pageCount: pageCount,
+                direction: BookReferences.direction(direction),
+                startPage: StackNestBookReference.clampedStartPage(startPage, pageCount: pageCount))
+        } catch {
+            return .referenceNotWritten
+        }
         // 確認は、127.0.0.1 の口と同じトークンの保存先を直接読む（HTTP を通さない・spec §5.7）。
         let tokens = self.tokens
         let tokenID = issued.record.id
@@ -180,7 +187,7 @@ struct ExternalViewerHandoff {
         // G60 §5.9（最終レビュー m4）: 鍵を出してもらう往復のあいだに口が止まっていたら（同期とローカルコントロールを
         // OFF にした）、中継の記録も参照ファイルも作らず、先読みも始めない。出してもらったリモートの鍵は使われずに切れる。
         if relaysRemoteBooks, !isLocalEndpointRunning() { return .localEndpointNotRunning }
-        let bookURL: String
+        let bookURL: URL
         let token: String
         let expiresAt: Date
         var readUse: (@Sendable () async -> UseOutcome)?
@@ -204,7 +211,7 @@ struct ExternalViewerHandoff {
                                      lockCredential: nil, relayID: relayID, now: issuedAt)
             // ポートは参照ファイルを組む直前に読む（ローカルの本と同じ）。
             guard let base = URL(string: "http://127.0.0.1:\(localPort())/") else { return .referenceNotWritten }
-            bookURL = BookReference.relayURL(localBase: base, relayID: relayID)
+            bookURL = BookReferences.relayURL(localBase: base, relayID: relayID)
             token = local.token
             expiresAt = min(local.record.expiresAt, reply.expiresAt)
             // 確認はローカルの本と同じく、手元の保存先の中継の鍵の初回使用を読む（照会 API は使わない）。
@@ -213,7 +220,7 @@ struct ExternalViewerHandoff {
             let relayTokenID = local.record.id
             readUse = { Self.outcome(of: relayTokens.record(id: relayTokenID)) }
         } else {
-            bookURL = BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id)
+            bookURL = BookReferences.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: book.id)
             token = reply.token
             expiresAt = reply.expiresAt
             // v2 のサーバは tokenID を返さない。そのときは確認を走らせない（参照ファイルでは渡す＝v2 と同じ振る舞い）。
@@ -230,15 +237,22 @@ struct ExternalViewerHandoff {
                 }
             }
         }
-        let reference = BookReference(
-            version: viewer.formatVersion,
-            title: book.title,
-            book: bookURL,
-            token: token,
-            expiresAt: expiresAt,
-            pageCount: manifest.pageCount,
-            direction: manifest.direction,
-            startPage: BookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
+        let reference: StackNestBookReference
+        do {
+            // G63 段 4: 作れなければ渡さない（`openLocal` と同じ）。中継の記録と中継の鍵は、書き出しの失敗のときと
+            // 同じく使われずに期限で消える。先読みも始めない（下の `failure == nil` の条件）。
+            reference = try StackNestBookReference(
+                version: viewer.formatVersion,
+                title: book.title,
+                bookURL: bookURL,
+                token: token,
+                expiresAt: expiresAt,
+                pageCount: manifest.pageCount,
+                direction: StackNestReadingDirection(rawValue: manifest.direction),
+                startPage: StackNestBookReference.clampedStartPage(startPage, pageCount: manifest.pageCount))
+        } catch {
+            return .referenceNotWritten
+        }
         let failure = hand(reference, origin: .remote(serverID: serverID), libraryUUID: libraryUUID, bookID: book.id,
                            settings: settings, viewer: viewer, readUse: readUse, onNotUsed: onNotUsed, onUsed: onUsed,
                            cancelsOnClose: !relaysRemoteBooks, onCheckStarted: onCheckStarted)
@@ -266,7 +280,7 @@ struct ExternalViewerHandoff {
         return .used(firstUsedAt: usedAt, viewer: record.viewer)
     }
 
-    private func hand(_ reference: BookReference, origin: BookReferenceStore.Origin, libraryUUID: String,
+    private func hand(_ reference: StackNestBookReference, origin: BookReferenceStore.Origin, libraryUUID: String,
                       bookID: Int, settings: ViewerSettings, viewer: ReferenceViewer,
                       readUse: (@Sendable () async -> UseOutcome)?,
                       onNotUsed: @escaping @MainActor @Sendable (String) -> Void,

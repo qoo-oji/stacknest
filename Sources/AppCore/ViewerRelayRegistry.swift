@@ -32,7 +32,7 @@ public struct ViewerRelayTarget: Sendable, Equatable {
 
     /// リモートの本の API の基点（`…/api/v1/libraries/<lib>/books/<id>`）。
     public var remoteBookURL: String {
-        BookReference.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: bookID)
+        BookReferences.bookURL(serverBase: serverBase, libraryUUID: libraryUUID, bookID: bookID).absoluteString
     }
 
     /// ページ数と etag だけを替えたもの（ほか、リモートの鍵もそのまま）。

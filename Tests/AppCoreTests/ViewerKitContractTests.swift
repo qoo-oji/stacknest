@@ -17,8 +17,8 @@ struct ViewerKitContractTests {
 
     /// ⑤ StackNest が書ける版は、すべて部品が読める（宣言から選んだ版で、部品の型がいつも作れる）。
     @Test func everyWritableVersionIsReadableByTheKit() {
-        #expect(!BookReference.writableVersions.isEmpty)
-        #expect(Set(BookReference.writableVersions).isSubset(of: StackNestFormat.supportedVersions))
+        #expect(!BookReferences.writableVersions.isEmpty)
+        #expect(Set(BookReferences.writableVersions).isSubset(of: StackNestFormat.supportedVersions))
     }
 
     /// StackNest が書き出す型の宣言（`App/StackNest/Info.plist` の `UTExportedTypeDeclarations`）が部品の定数と同じ。

@@ -47,8 +47,8 @@ struct ViewerRelayRegistryTests {
     }
 
     @Test func relayURLPointsAtTheLocalEndpoint() {
-        #expect(BookReference.relayURL(localBase: URL(string: "http://127.0.0.1:4321/")!, relayID: "R-1")
-                == "http://127.0.0.1:4321/api/v1/relay/R-1")
+        #expect(BookReferences.relayURL(localBase: URL(string: "http://127.0.0.1:4321/")!, relayID: "R-1")
+                .absoluteString == "http://127.0.0.1:4321/api/v1/relay/R-1")
     }
 
     @Test func relayTokenRecordsItsRelayID() {

@@ -30,10 +30,10 @@ public struct ViewerSupportDeclaration: Sendable, Equatable {
         self.referenceFormatVersions = referenceFormatVersions
     }
 
-    /// 参照ファイルに書く版。宣言と StackNest が書ける版（`BookReference.writableVersions`）の共通の最大。
+    /// 参照ファイルに書く版。宣言と StackNest が書ける版（`BookReferences.writableVersions`）の共通の最大。
     /// 共通の版が無い（＝未対応）なら nil。
     public var chosenFormatVersion: Int? {
-        Self.chooseVersion(declared: referenceFormatVersions, writable: BookReference.writableVersions)
+        Self.chooseVersion(declared: referenceFormatVersions, writable: BookReferences.writableVersions)
     }
 
     /// 宣言された版と書ける版の共通の最大。共通が無ければ nil。

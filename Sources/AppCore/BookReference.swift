@@ -1,89 +1,30 @@
 // SPDX-License-Identifier: MIT
 import Foundation
 import LibraryStore
+import StackNestViewerKitCore
 
-/// G60: 参照ファイル（`.stacknestbook`）の中身（spec §5.4。版は §5.6 の交渉で決まり、今は 1 だけ）。
-/// 対応した外部ビューアは `book` の API からページを取り、読み進めたページを書き戻す。
-/// 形式の公開文書は `docs/book-reference-format.md`（日英）。項目を変えたらあちらも直す。
-public struct BookReference: Codable, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    public static let formatName = "stacknest-book-reference"
+/// G60 → G63 段 4: 参照ファイル（`.stacknestbook`）の中身の型は、StackNestViewerKit の `StackNestBookReference`
+/// （作る側の StackNest と読む側のビューアが共有する唯一の定義・spec §5.4）。ここに残るのは StackNest に固有の決まり。
+/// 形式の公開文書は StackNestViewerKit のリポジトリの `Documentation/BookReferenceFormat.md`（日英）。
+public enum BookReferences {
     /// G60 v3: StackNest が書ける参照ファイルの版。ビューアの宣言（`StackNestViewerSupport`）との共通の最大を書く。
+    /// 部品が読める版（`StackNestFormat.supportedVersions`）に含まれることを試験で確かめる。
     public static let writableVersions: [Int] = [1]
-    public static let fileExtension = "stacknestbook"
-    public static let typeIdentifier = "app.shelfsmith.stacknest.book-reference"
 
-    public let format: String
-    public let version: Int
-    public let title: String
-    /// 本の API の基点。ビューアは `{book}/manifest`・`{book}/pages/{n}`・`{book}/cover`・`{book}/progress` を使う。
-    public let book: String
-    /// その本専用の読み取りトークン（Bearer で渡す）。
-    public let token: String
-    public let expiresAt: Date
-    /// 開いた時点の値（正は manifest）。
-    public let pageCount: Int
-    /// "rtl" / "ltr"。開いた時点の値（正は manifest）。
-    public let direction: String
-    /// 0 始まり。開いた時点の読書位置。
-    public let startPage: Int
-
-    /// - Parameter version: 書く版（`ReferenceViewer.formatVersion`＝宣言との共通の最大）。
-    public init(version: Int, title: String, book: String, token: String, expiresAt: Date,
-                pageCount: Int, direction: String, startPage: Int) {
-        self.format = Self.formatName
-        self.version = version
-        self.title = title
-        self.book = book
-        self.token = token
-        self.expiresAt = expiresAt
-        self.pageCount = pageCount
-        self.direction = direction
-        self.startPage = startPage
+    /// `http://host:port/` と書庫・本から、本の API の基点を作る（`…/api/v1/libraries/<lib>/books/<id>`）。
+    public static func bookURL(serverBase: URL, libraryUUID: String, bookID: Int) -> URL {
+        serverBase.appendingPathComponent("api/v1/libraries/\(libraryUUID)/books/\(bookID)")
     }
 
-    /// トークンを出さない（ログやテスト失敗の表示に平文が漏れないように）。
-    public var description: String {
-        "BookReference(title: \(title), book: \(book), token: <redacted>, expiresAt: \(expiresAt), "
-            + "pageCount: \(pageCount), direction: \(direction), startPage: \(startPage))"
-    }
-
-    public var debugDescription: String { description }
-
-    /// `http://host:port/` と書庫・本から、本の API の基点を作る。
-    public static func bookURL(serverBase: URL, libraryUUID: String, bookID: Int) -> String {
-        serverBase.appendingPathComponent("api/v1/libraries/\(libraryUUID)/books/\(bookID)").absoluteString
-    }
-
-    /// G60 v3（spec §5.8・試用）: リモートの本を中継する 127.0.0.1 の口の基点（`…/api/v1/relay/<relayID>`）。
+    /// G60 v3（spec §5.8）: リモートの本を中継する 127.0.0.1 の口の基点（`…/api/v1/relay/<relayID>`）。
     /// ビューアから見た形（`manifest`・`pages/{n}`・`cover`・`progress`）はローカルの本と同じ。
-    public static func relayURL(localBase: URL, relayID: String) -> String {
-        localBase.appendingPathComponent("api/v1/relay/\(relayID)").absoluteString
+    public static func relayURL(localBase: URL, relayID: String) -> URL {
+        localBase.appendingPathComponent("api/v1/relay/\(relayID)")
     }
 
-    /// サーバの manifest と同じ書き方（"rtl"/"ltr"）。
-    public static func directionString(_ direction: PageDirection) -> String {
-        direction == .leftToRight ? "ltr" : "rtl"
-    }
-
-    /// 開くページを 0…pageCount-1 に収める（0 ページの本は 0）。
-    public static func clampedStartPage(_ page: Int, pageCount: Int) -> Int {
-        guard pageCount > 0 else { return 0 }
-        return min(max(0, page), pageCount - 1)
-    }
-
-    /// UTF-8 の JSON。日時は ISO 8601（UTC の Z）、URL のスラッシュはエスケープしない。
-    public func encoded() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
-    }
-
-    /// 知らない項目は読み飛ばす。
-    public static func decode(_ data: Data) throws -> BookReference {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(BookReference.self, from: data)
+    /// 書庫の読む向きを、参照ファイルの読む向きへ写す（サーバの manifest と同じ "rtl"／"ltr"）。
+    public static func direction(_ direction: PageDirection) -> StackNestReadingDirection {
+        direction == .leftToRight ? .leftToRight : .rightToLeft
     }
 }
 
@@ -137,14 +78,14 @@ public struct BookReferenceStore: Sendable {
 
     /// 書き出して、そのファイルの URL を返す。
     @discardableResult
-    public func write(_ reference: BookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
+    public func write(_ reference: StackNestBookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
         guard Self.isSafeComponent(libraryUUID) else { throw WriteError.invalidLibraryUUID }
         return try Self.ioLock.withLock {
             try writeLocked(reference, origin: origin, libraryUUID: libraryUUID, bookID: bookID)
         }
     }
 
-    private func writeLocked(_ reference: BookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
+    private func writeLocked(_ reference: StackNestBookReference, origin: Origin, libraryUUID: String, bookID: Int) throws -> URL {
         let ownerOnlyDirectory: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
         // 根は先に 700 で作る。シンボリックリンクなら（リンク先には触れず）リンクごと消して作り直す。
         try removeIfSymlink(root)
@@ -165,12 +106,12 @@ public struct BookReferenceStore: Sendable {
             try? fm.removeItem(at: room.appendingPathComponent(name))
         }
         let name = OfflineExternalLink.safeFileName(title: reference.title, fallbackID: bookID,
-                                                    fileExtension: BookReference.fileExtension)
+                                                    fileExtension: StackNestFormat.fileExtension)
         let dest = room.appendingPathComponent(name)
         // トークンの平文が入るので、最初から 600 で作った一時ファイルに書いて rename する（644 の瞬間を作らない）。
         let temp = room.appendingPathComponent(".tmp-\(UUID().uuidString)")
         do {
-            try Self.writeOwnerOnly(reference.encoded(), to: temp)
+            try Self.writeOwnerOnly(reference.encodedJSON(), to: temp)
             if rename(temp.path, dest.path) != 0 {
                 throw CocoaError(.fileWriteUnknown)
             }
@@ -212,9 +153,11 @@ public struct BookReferenceStore: Sendable {
         guard fm.fileExists(atPath: root.path) else { return 0 }
         var doomed: [URL] = []
         if let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil) {
-            for case let url as URL in walker where url.pathExtension == BookReference.fileExtension {
-                let reference = (try? Data(contentsOf: url)).flatMap { try? BookReference.decode($0) }
-                if let reference, reference.expiresAt > now { continue }
+            // 拡張子は大文字小文字を区別して比べる（StackNest が書く名前は小文字だけ。掃除の対象を広げない）。
+            for case let url as URL in walker where url.pathExtension == StackNestFormat.fileExtension {
+                if let reference = try? StackNestBookReference.load(contentsOf: url), !reference.isExpired(at: now) {
+                    continue
+                }
                 doomed.append(url)
             }
         }
