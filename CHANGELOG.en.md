@@ -7,6 +7,124 @@ Releases are self-signed Universal builds (anonymous CN `StackNest Self-Signed`,
 
 > **About versioning:** Tagged releases start at `0.8.0`. Earlier work was developed by phase (2.1–2.6) without explicit version numbers. The history before tagging is summarized under "Before 0.8.0 (phase-based, untagged)" at the end of this file.
 
+## [0.17.0] - 2026-10-18 — E-book typefaces and colours, wheel page turns, reading-position sync with external viewers, added file extensions (Phase G56–G65)
+
+> This release lets you read e-books in the typeface and colours you like, and turns pages with the wheel and trackpad
+> in the image viewer too. Remote books can now be handed to a supported external viewer without downloading them,
+> and the position you reach comes back to StackNest. Adding non-standard file extensions was asked for in a 5ch thread.
+
+### Added
+
+- **★ Choose the e-book typeface** (Settings ▸ Built-in Viewer ▸ E-Book Viewer: "**Japanese Typeface**" and "**Latin Typeface**").
+  - Japanese and Latin typefaces are chosen separately. With both set, letters and digits use the Latin typeface, while kana, kanji and
+    Japanese punctuation such as "……" and "――" use the Japanese one. With only the Japanese typeface set, letters and digits use it too;
+    with only the Latin one set, kana and kanji use the default typeface (the settings and the help say so).
+  - For a typeface that isn't in the list, "**Other…**" at the end opens the macOS font panel with every typeface on the Mac.
+    Choosing a typeface without Japanese characters for the Japanese setting shows a warning. A typeface missing on another Mac
+    falls back to "Book's Own", and the setting is kept.
+- **★ Choose the e-book background and text colours** (in the same section: "**Background (Light)**" and "**Background (Dark)**").
+  - Presets are Standard / Cream / Sepia for light and Standard / Charcoal / Navy for dark. "**Custom**" lets you pick any
+    "Background Color" and "Text Color" with colour pickers. A hard-to-read combination (low contrast) shows a warning.
+  - "**Prefer Readability over Book Colors**" puts your chosen colours ahead of the text and background colours the book specifies.
+    When the system's Increase Contrast is on, the custom text colour is not forced (so you don't get white text on white).
+  - Typeface, background and colour theme changes apply to open e-book windows right away (the colour theme used to wait until
+    you reopened the book). With "Match System", the colours also follow the system appearance when it switches.
+- **★ E-books return to the same sentence.** StackNest remembers the sentence on screen when you close the book and opens with that
+  sentence on screen, even if the text size or window width differs from last time. Changing the text size, typeface or spread
+  while the book is open keeps the sentence you are reading on screen.
+  - Positions saved before this release, and positions reached in the web reader, open from the reading progress (percentage) as before.
+- **★ The image viewer turns pages with the wheel and trackpad too** (when the page fits the window). It follows the same rules as
+  e-books: **one gesture turns one page** (one spread in spread view), and pausing briefly before scrolling again turns the next.
+  Zooming with the wheel while the loupe is on, and panning while zoomed in, work as before.
+  - New "**Turn Pages by Scrolling**" in Settings ▸ Built-in Viewer ▸ All Viewers (applies to both the image viewer and e-books;
+    turn it off and the wheel no longer turns pages).
+  - "Turn Pages with Horizontal Scrolling" and "Reverse Horizontal Scroll Direction" moved to All Viewers as well and now apply to
+    the image viewer too. Your current values carry over.
+- **★ Read books in a supported external viewer and sync the reading position back to StackNest** (Settings ▸ View ▸ External Viewer:
+  "**Sync Reading Position with StackNest (Supported Apps Only)**").
+  - It applies when images (archives, folders, PDF, image files) are set to open in an external viewer. StackNest hands the viewer a
+    **reference file** (`.stacknestbook`) for the book; the viewer gets the pages from StackNest one at a time and writes the page you
+    reach back (so Resume and the reading position in the list stay current).
+  - **Remote books open in the external viewer too, without downloading.** The viewer is given 127.0.0.1 (this Mac only), and
+    StackNest relays between it and the server. Relayed pages go into the remote cache, shared with the built-in viewer, and the pages
+    around the one you're reading are prefetched in the background (every page if "Prefetch All Pages of an Opened Book" is on in
+    Settings ▸ View ▸ Remote Cache).
+  - Books in local libraries are handed over through the same endpoint. While this setting is on, the endpoint starts automatically
+    even if Local Control is off, and accepts only per-book tokens.
+  - The reference file holds **a token that can read only that book** (valid for 30 days). It is handed only to apps that declare
+    StackNest support (supported apps); any other app opens the book as before. If the app hasn't loaded the book after 15 seconds,
+    a notice offers "Open the Usual Way". Settings show whether the external viewer declares support and whether StackNest has
+    confirmed that it loaded a book (with the date and version).
+  - **No released viewer declares support yet.** Support for [qooViewer](https://github.com/qoo-oji/qooViewer) has been proposed
+    upstream as [PR #1](https://github.com/qoo-oji/qooViewer/pull/1) and is awaiting review. The reference file format and the
+    viewer-side package [StackNestViewerKit](https://github.com/shelfsmith/StackNestViewerKit) (MIT) are public, so any viewer can add support.
+- **★ Add file extensions StackNest doesn't handle by default and treat them as an existing category** ("Edit…" next to
+  "File Extensions" in Settings ▸ View ▸ External Viewer).
+  - Add extensions such as `.tgz`, `.avif` or `.docx` and choose whether each is treated as an **archive, image, video or text**.
+    Files with an added extension are handled exactly like books of that category (dropping and adding with "+", built-in or external
+    viewer, and which external viewer). The standard extensions are listed with their categories (read-only).
+  - When StackNest can't read the contents, the book opens in that category's external viewer even when the built-in viewer is
+    selected, and its cover is the macOS **Quick Look thumbnail**. For books added before the extension, use "Regenerate Cover".
+    Removing an extension doesn't remove any books; they're treated as archives.
+  - Books whose contents can't be read are "Not applicable" in the integrity check, and the summary shows how many there are.
+    An empty (0-byte) file counts as damaged.
+- **★ StackNest reads tar**, and `cbt` and `tar` join the standard (archive) extensions. The standard `cbt` and `tar` are read only as
+  uncompressed tar; a gzip-compressed tar (`.tgz` and the like) is read only under an extension you added as an archive.
+  `.tar.bz2` and `.tar.xz` can't be read.
+- **Tab / ⇧Tab page skip works in the e-book window too.** It counts pages of the whole book and moves forward / back by
+  "Tab Skip Page Count" (it doesn't move until the whole book has been measured).
+
+### Changed
+
+- **★ Settings ▸ Built-in Viewer is split into three sections, "All Viewers", "Image Viewer" and "E-Book Viewer"** (the first-run
+  wizard too), so the headings show which viewer each setting affects.
+  - "Tab Skip Page Count" and "Show Spread by Default" moved to All Viewers and now apply to e-books too (with the spread default on,
+    e-books open as spreads).
+  - The page number setting is now "**Show Page Numbers per Chapter**".
+- **"EPUB" now reads "e-book" across the UI, help, web and CLI** (Japanese 電子書籍). Places that mean the file format itself
+  (such as "E-Books (EPUB)" and the option to use the EPUB title) keep "EPUB".
+- **The help now describes wheel / trackpad page turns**: when they work (one gesture, one page; pause briefly for the next; not
+  while a chapter is loading; the first direction you move decides vertical or horizontal) and the related settings.
+- **The list no longer freezes during consecutive writes.** When books kept changing (running the CLI's `set` repeatedly, for
+  example), the whole list was rebuilt for each change and the list stopped responding (on a 12,000-book library, one HTTP write
+  took 0.97 s at the median). Only the changed rows are redrawn now, consecutive changes are applied together, and the browser
+  pane's counts are computed off the main thread (in the same measurement, 5.3 ms per write; the CLI's `set` went from 0.96 s to 0.13 s).
+- **The HTTP API documentation (OpenAPI at `/docs`) now covers every operation (85)**, up from 35. Grants, shelves, integrity,
+  maintenance, settings, presets, locking, SSE, relinking, restore, cover replacement, the Local Control routes and more were
+  added, and the authentication section was rewritten for the current three tiers (read, edit, admin). A CI test now catches routes
+  and documentation that disagree.
+- [Washi](https://github.com/shunnag/Washi), which renders e-books, is updated from 1.22.0 to **1.24.0** (via 1.23.0).
+  - 1.23.0 includes two changes found while developing StackNest and sent upstream ([#12](https://github.com/shunnag/Washi/pull/12)
+    and [#13](https://github.com/shunnag/Washi/pull/13)): a fix for the wheel not turning pages in spread view partway through a
+    chapter of a vertical-text (or right-to-left horizontal) book, where the screen only moved and snapped back, and a setting to
+    stop wheel page turns (used by "Turn Pages by Scrolling"). Thank you to [shunnag](https://github.com/shunnag) for merging them
+    and refining them further.
+  - 1.24.0 no longer reports the chapter-start position before landing on the saved sentence when a book opens, which makes
+    returning to the same sentence more reliable. Continuous scrolling is also lighter, and measuring the whole book's page count
+    can resume where it left off.
+- The reference file types handed to external viewers now come from the separately published package
+  [StackNestViewerKit](https://github.com/shelfsmith/StackNestViewerKit) 0.1.0 (for external viewer authors; the reference file
+  contents are unchanged).
+
+### Fixed
+
+- **In the English UI, menu, tab and button names in the help didn't match the names on screen** (a dozen or so). They now match,
+  and a test catches mismatches.
+- **In the English UI, the default names of filename format presets and sharing tokens appeared in Japanese in the edit fields.**
+  The edit fields now show the English names, and opening and closing a field without changes no longer rewrites the stored value.
+  A duplicated preset is named in the "Default copy" form.
+- The line for an integrity check that itself failed changed with the requester's language in the API and `--json` output. It is
+  now a language-independent value, translated only for display.
+- On a Mac with English as the language and Japan as the region, some of the list's sorting rules didn't take effect.
+- **Opening a library whose path contains "library" from Finder could open a second window left with a spinning indicator.**
+
+### Security
+
+- **Change notifications for libraries the sharing server doesn't serve reached remote SSE clients** (low severity). For a library
+  that was open but not shared (or whose sharing was turned off), only the library UUID, book IDs and times reached clients connected
+  with a key that can see all libraries (book contents returned 404 and couldn't be read). Notifications for libraries that aren't
+  served are no longer sent.
+
 ## [0.16.0] - 2026-09-27 — English UI (Phase G55)
 
 ### Added
