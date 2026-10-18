@@ -7,6 +7,18 @@ Releases are self-signed Universal builds (anonymous CN `StackNest Self-Signed`,
 
 > **About versioning:** Tagged releases start at `0.8.0`. Earlier work was developed by phase (2.1–2.6) without explicit version numbers. The history before tagging is summarized under "Before 0.8.0 (phase-based, untagged)" at the end of this file.
 
+## [0.17.1] - 2026-10-19 — StackNestViewerKit 0.2.0, the package for external viewers
+
+> StackNest itself behaves the same. This update is for external viewer authors.
+
+### Changed
+
+- Updated [StackNestViewerKit](https://github.com/shelfsmith/StackNestViewerKit), the package for external viewers, to [0.2.0](https://github.com/shelfsmith/StackNestViewerKit/releases/tag/0.2.0).
+  The part StackNest uses (the reference file types) is unchanged apart from its version number, and reference files are the same.
+  - 0.2.0 brings in ten pull requests from [@qoo-oji](https://github.com/qoo-oji), the author of [qooViewer](https://github.com/qoo-oji/qooViewer)
+    (fixes on the viewer side of the package: a limit and order for concurrent requests, no requests after a permanent failure,
+    a check on the book API path shape, and flushing the reading position at quit). Thank you for the careful review and fixes.
+
 ## [0.17.0] - 2026-10-18 — E-book typefaces and colours, wheel page turns, reading-position sync with external viewers, added file extensions (Phase G56–G65)
 
 > This release lets you read e-books in the typeface and colours you like, and turns pages with the wheel and trackpad
