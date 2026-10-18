@@ -26,8 +26,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
         .package(url: "https://github.com/shunnag/Washi", revision: "ca7e3b009bd85a78150725960870db40ae5b665f"),
-        // G63 段 4: 参照ファイルの型・宣言・名乗り（Core だけを使う）。0.1.0 のタグが出るまでは revision で固定する。
-        .package(url: "https://github.com/shelfsmith/StackNestViewerKit", revision: "42c8d0abae861d3be5769b496cd689efb80e7c26"),
+        // G63 段 4: 参照ファイルの型・宣言・名乗り（Core だけを使う）。版で固定する。
+        .package(url: "https://github.com/shelfsmith/StackNestViewerKit", exact: "0.1.0"),
     ],
     targets: [
         .target(

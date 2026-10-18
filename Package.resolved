@@ -1,5 +1,5 @@
 {
-  "originHash" : "231fc68b89a1e69669b74fda64143031828df86f5a6b844064fd7c6834ed7ce1",
+  "originHash" : "80be668076ab4027abad3331f0e236233326af9344a185236ff4ff37dbea3eca",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -33,7 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/shelfsmith/StackNestViewerKit",
       "state" : {
-        "revision" : "42c8d0abae861d3be5769b496cd689efb80e7c26"
+        "revision" : "66a31bf183567ea3b2b430435a0171db96aa8e6f",
+        "version" : "0.1.0"
       }
     },
     {
