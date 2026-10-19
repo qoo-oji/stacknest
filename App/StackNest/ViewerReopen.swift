@@ -30,15 +30,18 @@ enum ViewerReopen {
     }
 
     /// 頼みを受ける。ライブラリの窓を開く（開いている窓へ渡す）ことになったら true（起動時の題名の画面を出さない判断に使う）。
+    ///
+    /// **最初に送り手を確かめる**: どのアプリでも URL は開けるので、送り手が設定の外部ビューア（`isConfiguredViewer`）でなければ、
+    /// ライブラリを開く・解錠の画面・警告・知らせのどれも出さずにログだけ残す（ほかのアプリに StackNest を操らせない・ライブラリや
+    /// 本があるかを知らせで探らせない）。本ごとの確かめ（その本を渡す外部ビューアか・同一性）は `handleViewerReopen`。
     @discardableResult
-    static func handle(_ url: URL, sender: URL?) -> Bool {
+    static func handle(_ url: URL, sender: URL?, settings: ViewerSettings = .shared) -> Bool {
         guard let request = StackNestReopenRequest(url: url) else {
             logger.info("reopen: ignored a malformed request")
             return false
         }
-        guard let sender else {
-            // 送り手の分からない頼みは渡さない（どのアプリでも URL は開ける）。
-            logger.info("reopen: refused a request without a sender")
+        guard let sender, isConfiguredViewer(sender, settings: settings) else {
+            logger.info("reopen: refused a request from an app that is not a configured external viewer")
             return false
         }
         if let state = AppState.activeInstances.allObjects.first(where: {
@@ -47,27 +50,62 @@ enum ViewerReopen {
             state.handleViewerReopen(request, sender: sender)
             return true
         }
+        // 覚えている場所はパスの形だけを確かめる（存在の確かめはしない ―― ネットワークの上のライブラリでメインを止めない。無ければ
+        // ライブラリを開く道がいつもどおり知らせる）。
         guard let bundlePath = ViewerReopenLibraries.shared.bundlePath(for: request.libraryUUID),
-              FileManager.default.fileExists(atPath: bundlePath)
+              (bundlePath as NSString).pathExtension.lowercased() == "stacknest"
         else {
-            presentAlert(String(localized: "外部ビューアから頼まれた本のライブラリが見つかりません。StackNest でライブラリを開いてから、もう一度開いてください。"))
+            // 外部ビューアからの頼みなので知らせる。`application(_:open:)` の中（起動の途中もある）で止めないよう、次の周回で。
+            DispatchQueue.main.async {
+                presentAlert(String(localized: "外部ビューアから頼まれた本のライブラリが見つかりません。StackNest でライブラリを開いてから、もう一度開いてください。"))
+            }
             return false
         }
         // ライブラリを開き、読み終えたところで渡す（AppState が `take(bundlePath:)` で受け取る）。
-        pending = (bundlePath, request, sender)
+        prunePending()
+        pending.append(Pending(bundlePath: bundlePath, request: request, sender: sender, receivedAt: Date()))
         URLOpener.shared.enqueue(URL(fileURLWithPath: bundlePath))
         return true
     }
 
-    /// 開き終えたライブラリの窓が、自分宛ての頼みを受け取る（1 回だけ）。
-    static func take(bundlePath: String) -> (request: StackNestReopenRequest, sender: URL)? {
-        guard let waiting = pending, waiting.bundlePath == bundlePath else { return nil }
-        pending = nil
-        return (waiting.request, waiting.sender)
+    /// 送り手が、設定にある外部ビューア（既定・種類ごと・EPUB のどれか）で、読書位置の同期（参照ファイルで渡す）が ON か。
+    /// アプリの場所は記号リンクを解いて比べる。
+    static func isConfiguredViewer(_ sender: URL, settings: ViewerSettings) -> Bool {
+        guard settings.syncsReadingPositionWithExternalViewer else { return false }
+        let paths = [settings.externalViewerAppPath, settings.epubViewerAppPath].compactMap { $0 }
+            + Array(settings.categoryViewerPaths.values)
+        let target = canonicalAppPath(sender)
+        return paths.contains { canonicalAppPath(URL(fileURLWithPath: $0)) == target }
     }
 
-    /// ライブラリを開くのを待っている頼み（後から来た頼みが前のものを置き換える）。
-    private static var pending: (bundlePath: String, request: StackNestReopenRequest, sender: URL)?
+    /// アプリの場所の比べ方（記号リンクを解いて揃える）。送り手と、渡す外部ビューアの比べ方を 1 つにする。
+    static func canonicalAppPath(_ url: URL) -> String {
+        url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// 開き終えたライブラリの窓が、自分宛ての頼みを受け取る（届いた順に全部。期限の過ぎたものは捨てる）。
+    static func take(bundlePath: String) -> [(request: StackNestReopenRequest, sender: URL)] {
+        prunePending()
+        let mine = pending.filter { $0.bundlePath == bundlePath }
+        pending.removeAll { $0.bundlePath == bundlePath }
+        return mine.map { ($0.request, $0.sender) }
+    }
+
+    /// ライブラリを開くのを待っている頼み。ライブラリを開けなかった（壊れている・キャンセルした）ときに残らないよう、
+    /// `pendingLifetime` を過ぎたものは捨てる（以前は 1 件だけを持ち、開けなかったら消えずに残って、何日も後に手で開いたときに
+    /// 本が渡っていた ―― 2 回目のレビュー M-B）。
+    private struct Pending {
+        let bundlePath: String
+        let request: StackNestReopenRequest
+        let sender: URL
+        let receivedAt: Date
+    }
+    private static var pending: [Pending] = []
+    static let pendingLifetime: TimeInterval = 120
+
+    private static func prunePending(now: Date = Date()) {
+        pending.removeAll { now.timeIntervalSince($0.receivedAt) > pendingLifetime }
+    }
 
     /// 頼みの Apple Event の送り手のアプリ（`application(_:open:)` の中で呼ぶ。分からなければ nil）。
     static func senderOfCurrentEvent() -> URL? {
@@ -129,7 +167,7 @@ extension AppState {
     /// 渡す（`consumePendingViewerReopen`）。
     func handleViewerReopen(_ request: StackNestReopenRequest, sender: URL) {
         if needsUnlock {
-            pendingViewerReopen = (request, sender)
+            pendingViewerReopen.append((request, sender))
             return
         }
         guard let book = try? database?.fetchBook(id: request.bookID),
@@ -142,19 +180,23 @@ extension AppState {
         }
         // 頼んだアプリが、今この本を渡す外部ビューアであるときだけ渡す（ほかのアプリの頼みで、設定していないアプリへ渡さない）。
         guard let viewer = referenceViewerForReopen(book),
-              viewer.appURL.standardizedFileURL.path == sender.standardizedFileURL.path
+              ViewerReopen.canonicalAppPath(viewer.appURL) == ViewerReopen.canonicalAppPath(sender)
         else {
             ViewerReopen.logger.info("reopen: the sender is not the external viewer for this book")
-            watchNotice.present(Notice(kind: .warning, text: String(localized: "外部ビューアの設定が変わったため、頼まれた本を渡せませんでした。")))
+            watchNotice.present(Notice(kind: .warning, text: String(localized: "頼んだアプリは、この本を渡す外部ビューアではないため、渡しませんでした。")))
             return
         }
+        // 窓で選んで開いたときと同じく、「最後に開いた本」とライブラリの場所を覚え直す（ライブラリを動かしていても追いつく）。
+        viewerHandoff.recordLastRead(.local(bundlePath: bundleURL.path, bookID: book.id, title: book.title))
+        if let uuid = librarySettings?.libraryUUID { viewerHandoff.recordLibraryForReopen(uuid, bundleURL.path) }
         Task { @MainActor in await self.openInExternalViewerSyncing([book]) }
     }
 
-    /// 解錠に成功したときに、待たせていた頼みを渡す（1 回だけ）。
+    /// 解錠に成功したときに、待たせていた頼みを渡す（届いた順に、1 回だけ）。
     func consumePendingViewerReopen() {
-        guard isUnlocked, let pending = pendingViewerReopen else { return }
-        pendingViewerReopen = nil
-        handleViewerReopen(pending.request, sender: pending.sender)
+        guard isUnlocked, !pendingViewerReopen.isEmpty else { return }
+        let pending = pendingViewerReopen
+        pendingViewerReopen = []
+        for item in pending { handleViewerReopen(item.request, sender: item.sender) }
     }
 }

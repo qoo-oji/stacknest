@@ -102,7 +102,7 @@ final class AppState {
     var pendingResumeBookID: Int?
 
     /// 解錠後に渡す、外部ビューアからの頼み（`ViewerReopen`。解錠成功時に 1 回だけ消費・窓を閉じたら落とす）。
-    @ObservationIgnored var pendingViewerReopen: (request: StackNestReopenRequest, sender: URL)?
+    @ObservationIgnored var pendingViewerReopen: [(request: StackNestReopenRequest, sender: URL)] = []
 
     /// 監視フォルダの自動取り込みの結果（G41）。
     var watchNotice = NoticeSlot()
@@ -415,7 +415,7 @@ final class AppState {
         }
         // 外部ビューアからの頼みでこのライブラリを開いたなら、その本を渡す（`ViewerReopen`。覚えていた場所に別のライブラリが
         // あれば渡さない）。施錠なら解錠を待つ（handleViewerReopen）。
-        if let reopen = ViewerReopen.take(bundlePath: bundleURL.path) {
+        for reopen in ViewerReopen.take(bundlePath: bundleURL.path) {
             if librarySettings?.libraryUUID?.lowercased() == reopen.request.libraryUUID {
                 handleViewerReopen(reopen.request, sender: reopen.sender)
             } else {
@@ -590,7 +590,7 @@ final class AppState {
         // G25b-1r: 窓を閉じたら解錠状態と保留 resume を落とす（再オープン時は再解錠が必要＝#7 の意図）。
         markUnlocked(hash: nil)
         pendingResumeBookID = nil
-        pendingViewerReopen = nil
+        pendingViewerReopen = []
         Self.activeInstances.remove(self)
     }
 

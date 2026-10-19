@@ -1770,7 +1770,7 @@ struct ExternalViewerSyncWiringTests {
 
         // 外部ビューアでないアプリからの頼み。
         state.handleViewerReopen(try reopenRequest(state, row), sender: other)
-        #expect(state.watchNotice.notice?.text.contains("外部ビューアの設定") == true)
+        #expect(state.watchNotice.notice?.text.contains("外部ビューアではない") == true)
         // 番号が使い回された別の本（同一性が違う）。
         state.watchNotice.dismiss()
         state.handleViewerReopen(try reopenRequest(state, row, identity: "sn1-another-book"), sender: env.viewerApp)
@@ -1795,13 +1795,13 @@ struct ExternalViewerSyncWiringTests {
         state.librarySettings?.reloadLockSettings()
 
         state.handleViewerReopen(request, sender: env.viewerApp)
-        #expect(state.pendingViewerReopen != nil, "解錠を待つ")
+        #expect(state.pendingViewerReopen.count == 1, "解錠を待つ")
         state.consumePendingViewerReopen()
-        #expect(state.pendingViewerReopen != nil, "解錠していなければ渡さない")
+        #expect(state.pendingViewerReopen.count == 1, "解錠していなければ渡さない")
         state.markUnlocked(hash: "H1")
         state.consumePendingViewerReopen()
         try await waitUntil { !launches.entries.isEmpty }
-        #expect(state.pendingViewerReopen == nil)
+        #expect(state.pendingViewerReopen.isEmpty)
         #expect(launches.entries.count == 1)
     }
 
@@ -1843,6 +1843,23 @@ struct ExternalViewerSyncWiringTests {
         }
         #expect(libraries.bundlePath(for: "u0") == nil, "古いものから忘れる")
         #expect(libraries.bundlePath(for: "u\(ViewerReopenLibraries.maxCount + 4)") != nil)
+    }
+
+    @Test func reopenRequestsFromAppsThatAreNotConfiguredViewersAreRefusedSilently() throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let other = try makeSecondViewer(env)
+        let url = URL(string: "stacknest://viewer/reopen?library=0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0&book=1&identity=sn1-x")!
+        #expect(ViewerReopen.isConfiguredViewer(env.viewerApp, settings: env.settings))
+        #expect(!ViewerReopen.isConfiguredViewer(other, settings: env.settings))
+        // 設定にない送り手の頼みは、ライブラリを探す前に黙って断る(警告も出さない)。
+        #expect(!ViewerReopen.handle(url, sender: other, settings: env.settings))
+        // 記号リンク越しに起動したビューアも同じアプリとして見る。
+        let link = env.base.appendingPathComponent("LinkedViewer.app")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: env.viewerApp)
+        #expect(ViewerReopen.isConfiguredViewer(link, settings: env.settings))
+        // 読書位置の同期(参照ファイルで渡す)が OFF なら、どのアプリの頼みも受けない。
+        env.settings.syncsReadingPositionWithExternalViewer = false
+        #expect(!ViewerReopen.isConfiguredViewer(env.viewerApp, settings: env.settings))
     }
 
     @Test func reopenURLsWithoutASenderOrMalformedAreIgnored() {

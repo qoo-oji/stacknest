@@ -884,16 +884,6 @@
         }
       }
     },
-    "外部ビューアの設定が変わったため、頼まれた本を渡せませんでした。" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The external viewer settings have changed, so the requested book wasn't handed over."
-          }
-        }
-      }
-    },
     "対応した外部ビューアが、本のページを StackNest から受け取って表示し、読み進めたページを StackNest に書き戻します。画像を外部ビューアで開く設定のときに効き、リモートの本も外部ビューアで開きます。ON のあいだは、ローカルコントロールが OFF でも、この Mac の中だけの受け口（127.0.0.1）が本専用のトークンだけを受け付けます。" : {
       "localizations" : {
         "en" : {
@@ -9911,6 +9901,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "E-Books (EPUB)"
+          }
+        }
+      }
+    },
+    "頼んだアプリは、この本を渡す外部ビューアではないため、渡しませんでした。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app that asked isn't the external viewer for this book, so the book wasn't handed over."
           }
         }
       }
