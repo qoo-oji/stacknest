@@ -118,6 +118,8 @@ enum ViewerReopen {
     }
 
     static func presentAlert(_ text: String) {
+        // 外部ビューアは StackNest を前に出さずに頼むので、知らせるときは前に出る。
+        NSApp.activate()
         let alert = NSAlert()
         alert.messageText = String(localized: "外部ビューアの本を開けません")
         alert.informativeText = text
@@ -168,6 +170,13 @@ extension AppState {
     func handleViewerReopen(_ request: StackNestReopenRequest, sender: URL) {
         if needsUnlock {
             pendingViewerReopen.append((request, sender))
+            // 外部ビューアは StackNest を前に出さずに頼む(形式の文書の勧め)ので、解錠の画面が要るときは自分で前に出る。
+            // ライブラリの窓を前に出すのは、⌘⇧O の続きから開く道と同じく、その窓の値で開き直す(SwiftUI は同じ値の窓を前へ出す)。
+            // (App のテストのホストでは窓を出さない ―― AppEnvironment.isRunningUnitTests。)
+            if !AppEnvironment.isRunningUnitTests {
+                NSApp.activate()
+                URLOpener.shared.enqueue(bundleURL)
+            }
             return
         }
         guard let book = try? database?.fetchBook(id: request.bookID),
