@@ -120,12 +120,14 @@ public actor SequentialArchiveExtractor {
             throw ArchiveAdapterError.archiveUnreadable(u, reason: reason)
         } catch {
             resetHandle()                      // 破損等: ハンドルを捨てる
-            if let data = try? streamForward(to: name, extractsAll: true) { return data }  // 再オープンして 1 回だけ再試行
+            // 再オープンして 1 回だけ再試行。読み飛ばしは同じ決まりで(遠くのページを頼まれたのなら、やり直しでも手前は取り出さない。
+            // 2 回目のレビュー L-1: 以前は全部取り出していた)。
+            if let data = try? streamForward(to: name, extractsAll: wasSkipped) { return data }
             throw error
         }
         // EOF まで見つからず: ファイル差し替え等を想定して 1 回だけ再オープン再走査。
         resetHandle()
-        if let data = try streamForward(to: name, extractsAll: true) { return data }
+        if let data = try streamForward(to: name, extractsAll: wasSkipped) { return data }
         throw ArchiveAdapterError.noImageEntry(url)
     }
 
