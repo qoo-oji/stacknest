@@ -23,6 +23,8 @@ import Carchive
 /// 頼まれたら、そのときだけ頭から開き直し、目的のページまで通過するページを全部取り出す。開き直すとカーソルは頭へ
 /// 戻るので、読み飛ばしの記録は消える（残りのページはまたカーソルより前にある）。開き直しは「カーソルより後ろの
 /// 取り出していないページ」を頼まれたときだけで、開き直した後に前へ順に読むときや、取り出したページへ戻るときには起きない。
+/// 読み飛ばすのは、読み飛ばしが位置を移すだけで済む形式（zip と、圧縮していない tar）のときだけ（`skipIsCheap`）。
+/// 7z・rar のソリッドや gzip の tar では、読み飛ばしにも伸長が要るので速くならず、戻ったときの開き直しの分だけ遅くなる。
 ///
 /// - actor で全アクセスを直列化（libarchive のハンドルは 1 本の cursor 状態を持つため）。
 ///   ビュー側の複数プリフェッチ Task が同時に呼んでも、順方向の 1 パスに集約される。
@@ -47,6 +49,8 @@ public actor SequentialArchiveExtractor {
     static let skipWindow = 8
     /// 読み飛ばしたページ（カーソルはもう先にある）。頼まれたら頭から開き直して取り出す。開き直すと消す（`resetHandle`）。
     private var skipped = Set<String>()
+    /// この書庫の形式で、読み飛ばしが位置を移すだけで済むか（最初のヘッダを読んだ後に決める。形式は開き直しても変わらない）。
+    private var skipIsCheap: Bool?
 
     /// libarchive ハンドル。アクセスは actor が直列化する（deinit の解放のためだけ
     /// nonisolated(unsafe)＝実アクセスは全て actor 上なので安全）。
@@ -102,15 +106,12 @@ public actor SequentialArchiveExtractor {
         if let fileURL = extracted[name] {
             return try Data(contentsOf: fileURL)
         }
-        if skipped.contains(name) {
-            // 読み飛ばしたページ: カーソルはもう先にある。頭から開き直し、従来どおり通過するページを全部取り出す
-            // （戻る読み方で開き直しを繰り返さない ―― 型コメント）。
-            resetHandle()
-            if let data = try streamForward(to: name, extractsAll: true) { return data }
-            throw ArchiveAdapterError.noImageEntry(url)
-        }
+        // 読み飛ばしたページ: カーソルはもう先にある。頭から開き直し、従来どおり通過するページを全部取り出す
+        // （戻る読み方で開き直しを繰り返さない ―― 型コメント）。読み取りエラーの再試行・EOF の再走査は下の通常の道と同じ。
+        let wasSkipped = skipped.contains(name)
+        if wasSkipped { resetHandle() }
         do {
-            if let data = try streamForward(to: name) { return data }
+            if let data = try streamForward(to: name, extractsAll: wasSkipped) { return data }
         } catch is CancellationError {
             throw CancellationError()          // カーソル有効のまま（次要求が続きから進める）
         } catch ArchiveAdapterError.archiveUnreadable(let u, let reason)
@@ -119,12 +120,12 @@ public actor SequentialArchiveExtractor {
             throw ArchiveAdapterError.archiveUnreadable(u, reason: reason)
         } catch {
             resetHandle()                      // 破損等: ハンドルを捨てる
-            if let data = try? streamForward(to: name) { return data }  // 再オープンして 1 回だけ再試行
+            if let data = try? streamForward(to: name, extractsAll: true) { return data }  // 再オープンして 1 回だけ再試行
             throw error
         }
         // EOF まで見つからず: ファイル差し替え等を想定して 1 回だけ再オープン再走査。
         resetHandle()
-        if let data = try streamForward(to: name) { return data }
+        if let data = try streamForward(to: name, extractsAll: true) { return data }
         throw ArchiveAdapterError.noImageEntry(url)
     }
 
@@ -168,8 +169,9 @@ public actor SequentialArchiveExtractor {
             guard imageNames.contains(entryName) else {
                 archive_read_data_skip(archive); continue
             }
-            // 目的のページから遠い手前のページは取り出さない（型コメント）。
-            if let skipBelow, entryName != name, let index = pageIndex?[entryName], index < skipBelow {
+            // 目的のページから遠い手前のページは取り出さない（型コメント）。読み飛ばしが安い形式のときだけ。
+            if let skipBelow, entryName != name, let index = pageIndex?[entryName], index < skipBelow,
+               let archive, isSkipCheap(archive) {
                 archive_read_data_skip(archive)
                 skipped.insert(entryName)
                 continue
@@ -182,6 +184,17 @@ public actor SequentialArchiveExtractor {
             if entryName == name { return data }
         }
         return nil
+    }
+
+    /// 読み飛ばしが位置を移すだけで済む形式か: zip（`archive_read_open_filename` は位置を移せるので、伸長せずに次の
+    /// エントリへ移る）と、フィルタの無い tar。ヘッダを読んだ後に呼ぶ（形式とフィルタはそこで決まる）。
+    private func isSkipCheap(_ archive: OpaquePointer) -> Bool {
+        if let skipIsCheap { return skipIsCheap }
+        let format = archive_format(archive) & ARCHIVE_FORMAT_BASE_MASK
+        let cheap = (format == ARCHIVE_FORMAT_ZIP || format == ARCHIVE_FORMAT_TAR)
+            && archive_filter_code(archive, 0) == ARCHIVE_FILTER_NONE
+        skipIsCheap = cheap
+        return cheap
     }
 
     /// libarchive ハンドルを解放し、次回 `openIfNeeded()` で頭から開き直せる状態に戻す。

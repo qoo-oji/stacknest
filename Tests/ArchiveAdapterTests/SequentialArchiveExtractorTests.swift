@@ -138,6 +138,60 @@ struct SequentialArchiveExtractorTests {
         #expect(try await ext.data(forName: "020.png") == Data("page:020.png".utf8))
     }
 
+    /// `count` 枚のエントリを `/usr/bin/tar`（bsdtar）で `arguments` の形式の書庫にする（中身は名前）。
+    private static func makeWithTar(pages count: Int, in directory: URL, fileName: String,
+                                    arguments: [String]) throws -> (url: URL, names: [String]) {
+        let source = directory.appendingPathComponent("src", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let names = (1...count).map { String(format: "%03d.png", $0) }
+        for name in names { try Data("page:\(name)".utf8).write(to: source.appendingPathComponent(name)) }
+        let out = directory.appendingPathComponent(fileName)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.currentDirectoryURL = source
+        process.arguments = arguments + [out.path] + names
+        try process.run()
+        process.waitUntilExit()
+        try #require(process.terminationStatus == 0)
+        return (out, names)
+    }
+
+    @Test("読み飛ばしが位置を移すだけで済む形式（圧縮していない tar）でも読み飛ばす")
+    func plainTarSkipsFarPages() async throws {
+        let dir = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (tar, names) = try Self.makeWithTar(pages: 30, in: dir, fileName: "book.cbt", arguments: ["-cf"])
+        let ext = SequentialArchiveExtractor(url: tar, imageNames: Set(names), pageOrder: names)
+        #expect(try await ext.data(forName: "030.png") == Data("page:030.png".utf8))
+        #expect(await ext.skippedCountForTesting == 29 - SequentialArchiveExtractor.skipWindow)
+        #expect(try await ext.data(forName: "001.png") == Data("page:001.png".utf8))
+    }
+
+    @Test(
+        "読み飛ばしにも伸長が要る形式（gzip の tar・7z）では読み飛ばさず、これまでどおり通過したページを全部取り出す",
+        arguments: [("book.tgz", ["-czf"]), ("book.cb7", ["--format", "7zip", "-cf"])] as [(String, [String])])
+    func compressedStreamsDoNotSkip(fileName: String, arguments: [String]) async throws {
+        let dir = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (url, names) = try Self.makeWithTar(pages: 30, in: dir, fileName: fileName, arguments: arguments)
+        let ext = SequentialArchiveExtractor(url: url, imageNames: Set(names), allowsCompressedTar: true, pageOrder: names)
+        #expect(try await ext.data(forName: "030.png") == Data("page:030.png".utf8))
+        #expect(await ext.skippedCountForTesting == 0)
+        #expect(await ext.extractedCountForTesting == 30)
+    }
+
+    @Test("読み飛ばしたページを頼んだときの読み直しでも、壊れていない限りページを返す（再試行の道は通常と同じ）")
+    func skippedPageReadAfterFarJump() async throws {
+        let dir = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (zip, names) = try Self.makeZip(pages: 30, in: dir)
+        let ext = SequentialArchiveExtractor(url: zip, imageNames: Set(names), pageOrder: names)
+        #expect(try await ext.data(forName: "030.png") == Data("page:030.png".utf8))
+        // 読み飛ばしたページの後の、無い名前（差し替え後に消えたページなど）は、読み直しても無ければ noImageEntry。
+        await #expect(throws: ArchiveAdapterError.self) { try await ext.data(forName: "missing.png") }
+        #expect(try await ext.data(forName: "005.png") == Data("page:005.png".utf8))
+    }
+
     @Test("並びを渡さなければ、これまでどおり通過したページを全部取り出す")
     func withoutPageOrderEverythingPassedIsExtracted() async throws {
         let dir = try Self.temporaryDirectory()
