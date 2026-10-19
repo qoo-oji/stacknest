@@ -16,7 +16,11 @@ original [Stackroom](https://aromaticsapp.blogspot.com/p/stackroom.html) library
 > - **Permission separation**: **share tokens** split read / edit / admin permission and which libraries are visible per recipient. An edit token can edit metadata / stamps / covers remotely; an admin token can also add / delete remotely.
 > - **Automation**: watch-folder auto-import, and local access (CLI `stacknest-cli` / MCP `mcp-stacknest` / OpenAPI + Redoc).
 
-![StackNest main window](docs/images/main-ui.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-ui-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/main-ui-light.webp">
+  <img alt="StackNest main window" src="docs/images/main-ui-dark.webp" width="800">
+</picture>
 
 ## What is this
 

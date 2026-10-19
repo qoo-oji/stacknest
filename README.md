@@ -16,7 +16,11 @@ Swift ネイティブ、Apple Silicon 対応の画像ライブラリ（カタロ
 > - **権限分離**: **共有トークン**で相手ごとに閲覧 / 編集 / 管理者の権限と見せるライブラリを分けられます。編集トークンならリモートからメタデータ / スタンプ / 表紙を編集でき、管理者トークンならリモート追加 / 削除も可能です。
 > - **自動化**: 監視フォルダの自動取込と、ローカルアクセス（CLI `stacknest-cli` / MCP `mcp-stacknest` / OpenAPI + Redoc）による操作に対応します。
 
-![StackNest のメイン画面](docs/images/main-ui.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-ui-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/main-ui-light.webp">
+  <img alt="StackNest のメイン画面" src="docs/images/main-ui-dark.webp" width="800">
+</picture>
 
 ## これは何か
 
