@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # スクリーンショット（PNG など）を、サイトや README 用の WebP に書き出す。
 # macOS の sips は WebP を書き出せないので cwebp（Homebrew の webp）を使う。窓の影の透明はそのまま残し、メタデータは落とす。
 #
@@ -14,6 +14,9 @@ fi
 input=$1
 output=$2
 width=${3:-1600}
+case "$width" in
+  ''|*[!0-9]*) echo "width must be a positive integer" >&2; exit 2 ;;
+esac
 
 if ! command -v cwebp >/dev/null 2>&1; then
   echo "cwebp not found; install it with: brew install webp" >&2

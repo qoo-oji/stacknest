@@ -18,6 +18,7 @@
   --code-text: #D8D8D2;
   --phone-border: transparent;
   --toggle-bg: #1B1B1E;
+  --focus: #F5C842;
   color-scheme: dark;
 }
 
@@ -39,6 +40,7 @@
   --code-text: #E6E6E1;
   --phone-border: #DCDCD6;
   --toggle-bg: #FFFFFF;
+  --focus: #17171A;
   color-scheme: light;
 }
 
@@ -61,6 +63,7 @@
     --code-text: #E6E6E1;
     --phone-border: #DCDCD6;
     --toggle-bg: #FFFFFF;
+    --focus: #17171A;
     color-scheme: light;
   }
 }
@@ -107,7 +110,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
   width: 44px; height: 44px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--toggle-bg); color: var(--text); cursor: pointer;
 }
-.theme-toggle:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-toggle:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.download a:focus-visible { outline-color: #111113; }
 .theme-toggle .icon-moon { display: none; }
 :root[data-theme="light"] .theme-toggle .icon-sun { display: none; }
 :root[data-theme="light"] .theme-toggle .icon-moon { display: block; }
@@ -127,7 +131,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
 
 /* Hero */
 .hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 24px; padding-top: 72px; padding-bottom: 40px; }
-.eyebrow { margin: 0; font-size: 14px; letter-spacing: 0.12em; color: var(--accent-text); font-weight: 700; }
+.eyebrow { margin: 0; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent-text); font-weight: 700; }
 .hero h1 { margin: 0; font-size: clamp(38px, 6vw, 76px); line-height: 1.15; font-weight: 900; letter-spacing: -0.01em; }
 .hero .lead { margin: 0; max-width: 720px; font-size: 18px; color: var(--text-muted); }
 .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 8px; }
@@ -137,6 +141,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
 .btn-primary:hover { filter: brightness(1.05); }
 .btn-secondary { border: 1px solid var(--line); color: var(--text); background: transparent; }
 :root[data-theme="light"] .btn-secondary { background: #FFFFFF; }
+@media (prefers-color-scheme: light) { :root:not([data-theme]) .btn-secondary { background: #FFFFFF; } }
 .meta { margin: 0; font-size: 13px; color: var(--text-faint); }
 
 .shot-hero { max-width: 1240px; padding-bottom: 96px; }
