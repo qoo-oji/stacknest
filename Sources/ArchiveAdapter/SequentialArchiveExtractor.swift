@@ -100,10 +100,11 @@ public actor SequentialArchiveExtractor {
         }
         // 前に中身を読めなかったページ: カーソルはもうその先にあるので、先に頭から開き直す（そのままだと EOF まで残りを
         // 全部取り出してから開き直していた）。開き直して読んでも失敗なら、もう一度は開き直さない（同じ失敗を繰り返すだけ）。
+        var badEntryReopens = 0
         let reopenedFirst = unreadable.contains(name)
         if reopenedFirst { resetHandle() }
         do {
-            if let data = try streamForwardPastBadEntries(to: name) { return data }
+            if let data = try streamForwardPastBadEntries(to: name, reopens: &badEntryReopens) { return data }
         } catch is CancellationError {
             throw CancellationError()          // カーソル有効のまま（次要求が続きから進める）
         } catch ArchiveAdapterError.archiveUnreadable(let u, let reason)
@@ -113,12 +114,12 @@ public actor SequentialArchiveExtractor {
         } catch {
             if reopenedFirst { throw error }
             resetHandle()                      // 破損等: ハンドルを捨てる
-            if let data = try? streamForwardPastBadEntries(to: name) { return data }  // 再オープンして 1 回だけ再試行
+            if let data = try? streamForwardPastBadEntries(to: name, reopens: &badEntryReopens) { return data }  // 再オープンして 1 回だけ再試行
             throw error
         }
         // EOF まで見つからず: ファイル差し替え等を想定して 1 回だけ再オープン再走査。
         resetHandle()
-        if let data = try streamForwardPastBadEntries(to: name) { return data }
+        if let data = try streamForwardPastBadEntries(to: name, reopens: &badEntryReopens) { return data }
         throw ArchiveAdapterError.noImageEntry(url)
     }
 
@@ -131,8 +132,9 @@ public actor SequentialArchiveExtractor {
     /// `streamForward` を、目的でないエントリの中身が読めずにハンドルが使えなくなったら（`ARCHIVE_FATAL`）、開き直して
     /// 続けて試す（`maxBadEntryReopens` 回まで）。開き直しても、読めないエントリは読み飛ばすので伸長しない（zip は位置を
     /// 移すだけ）。ハンドルがまだ使えるとき（警告・そのエントリだけの失敗・自前の上限）は `streamForward` がその場で先へ進む。
-    private func streamForwardPastBadEntries(to name: String) throws -> Data? {
-        var reopens = 0
+    /// `reopens` は 1 回の `data(forName:)` の中で数える(再試行・EOF の再走査をまたいで共有する。2 回目のレビュー L-2: 以前は呼ぶたびに
+    /// 数え直し、1 回の頼みで開き直しが最大 10 回 ―― tar では歩く量の上限の 10 倍 ―― になりえた)。
+    private func streamForwardPastBadEntries(to name: String, reopens: inout Int) throws -> Data? {
         while true {
             do {
                 return try streamForward(to: name)
