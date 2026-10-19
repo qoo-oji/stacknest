@@ -109,12 +109,15 @@ struct ExternalViewerHandoff {
         let onUsed: @MainActor @Sendable () -> Void
         var cancelsOnClose = false
         var onCheckStarted: @MainActor (Task<Void, Never>, _ cancelsOnClose: Bool) -> Void = { _, _ in }
+        /// 渡す直前の確かめ直し（渡せないなら理由）。用意から渡すまでに、ほかの本の用意を待つ間が空くので、その間の施錠・
+        /// 127.0.0.1 の口の停止をここで見る（`prepareLocal` が用意の最後に見るのと同じ条件）。
+        var recheck: @MainActor () -> Failure? = { nil }
     }
 
     /// ローカルの書庫の本。127.0.0.1 の口で使えるトークンを手元で出す（HTTP を通さない・spec §5.2）。
     /// グラントに結び付けない（`issuedByGrantID` は nil）。本人の Mac の中だけの口なので。
     func openLocal(book: BookRow, libraryUUID: String, viewer: ReferenceViewer,
-                   lockCredential: () -> String?, verifiedLockHash: () -> String?,
+                   lockCredential: @escaping () -> String?, verifiedLockHash: @escaping () -> String?,
                    startPage: Int,
                    direction: PageDirection, settings: ViewerSettings,
                    userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
@@ -131,7 +134,7 @@ struct ExternalViewerHandoff {
     /// ローカルの書庫の本を渡す用意（`openLocal` の前半: ページ数・ロックの照合・鍵・参照ファイルの中身）。
     /// 複数の本を選んだときは、全部を用意してから `deliver` で 1 回の `open` にまとめて渡す。
     func prepareLocal(book: BookRow, libraryUUID: String, viewer: ReferenceViewer,
-                      lockCredential: () -> String?, verifiedLockHash: () -> String?,
+                      lockCredential: @escaping () -> String?, verifiedLockHash: @escaping () -> String?,
                       startPage: Int, direction: PageDirection,
                       userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot,
                       onNotUsed: @escaping @MainActor @Sendable (_ viewerName: String) -> Void = { _ in },
@@ -180,9 +183,18 @@ struct ExternalViewerHandoff {
         // 確認は、127.0.0.1 の口と同じトークンの保存先を直接読む（HTTP を通さない・spec §5.7）。
         let tokens = self.tokens
         let tokenID = issued.record.id
-        return .success(PreparedHandoff(reference: reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id,
-                                        readUse: { Self.outcome(of: tokens.record(id: tokenID)) },
-                                        onNotUsed: onNotUsed, onUsed: onUsed))
+        let isLocalEndpointRunning = self.isLocalEndpointRunning
+        return .success(PreparedHandoff(
+            reference: reference, origin: .local, libraryUUID: libraryUUID, bookID: book.id,
+            readUse: { Self.outcome(of: tokens.record(id: tokenID)) },
+            onNotUsed: onNotUsed, onUsed: onUsed,
+            recheck: {
+                // 鍵は発行の時点のロックの値に結び付いている。その後に施錠・変更されたら、口はこの鍵を断る。
+                if let current = lockCredential(), current != lock || current != verifiedLockHash() {
+                    return .libraryLocked
+                }
+                return isLocalEndpointRunning() ? nil : .localEndpointNotRunning
+            }))
     }
 
     /// リモートの本。サーバに `POST …/viewer-token` で出してもらう（`issue`）。
@@ -333,6 +345,10 @@ struct ExternalViewerHandoff {
         var failures = [Failure?](repeating: nil, count: items.count)
         var written: [(index: Int, url: URL)] = []
         for (index, item) in items.enumerated() {
+            if let failure = item.recheck() {
+                failures[index] = failure
+                continue
+            }
             do {
                 written.append((index, try references.write(item.reference, origin: item.origin,
                                                             libraryUUID: item.libraryUUID, bookID: item.bookID)))

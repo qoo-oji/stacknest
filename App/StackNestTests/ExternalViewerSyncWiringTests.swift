@@ -404,6 +404,99 @@ struct ExternalViewerSyncWiringTests {
         #expect(titles == ["Book 1", "Book 3"])
     }
 
+    @Test func slowPreparationHandsOverTheBooksPreparedSoFar() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, _) = try makeMultiBookState(env, handoff: handoff(env), count: 3)
+        // 用意の時間の上限を 0 にする（どの本も、用意できたらすぐ渡す）。
+        state.handoffBatchBudget = .zero
+
+        await state.openInExternalViewerSyncing(rows)
+
+        #expect(many.entries.isEmpty)
+        let titles = try launches.entries.map { try StackNestBookReference.load(contentsOf: $0.file).title }
+        #expect(titles == ["Book 1", "Book 2", "Book 3"], "1 冊ずつ、選んだ順に渡す")
+        for row in rows { #expect(try state.database?.fetchBook(id: row.id)?.unseen == false) }
+    }
+
+    @Test func aBookLockedOrStoppedAfterPreparationIsNotHandedOver() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let endpoint = EndpointFlag()
+        let viewerHandoff = handoff(env, endpoint: endpoint)
+        let (_, rows, _) = try makeMultiBookState(env, handoff: viewerHandoff, count: 2)
+        let viewer = try #require(ReferenceViewer.resolve(appURL: env.viewerApp))
+        final class Lock { var credential: String?; var verified: String? }
+        let lock = Lock()
+        func prepare(_ row: BookRow) async throws -> ExternalViewerHandoff.PreparedHandoff {
+            try await viewerHandoff.prepareLocal(
+                book: row, libraryUUID: "lib", viewer: viewer,
+                lockCredential: { lock.credential }, verifiedLockHash: { lock.verified },
+                startPage: 0, direction: .rightToLeft).get()
+        }
+
+        // 用意の後に施錠された: 渡さない（参照ファイルも書かない）。
+        let locked = try await prepare(rows[0])
+        lock.credential = "hash-1"
+        #expect(viewerHandoff.deliver([locked], viewer: viewer, settings: env.settings) == [.libraryLocked])
+        // 用意の後にパスワードが変わった（この窓は前の値で解錠していた）: 渡さない。
+        lock.verified = "hash-1"
+        let changed = try await prepare(rows[0])
+        lock.credential = "hash-2"
+        lock.verified = "hash-2"
+        #expect(viewerHandoff.deliver([changed], viewer: viewer, settings: env.settings) == [.libraryLocked])
+        // 用意の後に 127.0.0.1 の口が止まった: どの本も渡さない。口が戻れば渡せる。
+        let stopped = try await prepare(rows[0])
+        let fine = try await prepare(rows[1])
+        endpoint.running = false
+        let results = viewerHandoff.deliver([stopped, fine], viewer: viewer, settings: env.settings)
+        #expect(results == [.localEndpointNotRunning, .localEndpointNotRunning])
+        endpoint.running = true
+        #expect(viewerHandoff.deliver([fine], viewer: viewer, settings: env.settings) == [nil])
+        #expect(launches.entries.count == 1)
+        #expect(many.entries.isEmpty)
+    }
+
+    @Test func manyReferencesAreSplitIntoOpensOfAtMostTheLimit() throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let many = ManyLaunches()
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let viewer = try #require(ReferenceViewer.resolve(appURL: env.viewerApp))
+        let limit = HelperLauncher.maxReferencesPerOpen
+        let urls = (0..<(limit * 2 + 5)).map { env.base.appendingPathComponent("\($0).stacknestbook") }
+
+        #expect(HelperLauncher.openReferences(urls, viewer: viewer) == nil)
+
+        #expect(many.entries.map(\.files.count) == [limit, limit, 5])
+        #expect(many.entries.flatMap(\.files) == urls, "分けても順はそのまま")
+    }
+
+    @Test func theSameViewerSpelledDifferentlyIsOneViewer() throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let plain = try #require(ReferenceViewer.resolve(appURL: env.viewerApp))
+        let spelled = try #require(ReferenceViewer.resolve(
+            appURL: URL(fileURLWithPath: env.viewerApp.deletingLastPathComponent().path + "/./FakeViewer.app/")))
+        #expect(plain.isSameApp(as: spelled))
+        let other = env.base.appendingPathComponent("OtherViewer.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Self.declareReferenceSupport(other)
+        #expect(!plain.isSameApp(as: try #require(ReferenceViewer.resolve(appURL: other))))
+    }
+
     // MARK: - G64: 足した拡張子の本は、読めるときだけ参照ファイルで渡す
 
     /// `canServePages` が呼ばれた回数を数える（実物の `BookReadability` に任せる）。

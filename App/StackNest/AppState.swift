@@ -28,6 +28,9 @@ final class AppState {
     @ObservationIgnored var viewerSettings: ViewerSettings = .shared
     /// G60: 参照ファイルで外部ビューアへ渡す道具（テストは差し替える）。
     @ObservationIgnored var viewerHandoff: ExternalViewerHandoff = .live
+    /// 複数の本を外部ビューアへ渡すとき、用意を始めてからこの時間が経ったら、それまでに用意できた本を先に渡す
+    /// （`openInExternalViewerSyncing`。試験で縮める）。
+    @ObservationIgnored var handoffBatchBudget: Duration = .seconds(2)
     /// G64: 足した拡張子の一覧（テストは固定の一覧を渡す。App のテストは本物の UserDefaults の上で動くので、
     /// `UserExtensionStore.shared` を書き換えない）。
     @ObservationIgnored var userExtensions: () -> UserExtensionMap = { UserExtensionStore.shared.snapshot }
@@ -931,6 +934,19 @@ final class AppState {
         }
     }
 
+    /// 複数の本を既読にする（`markAsRead(book:)` を 1 冊ずつ呼ぶと、そのたびに一覧を読み直す）。
+    func markAsRead(books: [BookRow]) {
+        guard let db = database, !books.isEmpty else { return }
+        do {
+            let now = Date()
+            for book in books { try db.markAsRead(bookID: book.id, at: now) }
+            try refreshDisplayedBooks()
+            refreshSelectedBook()
+        } catch {
+            self.error = .unexpected(error)
+        }
+    }
+
     /// 統一された「本を開く」入口。grid/list の double-click・Enter・コンテキストメニューから呼ぶ。
     /// G54-S2: 内蔵か外部かは**先頭の本の形式**に応じた設定で決める（`ViewerChoice`）。
     /// 画像・アーカイブ・フォルダ・PDF は画像側、EPUB は EPUB 側、動画とテキストは常に外部。
@@ -1466,32 +1482,41 @@ final class AppState {
     /// G64: 足した拡張子の本は、StackNest が読めるときだけ参照ファイルで渡す（読めなければ鍵もお知らせも出さず、
     /// ファイルのまま開く＝G60 v3 の「未対応のアプリ」と同じ静かな扱い）。標準の拡張子では確かめない。
     ///
-    /// 参照ファイルで渡す本は、先に全部を用意（ページ数・鍵・参照ファイルの中身）してから、ビューアごとに **1 回の `open`**
+    /// 参照ファイルで渡す本は、先に用意（ページ数・鍵・参照ファイルの中身）してから、ビューアごとに **1 回の `open`**
     /// でまとめて渡す（`ExternalViewerHandoff.deliver`）。1 冊ずつ `open` すると、渡す間に次の本の書庫を読むぶん間が空き、
     /// ビューアには別々の「開く」として届くので、Finder で複数を選んで開いたときのように 1 回の選択として扱えない。
-    /// ファイルで開く本（動画など・渡せなかった本）は、これまでどおり 1 冊ずつその場で開く。
+    /// ファイルで開く本（動画など・渡せなかった本）は、これまでどおり 1 冊ずつその場で開く。用意に時間がかかる
+    /// （ネットワークの書庫など）ときは、`handoffBatchBudget` ごとにそれまでの本を先に渡す（最初の本が開くまで、選んだ
+    /// 全部の本の用意を待たせない）。
     func openInExternalViewerSyncing(_ books: [BookRow]) async {
         let userExtensions = self.userExtensions()
         // 渡す先のビューアごとの、用意できた本（選んだ順）。
-        var batches: [(viewer: ReferenceViewer, items: [(book: BookRow, prepared: ExternalViewerHandoff.PreparedHandoff)])] = []
+        var batches: [HandoffBatch] = []
+        var batchStartedAt: ContinuousClock.Instant?
+        // 開けた本（既読にするのは最後にまとめて）。
+        var opened: [BookRow] = []
         var stopped = false
         for book in books {
             if let viewer = referenceViewer(for: book),
                await servesPagesByReference(book, userExtensions: userExtensions) {
                 switch await prepareHandOffToExternalViewer(book, viewer: viewer, userExtensions: userExtensions) {
                 case .success(let prepared):
-                    if let index = batches.firstIndex(where: { $0.viewer == viewer }) {
+                    if let index = batches.firstIndex(where: { $0.viewer.isSameApp(as: viewer) }) {
                         batches[index].items.append((book, prepared))
                     } else {
-                        batches.append((viewer, [(book, prepared)]))
+                        batches.append(HandoffBatch(viewer: viewer, items: [(book, prepared)]))
                     }
-                    continue   // 既読にするのは渡せた後（下）
+                    let startedAt = batchStartedAt ?? .now
+                    batchStartedAt = startedAt
+                    if ContinuousClock.now - startedAt >= handoffBatchBudget {
+                        stopped = !deliverHandoffBatches(batches, opened: &opened)
+                        batches = []
+                        batchStartedAt = nil
+                    }
+                    if !stopped { continue }   // 既読にするのは渡せた後
                 case .failure(let failure):
                     if failure == .libraryLocked {
-                        // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
-                        // 解錠シートの出る状態にして、解錠後にもう一度開いてもらう。
-                        librarySettings?.reloadLockSettings()
-                        watchNotice.present(Notice(kind: .warning, text: failure.reason))
+                        presentLockedHandoff(failure)
                         stopped = true
                         break
                     }
@@ -1502,16 +1527,51 @@ final class AppState {
                 self.error = err
                 break
             }
-            markAsRead(book: book)
+            if stopped { break }
+            opened.append(book)
         }
         // 止まる前に用意できた本は渡す（1 冊ずつ渡していたときも、止まる前の本は開いていた）。
+        _ = deliverHandoffBatches(batches, opened: &opened)
+        markAsRead(books: opened)
+    }
+
+    /// 1 回の `open` にまとめて渡す、同じビューアへの本（選んだ順）。
+    private struct HandoffBatch {
+        let viewer: ReferenceViewer
+        var items: [(book: BookRow, prepared: ExternalViewerHandoff.PreparedHandoff)]
+    }
+
+    /// 用意した本をビューアごとに渡し、渡せた本を `opened` に足す。渡せなかった本はファイルのまま開く。施錠に気づいたら
+    /// （用意の後に施錠された）その本はファイルでも開かない。続けてよいか（施錠・ファイルを開けなかったら false）を返す。
+    /// 途中で止まっても、もう渡した本は既読にするため最後まで見る（ファイルで開き直すのは、止まるまでの本だけ）。
+    private func deliverHandoffBatches(_ batches: [HandoffBatch], opened: inout [BookRow]) -> Bool {
+        var canContinue = true
         for batch in batches {
             let failures = viewerHandoff.deliver(batch.items.map(\.prepared), viewer: batch.viewer, settings: viewerSettings)
             for (item, failure) in zip(batch.items, failures) {
-                if let failure, !openFileAfterFailedHandoff(item.book, failure: failure) { return }
-                markAsRead(book: item.book)
+                guard let failure else {
+                    opened.append(item.book)
+                    continue
+                }
+                guard canContinue else { continue }
+                if failure == .libraryLocked {
+                    presentLockedHandoff(failure)
+                    canContinue = false
+                } else if openFileAfterFailedHandoff(item.book, failure: failure) {
+                    opened.append(item.book)
+                } else {
+                    canContinue = false
+                }
             }
         }
+        return canContinue
+    }
+
+    /// 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、解錠シートの出る状態にして、
+    /// 解錠後にもう一度開いてもらう。
+    private func presentLockedHandoff(_ failure: ExternalViewerHandoff.Failure) {
+        librarySettings?.reloadLockSettings()
+        watchNotice.present(Notice(kind: .warning, text: failure.reason))
     }
 
     /// 参照ファイルで渡せなかった本を、理由を知らせてからファイルのまま開く。開けなければ（`error` を立てて）false。

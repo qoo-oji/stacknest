@@ -128,8 +128,18 @@ public enum HelperLauncher {
         if referenceURLs.count == 1 {
             launch(first, viewer.appURL)
         } else {
-            launchMany(referenceURLs, viewer.appURL)
+            // 1 回の `open` に載せるのは `maxReferencesPerOpen` 個まで（Apple Event の大きさを抑える。数千冊を選んでも
+            // 1 つの巨大なイベントにしない）。分けた残りは続けて渡す。
+            var start = referenceURLs.startIndex
+            while start < referenceURLs.endIndex {
+                let end = min(start + maxReferencesPerOpen, referenceURLs.endIndex)
+                launchMany(Array(referenceURLs[start..<end]), viewer.appURL)
+                start = end
+            }
         }
         return nil
     }
+
+    /// 1 回の `open` で渡す参照ファイルの上限（`openReferences`）。
+    public static let maxReferencesPerOpen = 200
 }
