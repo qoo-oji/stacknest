@@ -341,6 +341,11 @@ struct ExternalViewerSyncWiringTests {
         #expect(launched.viewer.path == env.viewerApp.path)
         let titles = try launched.files.map { try StackNestBookReference.load(contentsOf: $0).title }
         #expect(titles == ["Book 3", "Book 1", "Book 2"], "選んだ順に渡す")
+        // どの参照ファイルにも同じ組の印が入り、index は選んだ順、count は冊数。
+        let groups = try launched.files.map { try #require(try StackNestBookReference.load(contentsOf: $0).handoff) }
+        #expect(Set(groups.map(\.id)).count == 1)
+        #expect(groups.map(\.index) == [0, 1, 2])
+        #expect(groups.allSatisfy { $0.count == 3 })
         #expect(env.tokens.allRecords().count == 3)
         for row in rows { #expect(try state.database?.fetchBook(id: row.id)?.unseen == false, "渡せた本は既読") }
     }
@@ -361,6 +366,8 @@ struct ExternalViewerSyncWiringTests {
         #expect(many.entries.isEmpty)
         #expect(launches.entries.count == 1)
         #expect(launches.entries.first?.file.pathExtension == "stacknestbook")
+        let single = try StackNestBookReference.load(contentsOf: try #require(launches.entries.first?.file))
+        #expect(single.handoff == nil, "1 冊だけなら組を付けない")
     }
 
     @Test func booksOpenedAsFilesStillOpenOneByOne() async throws {
@@ -487,6 +494,33 @@ struct ExternalViewerSyncWiringTests {
         #expect(launches.entries.isEmpty)
         #expect(many.entries.isEmpty)
         #expect(env.tokens.allRecords().isEmpty, "鍵も出さない")
+    }
+
+    @Test func aBookDroppedRightBeforeTheOpenIsLeftOutOfTheGroup() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let many = ManyLaunches()
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let viewerHandoff = handoff(env)
+        let (_, rows, _) = try makeMultiBookState(env, handoff: viewerHandoff, count: 3)
+        let viewer = try #require(ReferenceViewer.resolve(appURL: env.viewerApp))
+        var prepared: [ExternalViewerHandoff.PreparedHandoff] = []
+        for row in rows {
+            prepared.append(try await viewerHandoff.prepareLocal(
+                book: row, libraryUUID: "lib", viewer: viewer, lockCredential: { nil }, verifiedLockHash: { nil },
+                startPage: 0, direction: .rightToLeft).get())
+        }
+        prepared[1].recheck = { .libraryLocked }
+
+        let results = viewerHandoff.deliver(prepared, viewer: viewer, settings: env.settings)
+
+        #expect(results == [nil, .libraryLocked, nil])
+        let files = try #require(many.entries.first).files
+        let references = try files.map { try StackNestBookReference.load(contentsOf: $0) }
+        #expect(references.map(\.title) == ["Book 1", "Book 3"])
+        #expect(references.map { $0.handoff?.index } == [0, 1])
+        #expect(references.allSatisfy { $0.handoff?.count == 2 }, "組の冊数は渡した本の数")
     }
 
     @Test func manyReferencesAreSplitIntoOpensOfAtMostTheLimit() throws {

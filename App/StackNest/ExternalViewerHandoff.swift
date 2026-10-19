@@ -307,6 +307,16 @@ struct ExternalViewerHandoff {
         return failure
     }
 
+    /// 組の印（16 バイトの乱数の base64url・22 文字。`StackNestHandoffGroup` の約束の 8〜64 文字に収まる）。
+    static func makeHandoffID() -> String {
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<16).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
     /// G60 v3: 待ってから 1 度だけ確かめる。待ちが取り消されたら確かめない（`.unknown`）。
     static func checkUse(after delay: Duration,
                          sleep: @Sendable (Duration) async throws -> Void,
@@ -341,16 +351,30 @@ struct ExternalViewerHandoff {
     /// まとめるのは、複数の本を選んで開いたとき、ビューアが Finder で複数を選んで開いたときと同じく 1 回の「開く」として
     /// 受け取れるようにするため（1 冊ずつ `open` すると、渡す間に書庫を読むぶん間が空き、ビューアからはどこまでが 1 回の
     /// 選択か分からない）。書けなかった本だけを外して残りを渡す。起動に失敗したら、書いた本はどれも `.launchFailed`。
+    ///
+    /// 2 冊以上を渡すときは、どの参照ファイルにも同じ組の印（`handoff`: 乱数の `id`・選んだ順の `index`・冊数 `count`）を
+    /// 入れる。ビューアは届き方（1 回の「開く」で届くか・届く順）に頼らずに、組と並びが分かる。組を知らないビューアは
+    /// 知らない項目として読み飛ばす（形式の版 1 のまま足せる項目）。書けなかった本があると組は `count` に満たないが、
+    /// ビューアは揃うのを待ち続けない約束（形式の文書）。
     func deliver(_ items: [PreparedHandoff], viewer: ReferenceViewer, settings: ViewerSettings) -> [Failure?] {
         var failures = [Failure?](repeating: nil, count: items.count)
         var written: [(index: Int, url: URL)] = []
+        // 渡す直前の確かめ直しに通った本だけで組を作る（通らなかった本の分だけ組が欠け、ビューアが揃うのを待たないように）。
+        var passing: [Int] = []
         for (index, item) in items.enumerated() {
             if let failure = item.recheck() {
                 failures[index] = failure
-                continue
+            } else {
+                passing.append(index)
             }
+        }
+        // 組の冊数は約束の上限（`StackNestHandoffGroup.maxCount`）までで、超えると組を作れず印を付けない（ばらばらの本として渡す）。
+        let groupID = passing.count >= 2 ? Self.makeHandoffID() : nil
+        for (position, index) in passing.enumerated() {
+            let item = items[index]
+            let group = groupID.flatMap { try? StackNestHandoffGroup(id: $0, index: position, count: passing.count) }
             do {
-                written.append((index, try references.write(item.reference, origin: item.origin,
+                written.append((index, try references.write(item.reference.with(handoff: group), origin: item.origin,
                                                             libraryUUID: item.libraryUUID, bookID: item.bookID)))
             } catch {
                 failures[index] = .referenceNotWritten
