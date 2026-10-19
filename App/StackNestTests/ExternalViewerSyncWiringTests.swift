@@ -286,6 +286,124 @@ struct ExternalViewerSyncWiringTests {
         #expect(state.watchNotice.notice?.text.contains("127.0.0.1") == true)
     }
 
+    // MARK: - 複数の本を選んで開く（1 回の open にまとめる）
+
+    final class ManyLaunches { var entries: [(files: [URL], viewer: URL)] = [] }
+
+    /// フォルダの本 `count` 冊（題名 Book 1…）と、参照ファイルで渡さない動画の本 1 冊を持つローカルの書庫。
+    private func makeMultiBookState(_ env: Env, handoff: ExternalViewerHandoff, count: Int)
+        throws -> (AppState, [BookRow], BookRow) {
+        let db = try Database.openInMemory()
+        try db.migrate()
+        for i in 1...count {
+            let dir = env.base.appendingPathComponent("folder-book-\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for p in 0..<2 { try Data("p\(p)".utf8).write(to: dir.appendingPathComponent("p\(p).jpg")) }
+            try db.insertBook(BookRecord(
+                id: i, title: "Book \(i)", author: nil, genre: nil,
+                path: dir.path, dateAdded: Date(timeIntervalSince1970: 100), playDate: nil,
+                bookType: 0, fileType: 2, pages: 2, myRate: 0, unseen: true,
+                keywordA: nil, keywordB: nil, keywordC: nil, neta: nil))
+        }
+        let video = env.base.appendingPathComponent("clip.mp4")
+        try Data("not a video".utf8).write(to: video)
+        try db.insertBook(BookRecord(
+            id: 99, title: "Clip", author: nil, genre: nil,
+            path: video.path, dateAdded: Date(timeIntervalSince1970: 100), playDate: nil,
+            bookType: 0, fileType: 0, pages: 0, myRate: 0, unseen: true,
+            keywordA: nil, keywordB: nil, keywordC: nil, neta: nil))
+        let state = AppState(bundleURL: env.base.appendingPathComponent("g60-multi.stacknest"))
+        state.database = db
+        state.librarySettings = try LibrarySettings(database: db)
+        state.viewerSettings = env.settings
+        state.viewerHandoff = handoff
+        let rows = try (1...count).map { try #require(try db.fetchBook(id: $0)) }
+        return (state, rows, try #require(try db.fetchBook(id: 99)))
+    }
+
+    @Test func severalBooksGoToTheViewerInOneOpenInSelectionOrder() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, _) = try makeMultiBookState(env, handoff: handoff(env), count: 3)
+        let selection = [rows[2], rows[0], rows[1]]
+
+        await state.openInExternalViewerSyncing(selection)
+
+        #expect(launches.entries.isEmpty, "1 冊ずつの open は出さない")
+        let launched = try #require(many.entries.first)
+        #expect(many.entries.count == 1, "1 回の open にまとめる")
+        #expect(launched.viewer.path == env.viewerApp.path)
+        let titles = try launched.files.map { try StackNestBookReference.load(contentsOf: $0).title }
+        #expect(titles == ["Book 3", "Book 1", "Book 2"], "選んだ順に渡す")
+        #expect(env.tokens.allRecords().count == 3)
+        for row in rows { #expect(try state.database?.fetchBook(id: row.id)?.unseen == false, "渡せた本は既読") }
+    }
+
+    @Test func aSingleBookStillUsesTheSingleOpen() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, _) = try makeMultiBookState(env, handoff: handoff(env), count: 1)
+
+        await state.openInExternalViewerSyncing(rows)
+
+        #expect(many.entries.isEmpty)
+        #expect(launches.entries.count == 1)
+        #expect(launches.entries.first?.file.pathExtension == "stacknestbook")
+    }
+
+    @Test func booksOpenedAsFilesStillOpenOneByOne() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, video) = try makeMultiBookState(env, handoff: handoff(env), count: 2)
+
+        await state.openInExternalViewerSyncing([rows[0], video, rows[1]])
+
+        #expect(launches.entries.map(\.file.lastPathComponent) == ["clip.mp4"], "動画はファイルのまま、その場で開く")
+        #expect(many.entries.count == 1)
+        #expect(many.entries.first?.files.count == 2)
+    }
+
+    @Test func aFailedHandoffInTheMiddleFallsBackToTheFileAndTheRestStillGoTogether() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, _) = try makeMultiBookState(env, handoff: handoff(env), count: 3)
+        // 2 冊目のフォルダを空にする（ページ数 0 で渡せない）。
+        for name in try FileManager.default.contentsOfDirectory(atPath: try #require(rows[1].path)) {
+            try FileManager.default.removeItem(atPath: try #require(rows[1].path) + "/" + name)
+        }
+
+        await state.openInExternalViewerSyncing(rows)
+
+        #expect(launches.entries.map(\.file.path) == [rows[1].path], "渡せなかった本はファイルのまま開く")
+        #expect(state.watchNotice.notice?.text.contains("ファイルをそのまま") == true)
+        let titles = try (try #require(many.entries.first)).files.map { try StackNestBookReference.load(contentsOf: $0).title }
+        #expect(titles == ["Book 1", "Book 3"])
+    }
+
     // MARK: - G64: 足した拡張子の本は、読めるときだけ参照ファイルで渡す
 
     /// `canServePages` が呼ばれた回数を数える（実物の `BookReadability` に任せる）。
