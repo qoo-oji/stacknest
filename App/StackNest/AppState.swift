@@ -1470,10 +1470,10 @@ final class AppState {
         // この 1 回の受け渡しの印。「読み込んでいません」のお知らせを、この回で読まれなかった本でまとめ、同じ回のほかの本が
         // 読まれても消さないため（`presentViewerDidNotLoad`）。
         let handoff = UUID()
-        for book in books {
+        for (position, book) in books.enumerated() {
             if let viewer = referenceViewer(for: book),
                await servesPagesByReference(book, userExtensions: userExtensions) {
-                if let failure = await handOffToExternalViewer(book, viewer: viewer, handoff: handoff,
+                if let failure = await handOffToExternalViewer(book, viewer: viewer, handoff: handoff, position: position,
                                                                userExtensions: userExtensions) {
                     if failure == .libraryLocked {
                         // 施錠庫は何も開かない（生のファイルにも逃がさない）。ロックの状態を読み直し、
@@ -1507,7 +1507,7 @@ final class AppState {
     }
 
     /// G60: 1 冊を参照ファイルで渡す。開く位置は保存済みの読書位置。
-    private func handOffToExternalViewer(_ book: BookRow, viewer: ReferenceViewer, handoff: UUID,
+    private func handOffToExternalViewer(_ book: BookRow, viewer: ReferenceViewer, handoff: UUID, position: Int,
                                          userExtensions: UserExtensionMap = UserExtensionStore.shared.snapshot) async -> ExternalViewerHandoff.Failure? {
         guard let settings = librarySettings else { return .tokenUnavailable }
         let startPage = (try? database?.loadViewerState(bookID: book.id))?.lastPage ?? 0
@@ -1525,13 +1525,15 @@ final class AppState {
             direction: book.pageDirection ?? viewerSettings.pageDirection,
             settings: viewerSettings,
             userExtensions: userExtensions,
-            onNotUsed: { [weak self] name in self?.presentViewerDidNotLoad(book, viewerName: name, handoff: handoff) },
+            onNotUsed: { [weak self] name in
+                self?.presentViewerDidNotLoad(book, viewerName: name, handoff: handoff, position: position)
+            },
             onUsed: { [weak self] in self?.dismissViewerDidNotLoad(unlessFrom: handoff) })
     }
 
     /// G60 v3: 出している「読み込んでいません」のお知らせ: ボタンの id（`watchNotice` は監視フォルダなどと共用なので、
-    /// 後の確認で消すときはこの id と一致するお知らせだけを消す）と、どの受け渡しの、どの本のお知らせか。
-    @ObservationIgnored private var viewerDidNotLoad: (noticeID: UUID, handoff: UUID, books: [BookRow])?
+    /// 後の確認で消すときはこの id と一致するお知らせだけを消す）と、どの受け渡しの、どの本のお知らせか（選んだ順の位置つき）。
+    @ObservationIgnored private var viewerDidNotLoad: (noticeID: UUID, handoff: UUID, books: [(position: Int, book: BookRow)])?
 
     /// G60 v3: 外部ビューアが参照ファイルの本を読み込まなかった（spec §5.7）。お知らせに従来の開き方
     /// （ファイルのまま外部ビューア）のボタンを付ける。トークンは取り消さない。
@@ -1539,9 +1541,12 @@ final class AppState {
     /// 複数の本を選んで開いたとき、確認は本ごとに 15 秒後に 1 度ずつ走る。同じ受け渡しで読まれなかった本は
     /// 1 つのお知らせにまとめ（「n 冊の本を読み込んでいません」）、ボタンはそれらを全部従来の開き方で開く。以前は
     /// 後の本のお知らせが前の本のものを置き換え、ボタンは最後の 1 冊しか開かなかった。
-    private func presentViewerDidNotLoad(_ book: BookRow, viewerName: String, handoff: UUID) {
-        var books = viewerDidNotLoad?.handoff == handoff ? viewerDidNotLoad?.books ?? [] : []
-        if !books.contains(where: { $0.id == book.id }) { books.append(book) }
+    /// ボタンが開く順は選んだ順（確認の終わる順ではない）。
+    private func presentViewerDidNotLoad(_ book: BookRow, viewerName: String, handoff: UUID, position: Int) {
+        var entries = viewerDidNotLoad?.handoff == handoff ? viewerDidNotLoad?.books ?? [] : []
+        if !entries.contains(where: { $0.book.id == book.id }) { entries.append((position, book)) }
+        entries.sort { $0.position < $1.position }
+        let books = entries.map(\.book)
         let action = NoticeAction(title: String(localized: "従来の開き方で開く")) { [weak self] in
             guard let self else { return }
             for book in books {
@@ -1551,7 +1556,7 @@ final class AppState {
                 }
             }
         }
-        viewerDidNotLoad = (action.id, handoff, books)
+        viewerDidNotLoad = (action.id, handoff, entries)
         let text = books.count == 1
             ? String(localized: "\(viewerName) が本を読み込んでいません")
             : String(localized: "\(viewerName) が \(books.count) 冊の本を読み込んでいません")
