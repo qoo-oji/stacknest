@@ -469,6 +469,26 @@ struct ExternalViewerSyncWiringTests {
         #expect(many.entries.isEmpty)
     }
 
+    @Test func aClosedLibraryReadsAsLockedAndHandsNothingOver() async throws {
+        let env = try makeEnv(sync: true); defer { env.cleanup() }
+        let launches = Launches()
+        let many = ManyLaunches()
+        let original = HelperLauncher.launch
+        let originalMany = HelperLauncher.launchMany
+        defer { HelperLauncher.launch = original; HelperLauncher.launchMany = originalMany }
+        HelperLauncher.launch = recording(launches)
+        HelperLauncher.launchMany = { files, viewer in many.entries.append((files, viewer)) }
+        let (state, rows, _) = try makeMultiBookState(env, handoff: handoff(env), count: 2)
+        // 窓を閉じた(配信が止まった)ライブラリ: 何も渡さない(施錠していない、には倒さない)。
+        state.closeBundle()
+
+        await state.openInExternalViewerSyncing(rows)
+
+        #expect(launches.entries.isEmpty)
+        #expect(many.entries.isEmpty)
+        #expect(env.tokens.allRecords().isEmpty, "鍵も出さない")
+    }
+
     @Test func manyReferencesAreSplitIntoOpensOfAtMostTheLimit() throws {
         let env = try makeEnv(sync: true); defer { env.cleanup() }
         let many = ManyLaunches()
