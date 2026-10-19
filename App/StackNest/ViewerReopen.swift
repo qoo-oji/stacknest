@@ -4,7 +4,6 @@ import AppKit
 import Foundation
 import LibraryStore
 import os
-import StackNestViewerKitCore
 
 /// 外部ビューアからの「この本をもう一度渡して」（`stacknest://viewer/reopen?…`。StackNestViewerKit の
 /// `StackNestReopenRequest`・形式の文書「本をもう一度渡してもらう」）。

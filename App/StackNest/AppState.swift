@@ -9,7 +9,6 @@ import ArchiveAdapter
 import LibraryServer
 import EPUBAdapter
 import OSLog
-import StackNestViewerKitCore
 
 @Observable
 @MainActor

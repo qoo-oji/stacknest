@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 import Testing
-import StackNestViewerKitCore
 import Foundation
 import AppCore
 import LibraryStore
